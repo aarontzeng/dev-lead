@@ -1,0 +1,24 @@
+{
+  "name": "dev-lead",
+  "owner": {
+    "name": "Aaron Tzeng",
+    "url": "https://github.com/aarontzeng"
+  },
+  "description": "Cross-model delegation and adversarial review for CLI coding agents.",
+  "plugins": [
+    {
+      "name": "dev-lead",
+      "source": "./",
+      "description": "One lead, four runtime adapters, two roles each: no change merges reviewed only by its own model family. Includes the orchestration skill, per-family implement/review skills, and each family's incident-tested runtime reference.",
+      "category": "engineering",
+      "keywords": [
+        "code-review",
+        "adversarial-review",
+        "multi-agent",
+        "delegation",
+        "orchestration",
+        "cross-model"
+      ]
+    }
+  ]
+}

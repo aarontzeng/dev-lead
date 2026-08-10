@@ -90,6 +90,35 @@ def check_manifest():
         if not data.get(key):
             err(rel(manifest), f"missing/empty '{key}'")
 
+    # the explicit skills list must match the skills on disk, both ways --
+    # listing them buys determinism, and this check is what stops the list
+    # silently drifting when a skill is added or renamed
+    listed = {s.rstrip("/").split("/")[-1] for s in data.get("skills", [])}
+    on_disk = {p.parent.name for p in ROOT.glob("skills/*/SKILL.md")}
+    for missing in sorted(on_disk - listed):
+        err(rel(manifest), f"skill '{missing}' exists on disk but is not in the skills list")
+    for phantom in sorted(listed - on_disk):
+        err(rel(manifest), f"skills list names '{phantom}', which has no skills/{phantom}/SKILL.md")
+
+    # marketplace manifest: this repo is its own marketplace
+    mkt = ROOT / ".claude-plugin" / "marketplace.json"
+    if not mkt.is_file():
+        err(".claude-plugin/marketplace.json", "missing (the repo is its own marketplace)")
+        return
+    try:
+        mdata = json.loads(mkt.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as e:
+        err(rel(mkt), f"invalid JSON: {e}")
+        return
+    for key in ("name", "owner", "description", "plugins"):
+        if not mdata.get(key):
+            err(rel(mkt), f"missing/empty '{key}'")
+    names = {p.get("name") for p in mdata.get("plugins", [])}
+    if data.get("name") and data["name"] not in names:
+        err(rel(mkt), f"does not list this repo's own plugin '{data['name']}' "
+                      f"(lists {sorted(n for n in names if n)}) — "
+                      "`claude plugin install <name>@<marketplace>` would fail")
+
 
 # ---- links: relative links resolve; no accidental placeholders ----
 LINK_RE = re.compile(r"\]\(([^)\s]+)\)")

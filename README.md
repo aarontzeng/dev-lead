@@ -105,7 +105,18 @@ people most often get wrong:
 
 ## Install
 
-**Symlink the skills** (works today, no plugin machinery):
+**As a Claude Code plugin** — this repo is its own marketplace:
+
+```bash
+claude plugin marketplace add aarontzeng/dev-lead
+claude plugin install dev-lead@dev-lead
+```
+
+Skills then load namespaced (`dev-lead:codex-implement`,
+`dev-lead:dev-lead`, …). `claude plugin marketplace update dev-lead`
+pulls later versions.
+
+**Or symlink the skills** (no plugin machinery):
 
 ```bash
 git clone https://github.com/aarontzeng/dev-lead ~/dev-lead
@@ -120,11 +131,8 @@ ln -s ~/dev-lead/skills/* ~/.claude/skills/
 > skills name those files by repo location instead and assume the clone
 > exists.)
 
-**As a Claude Code plugin**: `claude --plugin-dir ~/dev-lead` loads it for a
-session (`claude plugin install` pulls from marketplaces only — a local
-path is not an accepted argument; verify against
-`claude plugin install --help` on your version). Plugin loading keeps the
-repo layout, so the `docs/` references resolve.
+**To try it without installing**: `claude --plugin-dir /path/to/dev-lead`
+loads a local checkout for one session.
 
 **For the other CLIs** — point each CLI's skills/context location at the
 same tree; the exact path is version-dependent (Codex has documented
