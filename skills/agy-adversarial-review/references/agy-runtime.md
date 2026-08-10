@@ -223,6 +223,33 @@ Note the rule shape must match the real command string (`python3 -m pytest`
 is not matched by `unsandboxed(pytest)`) — a mis-shaped rule produces the
 identical silent death and the appearance of a fix.
 
+**That grep is a TEST, and an absent line REFUTES this mode.** Measured
+2026-08-10, and the failure was the lead's, not the CLI's: two runs returned
+zero bytes, the allow-list was found to be missing `unsandboxed(wc)` and
+`unsandboxed(tail)`, the symptom matched this section, and "root cause found"
+was announced — with a settings change recommended to the user. The log had no
+`permission check failed` line at all, and a run **earlier the same day on the
+same machine and the same settings** had produced a full report *including the
+`wc`/`tail` evidence gate*. The setup was already adequate; the missing entries
+were never the cause.
+
+So, in order, before touching the allow-list:
+
+1. `grep -i "permission check failed" <newest log>`. **No hit means this is not
+   the permission mode.** Stop; do not broaden the list on the strength of a
+   plausible story.
+2. Ask whether this machine has EVER produced a full report with this prompt
+   shape. A previous success is the strongest refutation available: it proves
+   the permissions, the `--add-dir`, and the gate wording all work here.
+3. Only then consider transient causes (the mid-generation hang above,
+   provider-side degradation) — and per the journal's rules, do not promote a
+   single observation to a cause.
+
+A third output shape belongs here alongside "zero bytes": a run can return a
+**truncated fragment of a tool call** — 41 bytes of `View <file> in <path>}` in
+the measured case — with no report and no error. It is the same class of
+non-answer, not evidence of a different mechanism.
+
 After **every** run that fails, times out, or returns nothing:
 
 ```bash
@@ -303,6 +330,38 @@ free quota for a bill. If tried anyway: a `~/.bashrc` export placed below
 the interactive-shell guard is invisible to every non-interactive shell,
 and a print-mode probe blocks for its whole timeout before revealing
 anything.
+
+## Calibration rows
+
+Per [`docs/calibration-journal.md`](../../../docs/calibration-journal.md):
+one table per family, appended and never rewritten, one row per run, the
+outcome column carrying VERIFIED hit rates rather than impressions.
+
+**This file deliberately ships NO rows.** The journal's opening section is
+titled "why the tables in the skills are not your tables", and a maintainer's
+hit rates on a maintainer's account, repos and week are exactly what a reader
+must not inherit as if it were shipped calibration. Start your own table here
+and keep it out of any upstream contribution:
+
+| date | model | role | outcome |
+|---|---|---|---|
+
+Two observations from the run that opened this section are recorded as dated
+measurements rather than as a table, because they are about METHOD and
+transfer, while hit rates do not:
+
+- **Brief diversity paid where model diversity alone would not have**
+  (2026-08-10). An attack-sequence brief on this family and a line-level brief
+  on another ran against the same commit: 4 findings and 12 findings,
+  overlapping **zero percent**, every one verified against the code. That is
+  methodology section 2 measured instead of asserted — two legs on the same
+  brief buy redundancy, two briefs buy coverage.
+- **The evidence gate has two prices** (2026-08-10). The
+  line-count-and-last-line form needs `wc` and `tail` on the allow-list; a
+  "quote the code that decides it" form needs only the delegate's own file
+  read, proves the same thing — that the file was actually opened — and costs
+  no permissions. Prefer the quoting form unless you need a value the delegate
+  cannot obtain without a shell.
 
 ## Process hygiene
 
