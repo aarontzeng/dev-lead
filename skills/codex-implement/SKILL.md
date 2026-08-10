@@ -11,8 +11,9 @@ Create the worktree yourself, keep the task inside it, and retain merge
 authority.
 
 The review gate for work implemented here is a **non-GPT reviewer, at every
-risk level** — the cross-family rule (`docs/methodology.md` §1, at the repo
-root) has no LOW-risk exemption. A `codex-adversarial-review` pass over
+risk level** — the cross-family rule
+([`docs/methodology.md`](../../docs/methodology.md) §1) has no LOW-risk
+exemption. A `codex-adversarial-review` pass over
 Codex's own work is a fresh context, **not** model diversity: legitimate as
 an *additional* supplement, never as the gate. HIGH-risk work takes two
 reviewers from two non-GPT families.

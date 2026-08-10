@@ -125,8 +125,8 @@ model:
   actually execute it, while every *other* build command dies silently with
   zero output. Both outcomes are wrong; the prompt line stays mandatory.
 - **Ask what the tests do not enumerate**, in those words (see
-  `docs/methodology.md` — measured as the highest-yield sentence in the
-  prompt across every family).
+  [`docs/methodology.md`](../../docs/methodology.md) — measured as the
+  highest-yield sentence in the prompt across every family).
 - **Forbid praise explicitly.** Without it the default register drifts to
   summarizing and complimenting.
 - **Size the evidence gate to what YOU cannot check** — and on a DOCUMENT

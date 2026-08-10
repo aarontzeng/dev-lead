@@ -44,7 +44,11 @@ RUN_DIR=$(mktemp -d "${TMPDIR:-/tmp}/agy-implement.XXXXXX")   # FIRST — the sn
 BASE=$(git rev-parse HEAD)   # from a clean checkout, recorded before anything
 WORKTREE=../<repo>-agy-<short-task-slug>
 git worktree add -b agy/<short-task-slug> "$WORKTREE" "$BASE"
-scripts/snapshot-refs.sh save "$WORKTREE" "$RUN_DIR/remote-refs.before"   # push-detection baseline
+# The helper lives in the SUITE's tree, cwd is the TARGET repo — a bare
+# `scripts/…` resolves against the target and exits 127.
+DEV_LEAD=${DEV_LEAD_ROOT:-$(ls -d "$HOME"/.claude/plugins/cache/dev-lead/dev-lead/* 2>/dev/null | sort -V | tail -1)}
+[ -x "$DEV_LEAD/scripts/snapshot-refs.sh" ] || { echo "dev-lead root unresolved — set DEV_LEAD_ROOT to your checkout"; exit 1; }
+"$DEV_LEAD/scripts/snapshot-refs.sh" save "$WORKTREE" "$RUN_DIR/remote-refs.before"   # push-detection baseline
 ```
 
 Verify against that exact SHA later — never against the moving branch name.
@@ -129,7 +133,7 @@ Role-specific choices:
    verified, not assumed. Check commit messages for AI-authorship trailers —
    an amend is free while the branch is local. Then the push check the
    test-runner ruling depends on:
-   `scripts/snapshot-refs.sh check "$WORKTREE" "$RUN_DIR/remote-refs.before"` —
+   `"$DEV_LEAD/scripts/snapshot-refs.sh" check "$WORKTREE" "$RUN_DIR/remote-refs.before"` —
    any delta means something pushed during the run: a stop-and-report
    incident, never a shrug. (A successful `git push` updates the
    remote-tracking ref, which this catches; a review-system push

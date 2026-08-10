@@ -34,8 +34,9 @@ RUN_DIR=$(mktemp -d "${TMPDIR:-/tmp}/opencode-review.XXXXXX")   # created here; 
 ```
 
 (A dedicated detached review worktree — the strong form in
-`docs/methodology.md` §7 — sidesteps the collision entirely and is
-preferred; the backup covers reviews run in a shared checkout.)
+[`docs/methodology.md`](../../docs/methodology.md) §7 — sidesteps the
+collision entirely and is preferred; the backup covers reviews run in a
+shared checkout.)
 
 Then write this as `opencode.json` in the target (wildcard FIRST — last
 match wins; see runtime):
@@ -186,7 +187,8 @@ the model. The short list, with this family's specifics:
   observable consequence + severity + `file:line` per finding; state fixes
   already made; forbid praise and generic summaries.
 - **Ask what the tests do not enumerate** — the highest-yield sentence in
-  the prompt on every family (see `docs/methodology.md`).
+  the prompt on every family (see
+  [`docs/methodology.md`](../../docs/methodology.md)).
 - State the read-only intent in the prompt as well as the config, and forbid
   recursive delegation.
 - Tell it NOT to run tests or builds — the config machine-blocks them, but

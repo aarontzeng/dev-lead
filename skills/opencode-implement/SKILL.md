@@ -26,7 +26,11 @@ RUN_DIR=$(mktemp -d "${TMPDIR:-/tmp}/opencode-implement.XXXXXX")   # FIRST — s
 BASE=$(git rev-parse HEAD)   # from a clean checkout, recorded before anything
 WORKTREE=../<repo>-opencode-<short-task-slug>
 git worktree add -b opencode/<short-task-slug> "$WORKTREE" "$BASE"
-scripts/snapshot-refs.sh save "$WORKTREE" "$RUN_DIR/remote-refs.before"
+# The helper lives in the SUITE's tree, cwd is the TARGET repo — a bare
+# `scripts/…` resolves against the target and exits 127.
+DEV_LEAD=${DEV_LEAD_ROOT:-$(ls -d "$HOME"/.claude/plugins/cache/dev-lead/dev-lead/* 2>/dev/null | sort -V | tail -1)}
+[ -x "$DEV_LEAD/scripts/snapshot-refs.sh" ] || { echo "dev-lead root unresolved — set DEV_LEAD_ROOT to your checkout"; exit 1; }
+"$DEV_LEAD/scripts/snapshot-refs.sh" save "$WORKTREE" "$RUN_DIR/remote-refs.before"
 ```
 
 Then write the write-role config into the worktree as `opencode.json` —
@@ -119,7 +123,7 @@ The same lead sequence as every implement skill, none of it optional:
    `?? opencode.json` (yours) and nothing else untracked; check commit
    messages for trailers.
 2. **Push check**:
-   `scripts/snapshot-refs.sh check "$WORKTREE" "$RUN_DIR/remote-refs.before"` —
+   `"$DEV_LEAD/scripts/snapshot-refs.sh" check "$WORKTREE" "$RUN_DIR/remote-refs.before"` —
    any delta is a stop-and-report incident.
 3. **Run the full suite yourself** in the worktree — the delegate's counts
    are claims (a measured delegate self-reported 150 on a 445-test suite;

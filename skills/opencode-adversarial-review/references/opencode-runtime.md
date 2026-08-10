@@ -143,8 +143,9 @@ flakiness at the boundary; one observation cannot separate them.
 
 This is where your calibration journal rows for this family live — one row
 per run, dated, with verified hit rates (see
-`docs/calibration-journal.md` for the format and rules). Highlights from the
-journal this file was extracted from, kept as *shape examples*, not as your
+[`docs/calibration-journal.md`](../../../docs/calibration-journal.md) for the
+format and rules). Highlights from the journal this file was extracted from,
+kept as *shape examples*, not as your
 data:
 
 - A free leg returned 7 findings on a consistency diff, 7/7 verified real.

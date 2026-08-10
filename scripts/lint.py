@@ -8,6 +8,10 @@ Every check here guards against a failure this repo has ACTUALLY shipped
   frontmatter   a SKILL.md whose name/dir disagree would break skill loading
   manifest      plugin.json must stay valid JSON with the required keys
   links         a placeholder link (https://github.com/ with no repo) shipped once
+  paths         a skill runs with the TARGET repo as cwd, so a bare `scripts/…`
+                or `docs/…` points at the user's project: freeze-target.sh
+                shipped as `scripts/freeze-target.sh` and exited 127 everywhere
+                except this repo, where the cwd happened to hide it
   fences        unbalanced ``` renders half a file as code
   var-order     $RUN_DIR was used 12 lines before its mktemp, in two skills
   tracked       an environment-global gitignore silently ate templates/AGENTS.md
@@ -140,6 +144,37 @@ def check_links():
             if not resolved.exists():
                 line = text[: m.start()].count("\n") + 1
                 err(rel(md), f"line {line}: relative link '{target}' does not resolve")
+
+
+# ---- paths: a suite path must resolve from the SUITE's tree, not the cwd ----
+# The skills are read from wherever the suite is installed (plugin cache, a
+# clone) while cwd is the repo being worked on. `scripts/freeze-target.sh`
+# therefore resolves against the TARGET and exits 127 — which drops the lead
+# into the hand-rolled freeze that the same paragraph warns about. Bash call
+# sites go through "$DEV_LEAD"; prose uses a relative link, whose target
+# check_links() then proves resolvable.
+SUITE_DIRS = ("scripts", "docs", "data", "templates")
+BARE_SUITE_RE = re.compile(
+    r"(?<![\w/$.\-])(?:" + "|".join(SUITE_DIRS) + r")/[\w./\-]+"
+)
+MD_LINK_RE = re.compile(r"\[[^\]]*\]\([^)]*\)")
+DEV_LEAD_RESOLVER = "plugins/cache/dev-lead/dev-lead/*"
+
+
+def check_paths():
+    for md in sorted(ROOT.glob("skills/**/*.md")):
+        text = md.read_text(encoding="utf-8")
+        # a link's target belongs to check_links(); its LABEL may legitimately
+        # spell the bare path. Blank links out, preserving line numbering.
+        prose = MD_LINK_RE.sub(lambda m: "\n" * m.group(0).count("\n"), text)
+        for m in BARE_SUITE_RE.finditer(prose):
+            line = prose[: m.start()].count("\n") + 1
+            err(rel(md), f"line {line}: '{m.group(0)}' resolves against the "
+                         "TARGET repo's cwd, not the suite — use "
+                         '"$DEV_LEAD/…" in bash, a relative link in prose')
+        if "$DEV_LEAD" in text and DEV_LEAD_RESOLVER not in text:
+            err(rel(md), "uses $DEV_LEAD but never resolves it — every call "
+                         "site degrades to /scripts/… and fails")
 
 
 # ---- fences ----
@@ -293,7 +328,7 @@ def check_families():
 
 def main():
     for check in (check_structure, check_frontmatter, check_manifest,
-                  check_links, check_fences, check_var_order,
+                  check_links, check_paths, check_fences, check_var_order,
                   check_tracked, check_sentinels, check_families):
         check()
     if ERRORS:

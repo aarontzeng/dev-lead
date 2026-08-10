@@ -124,12 +124,13 @@ ln -s ~/dev-lead/skills/* ~/.claude/skills/
 ```
 
 > [!NOTE]
-> Keep the clone — several skills refer to `docs/methodology.md` and
-> `docs/calibration-journal.md` **at the repo root**, which a bare
-> `skills/*` symlink does not carry. (Relative `../../docs` paths through a
-> symlink resolve against the link's location, not its target, so the
-> skills name those files by repo location instead and assume the clone
-> exists.)
+> Keep the clone **and** export `DEV_LEAD_ROOT=~/dev-lead`. The skills
+> resolve their own tree — the `scripts/` helpers and the `docs/` they cite
+> — from the plugin cache by default, and a bare `skills/*` symlink leaves
+> no cache entry to find. `DEV_LEAD_ROOT` is the override for exactly this
+> install. (It is also why the skills never spell a suite path relative to
+> the cwd: a skill runs with the *target* repo as cwd, so `scripts/…` would
+> resolve against whatever project you are working on.)
 
 **To try it without installing**: `claude --plugin-dir /path/to/dev-lead`
 loads a local checkout for one session.

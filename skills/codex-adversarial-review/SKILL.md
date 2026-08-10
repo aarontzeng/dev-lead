@@ -128,9 +128,9 @@ Supply focus text with all of the following:
   regex, a best-effort masker), the property must state its BOUNDARY, not
   just its intent. An unbounded property cannot converge — each round
   legitimately finds one more case, forever (see
-  `docs/methodology.md` §5). The boundary belongs in the code's own
-  docstring too, so the reviewer checks declared-vs-actual instead of
-  declared-vs-infinite.
+  [`docs/methodology.md`](../../docs/methodology.md) §5). The boundary
+  belongs in the code's own docstring too, so the reviewer checks
+  declared-vs-actual instead of declared-vs-infinite.
 - Ask to falsify each property under concurrency, partial failure, retries,
   stale state, malformed input, and boundary conditions relevant to the
   change.
@@ -151,9 +151,9 @@ Supply focus text with all of the following:
 
 When Codex implemented the change, this review is a fresh context but not
 model diversity — it does not satisfy the cross-family rule **at any risk
-level** (`docs/methodology.md` §1, repo root). Use it as a supplement; the
-gate reviewer must be non-GPT, and never present two Codex jobs as
-independent models.
+level** ([`docs/methodology.md`](../../docs/methodology.md) §1). Use it as a
+supplement; the gate reviewer must be non-GPT, and never present two Codex
+jobs as independent models.
 
 ## Watching the run and reading the report
 

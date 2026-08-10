@@ -82,7 +82,8 @@ but congestion is its availability axis — a cheap one-liner answering in
 seconds means go.
 
 Implementer selection (adapt the tiers to your account's catalogue and your
-calibration journal — see `docs/calibration-journal.md`):
+calibration journal — see
+[`docs/calibration-journal.md`](../../docs/calibration-journal.md)):
 
 | Situation | Implementer |
 |---|---|
@@ -127,7 +128,7 @@ superseded but still read as live. Their principal findings overlapped zero
 percent, and each leg found the only instance of its own class. The roles
 worth splitting, in the order they tend to pay: **sequences**, **challenge**
 (never phrased as "find defects"), **consistency**, **is-it-still-true**
-(see `docs/methodology.md` §2).
+(see [`docs/methodology.md`](../../docs/methodology.md) §2).
 
 Quota economics: when one model is scarce, spend it on **review**, not
 implementation — review leverage is higher, and implementation has more
@@ -174,8 +175,9 @@ user can set it at invocation. Each round:
 
 3. **Adversarial review** per the reviewer table, against the same immutable
    `$BASE` — which is `git merge-base <target-branch> HEAD`, NOT the target
-   branch itself (see `docs/methodology.md` §7; the review skills carry the
-   pre-launch `git diff --stat "$BASE" HEAD` guard). **The reviewed directory
+   branch itself (see [`docs/methodology.md`](../../docs/methodology.md) §7;
+   the review skills carry the pre-launch
+   `git diff --stat "$BASE" HEAD` guard). **The reviewed directory
    must be FROZEN for the whole run** — a detached worktree at the exact
    commit, that nothing else touches. A reviewer reads the working tree, not
    your commit: a measured round ran mutation testing in the same worktree
@@ -186,8 +188,14 @@ user can set it at invocation. Each round:
    copy:
 
    ```bash
-   REVIEW_HEAD=$(scripts/freeze-target.sh "$REPO" "$SHA" "$FROZEN_DIR")
-   scripts/verify-target.sh "$FROZEN_DIR" "$REVIEW_HEAD"   # before AND after
+   # The helpers live in the SUITE's tree; cwd is the TARGET repo. A bare
+   # `scripts/…` resolves against the target and exits 127 — which lands you
+   # in the hand-rolled copy this paragraph just warned about.
+   DEV_LEAD=${DEV_LEAD_ROOT:-$(ls -d "$HOME"/.claude/plugins/cache/dev-lead/dev-lead/* 2>/dev/null | sort -V | tail -1)}
+   [ -x "$DEV_LEAD/scripts/freeze-target.sh" ] || { echo "dev-lead root unresolved — set DEV_LEAD_ROOT to your checkout"; exit 1; }
+
+   REVIEW_HEAD=$("$DEV_LEAD/scripts/freeze-target.sh" "$REPO" "$SHA" "$FROZEN_DIR")
+   "$DEV_LEAD/scripts/verify-target.sh" "$FROZEN_DIR" "$REVIEW_HEAD"   # before AND after
    ```
 
    Findings are

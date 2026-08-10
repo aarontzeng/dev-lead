@@ -65,7 +65,8 @@ slowest, least valuable thing it can do. Name the commit range and the
 files. That range's base is the **merge-base**
 (`BASE=$(git merge-base <target> HEAD)`), never the target branch name; name
 the chain with `..` and read the diff with `...` (the two-dot/three-dot trap
-is measured and documented in `docs/methodology.md` §7). Pre-launch guard:
+is measured and documented in
+[`docs/methodology.md`](../../docs/methodology.md) §7). Pre-launch guard:
 
 ```bash
 git diff --stat "$BASE" HEAD    # file list must match the change under review
