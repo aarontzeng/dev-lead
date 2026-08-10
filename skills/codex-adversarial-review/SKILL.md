@@ -149,10 +149,11 @@ Supply focus text with all of the following:
   and, measured, spends its opening turns on tool discovery it then
   discards; this line skips that for free.
 
-For high-risk work, this Codex review is a fresh context but still not model
-diversity if Codex implemented the change. Require a different-family
-reviewer as an additional gate; never present two Codex jobs as independent
-models.
+When Codex implemented the change, this review is a fresh context but not
+model diversity — it does not satisfy the cross-family rule **at any risk
+level** (`docs/methodology.md` §1, repo root). Use it as a supplement; the
+gate reviewer must be non-GPT, and never present two Codex jobs as
+independent models.
 
 ## Watching the run and reading the report
 

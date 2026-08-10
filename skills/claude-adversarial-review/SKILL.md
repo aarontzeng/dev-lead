@@ -21,11 +21,20 @@ role.
 
 ## Run it
 
+Capture `REVIEW_HEAD` **when you decide what to review** — at commit/freeze
+time, not at launch time. Captured immediately before the launch assertion,
+the check compares HEAD against itself and can only pass: a tautology, not a
+guard. Captured at decision time, it catches everything that moved the tree
+in between (the measured wrong-target class: a stale cwd, another agent's
+commit, your own mutation testing).
+
 ```bash
+REVIEW_HEAD=$(git -C "$REVIEW_TARGET_DIR" rev-parse HEAD)   # at freeze time
+
+# ... later, at launch:
 RUN_DIR=$(mktemp -d "${TMPDIR:-/tmp}/claude-review.XXXXXX")
 # Write the prompt to "$RUN_DIR/prompt.md" in its own step.
 
-REVIEW_HEAD=$(git -C "$REVIEW_TARGET_DIR" rev-parse HEAD)
 cd "$REVIEW_TARGET_DIR" && \
   [ "$(git rev-parse HEAD)" = "$REVIEW_HEAD" ] && \
   claude -p "$(cat "$RUN_DIR/prompt.md")" --permission-mode plan --model <tier> \
@@ -46,7 +55,8 @@ cd "$REVIEW_TARGET_DIR" && \
 - Plan mode is behavioral, not machine-enforced — bracket the run:
 
 ```bash
-git rev-parse HEAD; git status --porcelain=v1     # before, and again after
+git -C "$REVIEW_TARGET_DIR" rev-parse HEAD        # before, and again after —
+git -C "$REVIEW_TARGET_DIR" status --porcelain=v1 # -C so it's the TARGET, not your cwd
 ```
 
 **Give it a diff or a named file list, never a bare worktree path.** "Review

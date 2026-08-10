@@ -22,6 +22,12 @@ ordinary case and is exactly why the second leg pays.
 
 Corollaries:
 
+- **The family is a property of the served model, not the CLI.** One runtime
+  adapter can serve several families (agy serves Gemini and Claude pools;
+  opencode serves DeepSeek, Nemotron, and stealth models), and adapters can
+  silently substitute the tier you asked for. Account the rule against the
+  *verified served model's* family — the run log records adapter, served
+  model, and family as three separate fields.
 - A model whose family is deliberately undisclosed (stealth models in free
   pools) can never *satisfy* the rule — it might secretly share any family.
   Fine as an additional pair of eyes; never the accounting leg.

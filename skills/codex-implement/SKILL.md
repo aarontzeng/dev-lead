@@ -10,10 +10,12 @@ session `workspace-write`; it is not a permission to modify the main checkout.
 Create the worktree yourself, keep the task inside it, and retain merge
 authority.
 
-This skill pairs with `codex-adversarial-review`. A fresh Codex review is an
-independent context, **not** model diversity. For auth, concurrency, money,
-notification delivery, data loss, or other silent-failure paths, also require
-a reviewer from a different model family.
+The review gate for work implemented here is a **non-GPT reviewer, at every
+risk level** — the cross-family rule (`docs/methodology.md` §1, at the repo
+root) has no LOW-risk exemption. A `codex-adversarial-review` pass over
+Codex's own work is a fresh context, **not** model diversity: legitimate as
+an *additional* supplement, never as the gate. HIGH-risk work takes two
+reviewers from two non-GPT families.
 
 ## Before the first run of a session
 
@@ -159,10 +161,13 @@ why and do not call the test a regression proof.
 
 ## Review and merge gate
 
-Run `codex-adversarial-review` from the worktree against `$BASE`, with the
-changed properties named explicitly. Use a fresh review job after
-implementation has stopped; never review a moving diff. For high-risk
-changes, add the required different-family review.
+Run the **cross-family** review — Codex implemented, so the gate reviewer is
+`claude-`, `agy-`, or a named-family `opencode-adversarial-review` — from
+the worktree against `$BASE`, with the changed properties named explicitly.
+Use a fresh review job after implementation has stopped; never review a
+moving diff. A `codex-adversarial-review` pass may run *in addition* (a
+fresh context finds real things), but it never substitutes for the non-GPT
+gate. High-risk changes take two non-GPT families.
 
 Verify each finding against code or an executable reproduction. Report the
 verified findings, rejected false positives, test results, exact base SHA,

@@ -14,12 +14,22 @@ disciplined development workflow: one agent leads, others implement, and
                         └──────┬──────┘
        ┌───────────────┬──────┴───────┬────────────────┐
    ┌───▼───┐       ┌───▼───┐      ┌───▼───┐       ┌────▼─────┐
-   │claude │       │ codex │      │  agy  │       │ opencode │   4 families
-   ├───────┤       ├───────┤      ├───────┤       ├──────────┤
-   │implement      │implement     │implement      │implement │   × 2 roles
-   │adv-review     │adv-review    │adv-review     │adv-review│
+   │claude │       │ codex │      │  agy  │       │ opencode │   4 runtime
+   ├───────┤       ├───────┤      ├───────┤       ├──────────┤   adapters
+   │implement      │implement     │implement      │implement │
+   │adv-review     │adv-review    │adv-review     │adv-review│   × 2 roles
    └───────┘       └───────┘      └───────┘       └──────────┘
 ```
+
+**Adapters are not families.** The four columns are *runtime adapters* —
+which CLI you drive. The cross-family rule is accounted in *model
+families* — whose training produced the output — and one adapter can serve
+several: agy exposes both Gemini and Claude pools, opencode serves DeepSeek,
+Nemotron, and stealth models whose family is undisclosed. Every dispatch
+records three things separately: the adapter, the model actually served
+(some adapters silently substitute — the runtime files show how to verify),
+and the family that model belongs to. The family column is the one the
+review rule reads.
 
 ## Why
 
@@ -90,25 +100,38 @@ people most often get wrong:
 
 ## Install
 
-As a Claude Code plugin (recommended):
+Symlink the skills (works today, no plugin machinery):
 
 ```bash
-# from a marketplace that carries it, or locally:
-claude plugin install /path/to/dev-lead
+git clone https://github.com/aarontzeng/dev-lead ~/dev-lead
+ln -s ~/dev-lead/skills/* ~/.claude/skills/
 ```
 
-Or copy/symlink the skills directly:
+Keep the clone — several skills refer to `docs/methodology.md` and
+`docs/calibration-journal.md` **at the repo root**, which a bare
+`skills/*` symlink does not carry. (Relative `../../docs` paths through a
+symlink resolve against the link's location, not its target, so the skills
+name those files by repo location instead and assume the clone exists.)
+
+As a Claude Code plugin: `claude --plugin-dir ~/dev-lead` loads it for a
+session (`claude plugin install` pulls from marketplaces only — a local
+path is not an accepted argument; verify against `claude plugin install
+--help` on your version). Plugin loading keeps the repo layout, so the
+`docs/` references resolve.
+
+To let the other CLIs act as leads or find these files, point each CLI's
+skills/context location at the same tree — the exact path is
+version-dependent (Codex has documented `$HOME/.agents/skills` as its skill
+location, with symlinked folders supported; older setups used
+`~/.codex/skills`; check your CLI's current docs):
 
 ```bash
-ln -s /path/to/dev-lead/skills/* ~/.claude/skills/
+ln -s ~/.claude/skills "$HOME/.agents/skills"            # codex (verify per your version)
+ln -s ~/.claude/skills ~/.gemini/antigravity-cli/skills  # agy
 ```
 
-To let the other CLIs act as leads or find these files, share the tree:
-
-```bash
-ln -s ~/.claude/skills ~/.codex/skills
-ln -s ~/.claude/skills ~/.gemini/antigravity-cli/skills
-```
+Or skip symlinks entirely: drop [templates/AGENTS.md](templates/AGENTS.md)
+into your project root (see Portability below).
 
 ### Prerequisites
 

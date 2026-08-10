@@ -69,7 +69,9 @@ codex twin of this skill; here the same mistake is a wrong `--add-dir`).
 Because plan mode is behavioral rather than enforced, bracket the run:
 
 ```bash
-git rev-parse HEAD; git status --porcelain=v1     # before, and again after
+git -C "$REVIEW_TARGET_DIR" rev-parse HEAD        # before, and again after —
+git -C "$REVIEW_TARGET_DIR" status --porcelain=v1 # -C, or you bracket the
+                                                  # lead's own cwd, not the target
 ```
 
 **Verifying the target is not verifying the SPAN.** The check above proves

@@ -22,13 +22,18 @@ assumed here.
 ## Worktree + config, always
 
 ```bash
+RUN_DIR=$(mktemp -d "${TMPDIR:-/tmp}/opencode-implement.XXXXXX")   # FIRST — snapshots below land here
 BASE=$(git rev-parse HEAD)   # from a clean checkout, recorded before anything
-git worktree add -b opencode/<short-task-slug> ../<repo>-opencode-<short-task-slug> "$BASE"
-git -C ../<repo>-opencode-<slug> for-each-ref refs/remotes > "$RUN_DIR/remote-refs.before"
+WORKTREE=../<repo>-opencode-<short-task-slug>
+git worktree add -b opencode/<short-task-slug> "$WORKTREE" "$BASE"
+git -C "$WORKTREE" for-each-ref refs/remotes > "$RUN_DIR/remote-refs.before"
 ```
 
-Then write the write-role config into the worktree as `opencode.json`
-(wildcard FIRST — last match wins; see runtime):
+Then write the write-role config into the worktree as `opencode.json` —
+a fresh worktree cannot already have one, but if the repo *tracks* an
+`opencode.json` of its own, set it aside first and restore at teardown
+(same collision note as the review skill). Wildcard FIRST — last match
+wins; see runtime:
 
 ```json
 {
@@ -62,7 +67,7 @@ checking costs one grep.
 ## Run it
 
 ```bash
-RUN_DIR=$(mktemp -d "${TMPDIR:-/tmp}/opencode-implement.XXXXXX")
+# RUN_DIR was created in the worktree step above.
 # Write the task prompt to "$RUN_DIR/task.md" in its own FOREGROUND step.
 
 cd "$WORKTREE" && opencode run --print-logs --log-level INFO \

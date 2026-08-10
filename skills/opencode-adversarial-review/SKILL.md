@@ -21,8 +21,23 @@ lines. This file assumes them and covers only the review role.
 
 ## The read-only boundary is a config file, not a mode
 
-Write this into the review target directory as `opencode.json` before the
-run (wildcard FIRST — last match wins; see runtime):
+**If the target already has an `opencode.json`, save it first** — writing
+ours over a project's real config and then deleting "ours" at teardown
+destroys the project's file:
+
+```bash
+[ -f "$REVIEW_TARGET_DIR/opencode.json" ] && \
+  mv "$REVIEW_TARGET_DIR/opencode.json" "$RUN_DIR/opencode.json.orig"
+# ... run ...; at teardown, restore:
+#   mv "$RUN_DIR/opencode.json.orig" "$REVIEW_TARGET_DIR/opencode.json"
+```
+
+(A dedicated detached review worktree — the strong form in
+`docs/methodology.md` §7 — sidesteps the collision entirely and is
+preferred; the backup covers reviews run in a shared checkout.)
+
+Then write this as `opencode.json` in the target (wildcard FIRST — last
+match wins; see runtime):
 
 ```json
 {
@@ -41,26 +56,42 @@ run (wildcard FIRST — last match wins; see runtime):
 }
 ```
 
-That is machine-level read-only: file edits denied, shell denied except five
-git reads (`git branch*` is deliberately NOT on the list — `git branch -d`
-writes refs, and `rev-parse --abbrev-ref HEAD` answers the read-only
-question) — stronger than a behavioral plan mode, and stronger than
-opencode's own plan agent (whose edit-deny a shared config can override and
-whose bash is unrestricted — measured; see runtime). Use the default agent
-with this config. A denied call comes back to the model as a message, so an
-over-curious reviewer reports MACHINE-DENIED and keeps reviewing instead of
-dying.
+Call this what it is: a **machine-enforced guardrail against a fallible
+delegate, not a security boundary against an adversarial one.** File edits
+denied, shell denied except five git reads (`git branch*` is deliberately
+NOT on the list — `git branch -d` writes refs, and
+`rev-parse --abbrev-ref HEAD` answers the read-only question) — stronger
+than a behavioral plan mode, and stronger than opencode's own plan agent
+(whose edit-deny a shared config can override and whose bash is
+unrestricted — measured; see runtime). But command wildcards match command
+*prefixes*, not effects: `git diff --output=<path>` and `git log
+--output=<path>` write files while matching the allowed patterns. The
+threat model here is an honest model taking a lazy shortcut — which the
+denials catch — and the post-run bracket below is what catches everything
+else; a hostile-input review needs an OS-level read-only sandbox instead.
+Verify what actually governs before spending a run: `opencode debug agent`
+prints the merged rule array in evaluation order (runtime file). Use the
+default agent with this config. A denied call comes back to the model as a
+message, so an over-curious reviewer reports MACHINE-DENIED and keeps
+reviewing instead of dying.
 
 The config file itself will appear as untracked in the target — expected;
-remove it after the run.
+remove it after the run (and restore any original you set aside above).
 
 ## Run it
 
+Capture `REVIEW_HEAD` **when you freeze the target**, not immediately before
+the launch assertion — captured at launch time the check compares HEAD
+against itself and can only pass (see the same note in
+`claude-adversarial-review`).
+
 ```bash
+REVIEW_HEAD=$(git -C "$REVIEW_TARGET_DIR" rev-parse HEAD)   # at freeze time
+
+# ... later, at launch:
 RUN_DIR=$(mktemp -d "${TMPDIR:-/tmp}/opencode-review.XXXXXX")
 # Write the prompt to "$RUN_DIR/prompt.md" in its own FOREGROUND step.
 
-REVIEW_HEAD=$(git -C "$REVIEW_TARGET_DIR" rev-parse HEAD)   # verify the TARGET
 cd "$REVIEW_TARGET_DIR" && \
   [ "$(git rev-parse HEAD)" = "$REVIEW_HEAD" ] && \
   opencode run --print-logs --log-level INFO \
@@ -141,7 +172,8 @@ Bracket the run regardless (belt and braces — the config is the boundary,
 this is the proof):
 
 ```bash
-git rev-parse HEAD; git status --porcelain=v1     # before, and again after
+git -C "$REVIEW_TARGET_DIR" rev-parse HEAD        # before, and again after —
+git -C "$REVIEW_TARGET_DIR" status --porcelain=v1 # -C so it's the TARGET, not your cwd
 ```
 
 ## Writing the prompt

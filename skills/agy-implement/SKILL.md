@@ -40,9 +40,11 @@ files. Two agents editing the same tree at once is a documented failure
 class. There is no version of this skill that skips the worktree.
 
 ```bash
+RUN_DIR=$(mktemp -d "${TMPDIR:-/tmp}/agy-implement.XXXXXX")   # FIRST — the snapshot below lands here
 BASE=$(git rev-parse HEAD)   # from a clean checkout, recorded before anything
-git worktree add -b agy/<short-task-slug> ../<repo>-agy-<short-task-slug> "$BASE"
-git for-each-ref refs/remotes > "$RUN_DIR/remote-refs.before"   # push-detection baseline
+WORKTREE=../<repo>-agy-<short-task-slug>
+git worktree add -b agy/<short-task-slug> "$WORKTREE" "$BASE"
+git -C "$WORKTREE" for-each-ref refs/remotes > "$RUN_DIR/remote-refs.before"   # push-detection baseline
 ```
 
 Verify against that exact SHA later — never against the moving branch name.
@@ -54,7 +56,7 @@ risk observable instead of assumed away.
 ## Run it
 
 ```bash
-RUN_DIR=$(mktemp -d "${TMPDIR:-/tmp}/agy-implement.XXXXXX")
+# RUN_DIR was created in the worktree step above.
 # Write the task prompt to "$RUN_DIR/task.md" in its own step.
 
 agy -p "$(cat "$RUN_DIR/task.md")" \

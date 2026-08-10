@@ -343,6 +343,17 @@ refutes it**; stop-condition hits; the final verdict. The final report to the
 user is written from this log. If the run is interrupted, the log plus the
 preserved worktree is the resume state.
 
+Record every delegate dispatch as three separate fields, because they
+diverge and the cross-family accounting reads only the last one:
+
+- `runtime_adapter`: claude / codex / agy / opencode — the CLI driven
+- `served_model`: the model that actually answered — VERIFIED per the
+  runtime file (some adapters silently substitute tiers), not the id you
+  passed
+- `model_family`: Claude / GPT / Gemini / DeepSeek / Nemotron / unknown —
+  what the reviewer-pairing rule is checked against; `unknown` (stealth
+  models) can never satisfy it
+
 ## What this is not
 
 Not a way to run more agents for their own sake — a task small enough for one

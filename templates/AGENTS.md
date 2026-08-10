@@ -2,8 +2,9 @@
 
 > **What this file is.** A drop-in entry point that lets any file-reading
 > coding agent (codex and opencode read `AGENTS.md` natively; agy and others
-> can be pointed at it) participate in the [dev-lead](https://github.com/)
-> cross-model workflow without Claude Code installed. Copy it into your
+> can be pointed at it) participate in the
+> [dev-lead](https://github.com/aarontzeng/dev-lead) cross-model workflow
+> without Claude Code installed. Copy it into your
 > project root — or merge the sections below into your existing `AGENTS.md` —
 > and fix the one path in the next section.
 
