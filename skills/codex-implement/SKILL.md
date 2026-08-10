@@ -15,6 +15,15 @@ independent context, **not** model diversity. For auth, concurrency, money,
 notification delivery, data loss, or other silent-failure paths, also require
 a reviewer from a different model family.
 
+## Before the first run of a session
+
+Read **`../codex-adversarial-review/references/codex-runtime.md`**. It holds
+the family-level mechanics shared by both codex roles — companion
+resolution, the `--background` launcher-output trap, `status` lying about
+liveness, report recovery from session rollouts, what the sandboxes can and
+cannot do, and the model/effort plumbing. This file assumes them and covers
+only what makes a run an *implementation*.
+
 ## Preconditions
 
 Use this only for a bounded change with acceptance criteria. Do not delegate a
@@ -80,14 +89,10 @@ The prompt must include:
    alter another branch, no AI-authorship trailers.
 6. No recursive delegation to Codex, other CLIs, or review scripts.
 
-Use a fresh thread for a new task. Resolve the installed companion
-dynamically; the plugin version and home directory vary by machine:
+Use a fresh thread for a new task. Resolve the companion per the runtime
+file, then:
 
 ```bash
-SCRIPT=$(ls -d "$HOME"/.claude/plugins/cache/openai-codex/codex/*/scripts/codex-companion.mjs \
-  2>/dev/null | sort -V | tail -1)
-[ -n "$SCRIPT" ] || { echo "codex plugin not installed"; exit 1; }
-
 cd "$WORKTREE" && node "$SCRIPT" task \
   --background --write --fresh --model <model> --effort high --prompt-file "$TASK_FILE"
 ```
@@ -107,42 +112,21 @@ failures were test-harness *integration* (broken seams, an uncollected test),
 which more reasoning effort does not fix — the lead's verification does.
 Escalate effort for reasoning failures, not integration failures.
 
-The effort ladder above the flag: codex itself goes higher than `xhigh`
-(`max`, `ultra`) but only via the user's global config
-(`~/.codex/config.toml`, `model_reasoning_effort`) — omitting `--effort`
-entirely inherits it. Deliberate omission only; say so in the run log,
-because the resulting effort then depends on machine state, not the command
-line. Passing the flag by default is what keeps an implement-cheap /
-review-deep split stable while the user tunes their global freely.
-
-`--background` MAY create a tracked companion job and return a job ID — but
-do not rely on it: measured on the review path, the same flag fell into
-launcher-output mode, streamed everything through the launching command, and
-never returned until killed. **Launch under the host's own background
-mechanism with stdout/stderr going to a file, always.** If a job ID appears
-and a job log exists, the companion's `status`/`result` work; if not, the
-launcher's output file IS the delivery channel. Do not use
+The effort ladder above the flag (global-config inheritance, and when
+omitting `--effort` is a legitimate, deliberate act) is in the runtime file.
+Launch under the host's own background mechanism with output to a file, per
+the runtime's launcher rules. Do not use
 `--dangerously-bypass-approvals-and-sandbox`; `workspace-write` is the
 intended write boundary.
 
-## What the delegate's sandbox cannot do (measured, twice)
-
-- **It can never commit from a git WORKTREE.** The worktree's real `.git`
-  lives under the main repo's path, outside `workspace-write`, so
-  `index.lock` fails with EPERM. This is structural, not a delegate error:
-  expect the work back UNCOMMITTED, and commit it yourself as the first
-  verification step. An honest delegate reports exactly this; both live runs
-  did.
-- **It cannot bind AF_UNIX sockets**, so socket-based tests fail at setup
-  inside the sandbox. Pre-brief this in the task prompt (name it as an
-  environment limit, tell the delegate to run what it can, list what it could
-  not, and never claim unrun tests as proven) — otherwise the delegate burns
-  its run discovering it, or worse, soft-pedals the gap.
-- **If the report is lost** (no job log — the `--background` task path may
-  record nothing), recover it from `~/.codex/sessions/<date>/rollout-*.jsonl`:
-  the final `agent_message` payload is the report, and `custom_tool_call`
-  inputs contain the exact patch texts if the working tree itself is ever
-  damaged.
+Two sandbox limits from the runtime file shape this role directly: the
+delegate **cannot commit from a git worktree** (structural — expect the work
+back UNCOMMITTED, and say so in the task prompt so it doesn't waste a denied
+attempt; the lead commits as the first verification step) and **cannot bind
+AF_UNIX sockets** (pre-brief socket-based tests as an environment limit —
+run what it can, list what it could not, never claim unrun tests as proven —
+or the delegate burns its run discovering it). Lost reports are recoverable
+from session rollouts — runtime file.
 
 ## Verify before review
 

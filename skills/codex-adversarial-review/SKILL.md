@@ -10,6 +10,16 @@ Codex CLI call. The companion runs the review with a `read-only` sandbox and
 tracks it as a job. This is a challenge review: inspect chosen boundaries,
 assumptions, failure modes, and trade-offs, not only local defects.
 
+## Before the first run of a session
+
+Read **`references/codex-runtime.md`** (same directory). It holds the
+family-level mechanics shared with `codex-implement` — companion resolution,
+the `--background` launcher-output trap, `status` lying about liveness, the
+lossy-pipe report loss, report recovery from session rollouts, sandbox
+limits, and the model/effort plumbing. Every item was paid for with an
+incident; this file assumes them and covers only what makes a run a
+*review*.
+
 ## Establish an immutable review target
 
 Run from the target repository or implementation worktree. Capture the exact
@@ -71,27 +81,15 @@ DIFFERENT repo) started a real, billed review of the wrong tree, caught only
 by a human noticing before it finished. An in-command HEAD check makes a
 wrong target fail loud in milliseconds instead.
 
-**Launch under the host's own background mechanism with output redirected to
-a file** — `--background` does NOT guarantee a prompt return. Measured: one
-launch fell into launcher-output mode, streamed the whole review through the
-launching command, and was killed by the shell tool's default timeout,
-losing the run. When a job ID and job log DO appear, the companion's
-`status <job-id>`/`result <job-id>` work — but do not trust `status` alone
-for liveness; see "Watching a run" below. When they do not, the launcher's
-output file IS the only copy of the report. If the runtime is missing or
-unauthenticated, stop and ask the user to run the plugin's setup; do not
-fall back to a less isolated direct CLI command.
+Launch under the host's own background mechanism with output redirected to a
+file, per the runtime's launcher rules (`--background` does not guarantee a
+prompt return; a lossy pipe can destroy the only copy of the report).
 
 ## Model choice
 
-The review path accepts `--model` but does **not** expose `--effort` (only
-the `task` path has it) — so review depth is expressed by picking the model,
-plus the user's global `model_reasoning_effort` in `~/.codex/config.toml`,
-which the review run inherits. Check it when depth matters:
-`grep model_reasoning_effort ~/.codex/config.toml`. Never modify the user's
-config from a skill run.
-
-Pick per your calibration journal, with two measured priors:
+The review path takes `--model` only; depth otherwise comes from the user's
+global config (runtime file has the plumbing). Pick per your calibration
+journal, with two measured priors:
 
 - Review is the highest-leverage step — when quota allows, spend the
   strongest tier here rather than on implementation.
@@ -156,48 +154,12 @@ diversity if Codex implemented the change. Require a different-family
 reviewer as an additional gate; never present two Codex jobs as independent
 models.
 
-## Watching a run — measured operational knowledge
+## Watching the run and reading the report
 
-Each item below was paid for with a real incident (companion 1.0.x era;
-re-verify against your installed version):
-
-- **`status` computes "running" from `startedAt` and never checks the
-  process.** Two dead jobs read as "running, 47h" after the machine slept.
-  The `pid` in the job JSON is the launcher wrapper, not the worker.
-- **Liveness is log mtime. Nothing else works.** The job log lives under the
-  plugin's state directory
-  (`$HOME/.claude/plugins/data/codex-openai-codex/state/<repo-slug>/jobs/`).
-- **Two delivery modes — check both.** When the run cannot create its job
-  log, it silently switches to launcher-output mode: the job never appears in
-  `status --all` and the entire stream goes to the launching command's own
-  output. Look for `Thread ready` / `Turn started` there before concluding
-  the launch failed.
-- **Be patient around collaboration/wait tools.** The job pauses inside them
-  and writes nothing while paused. Use ~20 minutes of silence before
-  concluding anything.
-- **Never pipe the launcher through `head`/`tail`/anything lossy.** In
-  launcher-output mode that stream is the ONLY copy of the report. Measured:
-  a `| tail -6` on a launch silently destroyed a completed frontier-tier
-  review. Redirect to a file; filter when *reading*, never when launching.
-- **There is no `--help` on the review subcommand — probing flags runs a
-  review.** Unrecognized arguments are swallowed into the focus text, so
-  `adversarial-review --help` launches a real (billed) review of whatever
-  your cwd happens to be. Verify flags by reading the companion source,
-  never by trial invocation.
-
-## Reading the report
-
-- `Assistant message captured:` lines are **truncated** in the log — never
-  judge a round by them. The full report is emitted after `Turn completed.`;
-  split on the last captured message and read the tail.
-- **A round can end with empty findings on every captured message while the
-  real observation sits in the prose summary of an interim progress
-  message.** One confirmed bug arrived that way. Grep the interim messages
-  before declaring a round empty:
-
-  ```bash
-  grep -o 'Assistant message captured: .*' <log-or-output> | cut -c1-400
-  ```
+All in the runtime file: liveness is log mtime (never `status`), the two
+delivery modes, the ~20-minute patience rule around wait tools, truncated
+captured messages, and the interim-message grep that rescues findings from
+"empty" rounds. Follow them; do not re-learn them.
 
 ## Verify and report
 
