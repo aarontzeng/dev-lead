@@ -1,0 +1,328 @@
+# `agy` runtime — shared mechanics for both delegate roles
+
+Family-level operational knowledge for the Antigravity CLI, shared by
+`agy-adversarial-review` (read-only, `--mode plan`) and `agy-implement`
+(write, `--mode accept-edits`). It sits under the review skill's directory
+because every directory in a skills tree needs a `SKILL.md` to load, and a
+bare shared directory has no precedent.
+
+The role skills carry the discipline — what a good task or review prompt
+says, what must be verified, who reviews whom. This file carries the
+mechanics, and **every item in it was paid for with a real incident** (dates
+kept as provenance; re-verify anything version-sensitive against your
+install). Read it before the first `agy` run of a session.
+
+## Permission model — one-time setup per machine (required)
+
+Headless `--sandbox` runs auto-deny any tool needing "unsandboxed"
+permission, and **git needs it — measured: even read-only `git log` in a
+trusted, `--add-dir`ed directory is denied, and the whole run dies with zero
+output.** A delegate that cannot run `git diff`/`git log` is useless in
+either role, so `~/.gemini/antigravity-cli/settings.json` needs these under
+`permissions.allow`:
+
+```json
+"unsandboxed(git status)",
+"unsandboxed(git log)",
+"unsandboxed(git diff)",
+"unsandboxed(git show)",
+"unsandboxed(git branch)",
+"unsandboxed(git rev-parse)"
+```
+
+Those six are not quite the read set — see below. The **write set** adds
+these, for `agy-implement` only:
+
+```json
+"unsandboxed(git add)",
+"unsandboxed(git commit)",
+"unsandboxed(pytest)",
+"unsandboxed(python3 -m pytest)",
+"unsandboxed(python -m pytest)"
+```
+
+**Add `unsandboxed(wc)` and `unsandboxed(tail)` to the read set** — the cause
+is this suite's own prompts. Every review prompt demands an evidence gate
+("per file: its line count and the verbatim last line"), agy implements that
+gate with `wc -l` and `tail -1`, and the files live in the `--add-dir`ed repo
+— outside agy's own workspace root — so the shell read needs unsandboxed and
+is auto-denied without those two entries.
+
+The failure is diagnosable but only if you look: the run dies with a one-line
+"a tool required the unsandboxed permission" message, and the ACTUAL command
+is in the CLI log:
+
+```bash
+grep -i "permission check failed for unsandboxed" \
+  ~/.gemini/antigravity-cli/log/cli-*.log | tail -1
+```
+
+Do that before adding anything. The first instinct is to broaden the list
+with `cat`/`grep`/`head`, which hands agy unsandboxed read of the whole
+filesystem; the log names one command, and one entry is usually the whole
+fix. Note that `command(wc)` being present does NOT help — sandboxed and
+unsandboxed are separate grants for the same binary, which is why a list
+that looks complete still fails.
+
+Deliberately absent from both sets: `git push`, `git reset`, `git checkout`,
+`git clean`, `git worktree`. A headless agy that tries any of them is
+auto-denied by the CLI itself — **the no-push rule enforced by machine, not
+by prose in a prompt.** That property is the reason to keep this list
+minimal.
+
+The pytest entries are a **ruled exception** (owner-approved, dated in the
+journal): letting the delegate self-test removes its single biggest measured
+weakness — 18 broken existing tests across two rounds, ~80 minutes of lead
+verification, all traced to the delegate never seeing a test run. The cost is
+stated honestly, not hidden: pytest executes repo-supplied code (conftest,
+plugins, fixtures) unsandboxed, so **on this path the no-push rule is
+instruction-level, not machine-enforced**. That is acceptable because the
+threat model is a fallible delegate, not a hostile one, and the workflow
+makes the residual risk observable: `agy-implement` snapshots `refs/remotes`
+before dispatch and diffs it at handoff, so an accidental push surfaces as a
+delta instead of being assumed not to have happened. The permission is also
+GLOBAL — there is no per-role scoping — so a plan-mode reviewer that
+disobeys its prompt can execute pytest too; the review skill states this.
+Three rule shapes because matching is against the literal command string —
+the measured incident was `python3 -m pytest` sailing past
+`unsandboxed(pytest)` — and the task prompt must PIN which spelling the
+delegate uses; a fourth spelling (`.venv/bin/pytest`, `uv run pytest`) still
+dies silently. Non-pytest repos: the delegate writes, the lead runs tests —
+until your repo's runner earns its own deliberate ruling.
+
+Rules that follow:
+
+- **Never substitute `--dangerously-skip-permissions` for a missing rule.**
+  It auto-approves every permission request, push included, and dissolves the
+  machine-level guarantees this delegate has everywhere outside pytest. If a
+  run needs something not on the list, stop and ask the user for a narrowly
+  scoped rule.
+- If you keep a canonical git-tracked copy of the settings file, remember the
+  LIVE file at `~/.gemini/antigravity-cli/settings.json` is a separate copy
+  that drifts (sessions append ad-hoc rules). A rule added to only one of
+  them is how "I allow-listed that" and a silent death can both be true —
+  check the live file when diagnosing, update both when ruling.
+
+## The workspace is NOT your cwd — `--add-dir` is mandatory
+
+Measured: a headless `agy -p` run's workspace root is agy's own scratch
+directory (`~/.gemini/antigravity-cli/scratch`), **not** the directory you
+launch it from. "Run it inside the repo/worktree" grants nothing by itself.
+
+Always pass `--add-dir "$TARGET"` and name that same absolute path in the
+prompt as the place to work. `--add-dir` is repeatable when the work spans
+repos. For a write run, never `--add-dir` the main checkout — the worktree is
+the whole point.
+
+## Flags
+
+Verified against `agy --help` (re-verify per version). Both roles pass
+everything here except `--mode`, whose value is the role.
+
+- `-p` — headless: print once, exit. Launch it under your host's background
+  mechanism; a foreground shell-tool timeout will kill it regardless of
+  `--print-timeout`.
+- `--mode` — accepts only `plan` or `accept-edits`. `plan` tells the model to
+  research and report instead of editing; it is a **behavioral mode, not a
+  filesystem or network security boundary** — reinforce the intent in the
+  prompt and verify repository state afterward regardless.
+- `--sandbox` — the CLI's terminal restrictions. Keep it on in both roles;
+  mode alone does not constrain shell commands. It only works together with
+  the allow-list above.
+- `--effort` — a real flag (`low|medium|high`); agy tops out at `high`.
+  **Gemini models only** — measured: it is rejected outright for the Claude
+  pool's models (the "-thinking" in those ids is the whole effort control);
+  drop the flag entirely there. Not orthogonal to the `-high`/`-low` suffix
+  in Gemini model ids either — a CONTRADICTING pair
+  (`--effort low` with a `-high` model id) is a hard CLI error; a matching
+  explicit value is fine and preferred in a run log.
+- `--print-timeout` — **the default (5m0s) cuts real work off mid-flight.**
+  Use `10m0s` for a review, `20m0s` for an implementation.
+- `--disable-slash-commands` — stops prompt text being expanded as slash
+  commands. Prompts are full of paths; a stray leading `/` is otherwise
+  interpreted rather than read.
+- `--output-format json` plus `--json-schema` for machine-readable findings.
+
+Put long prompts in a file and interpolate (`"$(cat "$RUN_DIR/prompt.md")"`)
+so the shell cannot mangle CJK or newlines. Use `mktemp -d`, never a fixed
+`/tmp` path — concurrent-agent `/tmp` collisions are a documented incident
+class. **Write that file in its own command**, not in the compound command
+that launches the run (see the `pkill` self-match trap below for why
+compound commands bite).
+
+Give agy paths relative to the repo and let it read files itself. Pasting a
+whole `git diff` into the prompt is fine for a small change and wasteful for
+a large one.
+
+## Models
+
+**agy may bill multiple SEPARATE quota pools** (e.g. a Gemini pool and a
+Claude pool). Spending one does not touch the other — which makes the second
+pool's models worth knowing about even when the first is the scarce one, and
+makes them legitimate cross-family reviewers for anything their family did
+not write. The constraint is on the **relationship**, not the model: a
+second-pool Claude model is fine as an implementer anywhere, fine as a
+reviewer of Gemini/GPT work, and forbidden as a reviewer of Claude's own
+work.
+
+Catalogue facts to re-verify on YOUR account (all measured on at least one):
+
+- **A requested model can be silently downgraded — the id you passed is not
+  evidence of the model you got.** Measured: a "pro" tier reached the backend
+  as the flash tier, while flash tiers propagated faithfully. Nothing in the
+  CLI's output says so; only the log does:
+
+  ```bash
+  ls -t ~/.gemini/antigravity-cli/log/*.log | head -1 | \
+    xargs grep -oE 'Resolving model .*|Propagating selected model override to backend: .*'
+  ```
+
+  Check before recording which model reviewed something. Escalate to a
+  deeper tier only with evidence that the escalation actually took effect.
+- Entitlements differ per account and per machine — an id from another
+  machine's notes may not be in your picker.
+- Newer flash tiers have superseded older ones on cost, cutoff, and coding
+  strength; a terser prose style is irrelevant for a delegate whose output
+  you parse.
+
+## A mid-generation hang, distinct from the auth-layer failures below
+
+Measured once (a data point, not a claimed mechanism): a review run
+authenticated cleanly, resolved its model, refreshed quota, streamed some
+output — then produced nothing for the remaining half of its print timeout
+and died with `Print mode: timed out`. Different shape from every failure
+below: auth, quota, and model resolution all succeeded. Congestion, a
+large-prompt stall, or something else — unmeasured at n=1; do not
+extrapolate. Practical handling: it fails LOUD (the process exits with a
+timeout error), needs no forensic recovery, and a same-round leg from
+another family can cover the round while this one stalls.
+
+## The silent-death mode
+
+Measured repeatedly, in both roles: **when any tool in a headless run needs a
+permission that cannot be prompted for, the CLI auto-denies it and the run
+produces no output at all** — while any file edits made before the denial are
+already on disk.
+
+Consequences, both counter-intuitive:
+
+- **An empty result does not mean nothing happened.**
+- **The model never gets a chance to handle the denial**, so "if a command is
+  denied, say so and continue" is not implementable. The instruction that
+  invites the attempt is the bug.
+
+The fix is always the same: find the denied command in the newest log, then
+either put a workflow-required command on the allow-list deliberately or
+remove the instruction that invites the attempt.
+
+```bash
+ls -t ~/.gemini/antigravity-cli/log/*.log | head -1 | xargs grep -i "permission check failed"
+```
+
+Note the rule shape must match the real command string (`python3 -m pytest`
+is not matched by `unsandboxed(pytest)`) — a mis-shaped rule produces the
+identical silent death and the appearance of a fix.
+
+After **every** run that fails, times out, or returns nothing:
+
+```bash
+git -C "$TARGET" status --short
+git -C "$TARGET" diff --stat
+git -C "$TARGET" log "$BASE"..HEAD --oneline
+```
+
+Keep the worktree and branch until the user agrees they are disposable —
+partial edits, commits, and the launcher output are the diagnosis evidence.
+
+## Auth: the failure is a network timeout, not the token
+
+**Measured across 9 runs with perfect correlation:** the CLI's keyring auth
+loads the stored token and then makes a network call with a **10-second
+budget**. When that call does not finish in time, the log says
+`keyringAuth: timed out after 10s, skipping keyring auth` and agy reports
+"not logged in" — **whatever the token's actual state**. Most failing runs
+had a perfectly valid, unexpired token; the network was the problem. On a
+link with flaky reachability to the vendor's endpoints, each headless run is
+an independent coin flip — which is why runs appear to alternate and why a
+fresh login *seems* to fix it for a while.
+
+**Check DNS first.** In one measured environment the entire mechanism was a
+blocked first resolver in `/etc/resolv.conf`: every name resolution paid a
+~5 s timeout before falling through, eating half the 10 s budget. Reordering
+resolvers took DNS from 5s to 10ms and the timeout line disappeared.
+
+**A different failure with a different fix**: output saying
+`Eligibility check failed: … i/o timeout` is a broken agy INSTALL state, not
+the network and not the credential — measured: a full remove-and-reinstall
+fixed it instantly on the same machine and network. Do not ask for repeated
+re-logins for this one; reinstall.
+
+**Retry, don't re-login.** A failure says nothing about the credential.
+Retry the run a few times with a short gap. Distinguish cases from the log:
+
+```bash
+ls -t ~/.gemini/antigravity-cli/log/*.log | head -1 | xargs grep -oE "Print mode: .*"
+```
+
+- `silent auth succeeded` → headless works (but a nonzero exit after it is
+  still a real failure — the line only says auth worked).
+- `keyringAuth: timed out after 10s` → transient; retry.
+- `silent auth failed` → the ONE genuine re-login case: the user must run
+  `agy` interactively in a real terminal (an agent cannot — no TTY) and
+  complete the browser flow. Verify afterward with a cheap probe:
+
+  ```bash
+  agy -p "Reply with exactly: AUTH_OK" --model <cheap-tier> \
+      --mode plan --sandbox --disable-slash-commands --print-timeout 2m0s
+  ```
+
+- **No `Print mode:` line at all → INCONCLUSIVE, not unavailable.** Loose
+  "not logged in" strings are printed by background polling in the first
+  second and appear in runs that go on to succeed. Only `Print mode:` lines
+  mean anything. Resolve inconclusive with the probe above.
+
+When retrying in a loop: attribute logs to runs via `find -newer` against a
+marker file created just before the call — "the globally newest log" may
+belong to another process. Capture agy's exit status through an `if`, not a
+bare `cmd; rc=$?` (a caller's `set -e` exits the function before `rc=$?`
+runs). Zero or multiple new logs → inconclusive, retry; never a silent
+success.
+
+**Don't declare a model or pool broken from a handful of failures — verify
+against the raw log, not a wrapper's pass/fail summary.** Measured: three
+straight "failures" nearly got a whole model pool stripped from this file;
+the raw logs showed two had actually succeeded and a hand-rolled wrapper's
+simplified matching had misread them. Also: a run that reports failure at
+the wrapper level can still have spent quota if any part of it reached the
+backend.
+
+**An API key is not a shortcut.** Vendor API keys bill the pay-per-token
+API, not the subscription quota that makes this CLI worth using as a second
+family. Even where honored, "set an API key to fix headless auth" trades
+free quota for a bill. If tried anyway: a `~/.bashrc` export placed below
+the interactive-shell guard is invisible to every non-interactive shell,
+and a print-mode probe blocks for its whole timeout before revealing
+anything.
+
+## Process hygiene
+
+- `agy models` may hang during an auth failure, sitting on an interactive
+  login prompt. Do not use it as a health check; read the `Print mode:` log
+  line instead.
+- Kill stragglers **by PID** (`pgrep` first, inspect, then `kill`). Three
+  `pkill -f` traps, all hit in practice:
+  - `pkill -f agy` also kills the user's interactive agy session — the very
+    thing that keeps the token refreshed.
+  - `pkill -f "<pattern>"` matches full command lines **including the shell
+    you run it from** — in a compound command it kills its own parent shell,
+    and the next command never runs (exit 144, looks unrelated).
+  - The same self-match ruins a **guard**: `pgrep -f "agy -p" && exit`
+    inside a script whose own command line contains `agy -p` always reports
+    busy. Match on the process NAME: `pgrep -x agy`.
+- **A permission prompt in headless mode is a failed run, not a reason to
+  disable permissions.** Let it fail, preserve the worktree, diagnose from
+  the log.
+- Parallel agy processes are NOT a hazard (measured, retracting an earlier
+  serialization rule): a successful headless run does not rewrite the token
+  file, so there is no refresh race. Retry per the loop above rather than
+  spacing launches out.
