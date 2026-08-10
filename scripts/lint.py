@@ -13,6 +13,10 @@ Every check here guards against a failure this repo has ACTUALLY shipped
   tracked       an environment-global gitignore silently ate templates/AGENTS.md
   sentinel      a skill's prose once allowed same-family review, contradicting
                 the suite's headline rule
+  families      data/families.json must stay consistent with the skills on
+                disk, and a multi-family adapter must SAY so where a lead
+                reads it (agy serving both Gemini and Claude is exactly the
+                fact that makes adapter != family)
 """
 import json
 import re
@@ -170,9 +174,15 @@ def check_tracked():
         capture_output=True, text=True, check=True,
     ).stdout.splitlines()
     for must in ("templates/AGENTS.md", ".claude-plugin/plugin.json",
-                 ".github/workflows/ci.yml"):
+                 ".github/workflows/ci.yml", "data/families.json",
+                 "scripts/freeze-target.sh", "scripts/verify-target.sh",
+                 "scripts/snapshot-refs.sh"):
         if must not in out:
             err(must, "not tracked by git (a global gitignore may have silently eaten it)")
+    # a helper that lost its +x bit is a helper the skills' call sites cannot run
+    for sh in sorted((ROOT / "scripts").glob("*.sh")):
+        if not sh.stat().st_mode & 0o111:
+            err(rel(sh), "not executable (skills call it directly)")
 
 
 # ---- sentinel: the headline rule must survive edits in every implement skill ----
@@ -190,10 +200,72 @@ def check_sentinels():
                 err(rel(skill), f"never points at its runtime reference ({fam}-runtime.md)")
 
 
+# ---- families: the accounting model must match what is on disk ----
+def check_families():
+    path = ROOT / "data" / "families.json"
+    if not path.is_file():
+        err("data/families.json", "missing (the cross-family accounting model)")
+        return
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as e:
+        err(rel(path), f"invalid JSON: {e}")
+        return
+
+    adapters = data.get("adapters", {})
+    families = data.get("families", {})
+
+    # 1. the declared adapters ARE the families on disk — three-way agreement
+    #    between this file, lint.py's own tuple, and the skills tree
+    if set(adapters) != set(FAMILIES):
+        err(rel(path), f"adapters {sorted(adapters)} != skills on disk {sorted(FAMILIES)}")
+
+    # 2. every family an adapter claims to serve must be declared
+    for name, spec in adapters.items():
+        served = spec.get("serves") or []
+        if not served:
+            err(rel(path), f"adapter '{name}' serves nothing")
+        for fam in served:
+            if fam not in families:
+                err(rel(path), f"adapter '{name}' serves undeclared family '{fam}'")
+
+    # 3. every declared family must be reachable through some adapter
+    reachable = {f for spec in adapters.values() for f in (spec.get("serves") or [])}
+    for fam in families:
+        if fam not in reachable:
+            err(rel(path), f"family '{fam}' is declared but no adapter serves it")
+
+    # 4. the un-accountable case must exist and be marked — if every family
+    #    is accounting_valid, the stealth-model hazard has been edited away
+    invalid = [f for f, spec in families.items() if not spec.get("accounting_valid", True)]
+    if not invalid:
+        err(rel(path), "no family is marked accounting_valid:false — the "
+                       "stealth-model hazard is missing from the model")
+    for fam in invalid:
+        if not families[fam].get("why"):
+            err(rel(path), f"family '{fam}' is accounting-invalid without a 'why'")
+
+    # 5. a multi-family adapter must SAY so where a lead actually reads it,
+    #    or the adapter/family distinction is invisible at the point of use
+    for name, spec in adapters.items():
+        served = spec.get("serves") or []
+        if len(served) < 2:
+            continue
+        runtime = ROOT / "skills" / f"{name}-adversarial-review" / "references" / f"{name}-runtime.md"
+        if not runtime.is_file():
+            continue  # already reported by check_structure
+        text = runtime.read_text(encoding="utf-8")
+        missing = [f for f in served if f != "unknown" and f.lower() not in text.lower()]
+        if missing:
+            err(rel(runtime),
+                f"adapter serves {served} but its runtime file never names {missing} — "
+                "a lead reading only this file cannot account the family correctly")
+
+
 def main():
     for check in (check_structure, check_frontmatter, check_manifest,
                   check_links, check_fences, check_var_order,
-                  check_tracked, check_sentinels):
+                  check_tracked, check_sentinels, check_families):
         check()
     if ERRORS:
         print(f"FAIL — {len(ERRORS)} problem(s):\n")

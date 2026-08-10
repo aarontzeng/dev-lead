@@ -44,7 +44,7 @@ RUN_DIR=$(mktemp -d "${TMPDIR:-/tmp}/agy-implement.XXXXXX")   # FIRST — the sn
 BASE=$(git rev-parse HEAD)   # from a clean checkout, recorded before anything
 WORKTREE=../<repo>-agy-<short-task-slug>
 git worktree add -b agy/<short-task-slug> "$WORKTREE" "$BASE"
-git -C "$WORKTREE" for-each-ref refs/remotes > "$RUN_DIR/remote-refs.before"   # push-detection baseline
+scripts/snapshot-refs.sh save "$WORKTREE" "$RUN_DIR/remote-refs.before"   # push-detection baseline
 ```
 
 Verify against that exact SHA later — never against the moving branch name.
@@ -129,7 +129,7 @@ Role-specific choices:
    verified, not assumed. Check commit messages for AI-authorship trailers —
    an amend is free while the branch is local. Then the push check the
    test-runner ruling depends on:
-   `git for-each-ref refs/remotes | diff "$RUN_DIR/remote-refs.before" -` —
+   `scripts/snapshot-refs.sh check "$WORKTREE" "$RUN_DIR/remote-refs.before"` —
    any delta means something pushed during the run: a stop-and-report
    incident, never a shrug. (A successful `git push` updates the
    remote-tracking ref, which this catches; a review-system push

@@ -26,7 +26,7 @@ RUN_DIR=$(mktemp -d "${TMPDIR:-/tmp}/opencode-implement.XXXXXX")   # FIRST — s
 BASE=$(git rev-parse HEAD)   # from a clean checkout, recorded before anything
 WORKTREE=../<repo>-opencode-<short-task-slug>
 git worktree add -b opencode/<short-task-slug> "$WORKTREE" "$BASE"
-git -C "$WORKTREE" for-each-ref refs/remotes > "$RUN_DIR/remote-refs.before"
+scripts/snapshot-refs.sh save "$WORKTREE" "$RUN_DIR/remote-refs.before"
 ```
 
 Then write the write-role config into the worktree as `opencode.json` —
@@ -119,15 +119,15 @@ The same lead sequence as every implement skill, none of it optional:
    `?? opencode.json` (yours) and nothing else untracked; check commit
    messages for trailers.
 2. **Push check**:
-   `git for-each-ref refs/remotes | diff "$RUN_DIR/remote-refs.before" -` —
+   `scripts/snapshot-refs.sh check "$WORKTREE" "$RUN_DIR/remote-refs.before"` —
    any delta is a stop-and-report incident.
 3. **Run the full suite yourself** in the worktree — the delegate's counts
    are claims (a measured delegate self-reported 150 on a 445-test suite;
    the code was fine, the number was not).
 4. **Mutation-proof every new regression test** (commit the work first;
    editor-tool mutations, not sed; capture-then-report, never `&&`-chain the
-   verdict — the full mechanics live in `dev-lead` Phase 2 and apply
-   verbatim).
+   verdict — the full mechanics are in
+   [`dev-lead/references/mutation-runbook.md`](../dev-lead/references/mutation-runbook.md)).
 5. Cross-family adversarial review. A NAMED-family implementer makes every
    other family cross-family by construction. A stealth-model implementer
    makes cross-family UNVERIFIABLE — so when family accounting matters,

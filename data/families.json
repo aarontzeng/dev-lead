@@ -1,0 +1,49 @@
+{
+  "_comment": [
+    "The cross-family accounting model, machine-readable so the linter can",
+    "check the docs against it. This file DECLARES; it generates nothing --",
+    "a docs repo whose tables are codegen output makes every contributor",
+    "learn a build step and lets the generated copy drift from its source.",
+    "",
+    "adapters = which CLI you drive. families = whose training produced the",
+    "output. They are not the same axis, and one adapter can serve several",
+    "families; the reviewer-pairing rule reads the FAMILY of the verified",
+    "served model, never the adapter."
+  ],
+  "adapters": {
+    "claude": {
+      "cli": "claude",
+      "serves": ["Claude"]
+    },
+    "codex": {
+      "cli": "codex (via its Claude Code companion plugin, or raw)",
+      "serves": ["GPT"]
+    },
+    "agy": {
+      "cli": "agy (Antigravity)",
+      "serves": ["Gemini", "Claude"],
+      "note": "two separate quota pools; the Claude pool is a legitimate cross-family reviewer for anything Claude did not write"
+    },
+    "opencode": {
+      "cli": "opencode",
+      "serves": ["DeepSeek", "Nemotron", "unknown"],
+      "note": "free pool; catalogue changes, verify with `opencode models`"
+    }
+  },
+  "families": {
+    "Claude": {"accounting_valid": true},
+    "GPT": {"accounting_valid": true},
+    "Gemini": {"accounting_valid": true},
+    "DeepSeek": {"accounting_valid": true},
+    "Nemotron": {"accounting_valid": true},
+    "unknown": {
+      "accounting_valid": false,
+      "why": "stealth models whose family is undisclosed by design; they might secretly share any family, so they can never SATISFY the cross-family rule -- fine as an additional pair of eyes, never the accounting leg"
+    }
+  },
+  "rules": {
+    "reviewer_family_must_differ_from_implementer": true,
+    "high_risk_reviewer_families": 2,
+    "no_risk_level_exemption": true
+  }
+}

@@ -83,7 +83,8 @@ The same lead sequence as every implement skill, none of it optional:
    commit.)
 2. **Run the full suite yourself** in the worktree.
 3. **Mutation-proof every new regression test** (commit first; the full
-   mechanics live in `dev-lead` Phase 2 and apply verbatim).
+   mechanics are in
+   [`dev-lead/references/mutation-runbook.md`](../dev-lead/references/mutation-runbook.md)).
 4. **Cross-family adversarial review** — Claude implemented, so the reviewer
    is GPT, Gemini, or a named free-pool model. Never another Claude context,
    and not a stealth model whose family might be Claude.

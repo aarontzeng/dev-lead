@@ -9,4 +9,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: python3 scripts/lint.py
+      - name: Repo invariants
+        run: python3 scripts/lint.py
+      - name: Shell helper tests
+        run: python3 scripts/test_scripts.py
+      - name: Shell syntax
+        run: for f in scripts/*.sh; do bash -n "$f"; done
