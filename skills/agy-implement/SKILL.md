@@ -13,7 +13,8 @@ branch.
 
 ## Before the first run of a session
 
-Read **`../agy-adversarial-review/references/agy-runtime.md`**. It holds the
+Read **[`../agy-adversarial-review/references/agy-runtime.md`](../agy-adversarial-review/references/agy-runtime.md)**.
+It holds the
 family-level mechanics shared by both agy roles — the permission allow-list,
 the `--add-dir` workspace trap, the silent-death mode, auth diagnosis, and
 the model catalogue. This file assumes you know them and covers only what
@@ -132,9 +133,15 @@ Role-specific choices:
    `git diff "$BASE"...HEAD`, `git status --short`. Scope discipline is
    verified, not assumed. Check commit messages for AI-authorship trailers —
    an amend is free while the branch is local. Then the push check the
-   test-runner ruling depends on:
-   `"$DEV_LEAD/scripts/snapshot-refs.sh" check "$WORKTREE" "$RUN_DIR/remote-refs.before"` —
-   any delta means something pushed during the run: a stop-and-report
+   test-runner ruling depends on — a later step is a NEW shell and `$DEV_LEAD`
+   does not survive into it, so re-resolve before using it:
+
+   ```bash
+   DEV_LEAD=${DEV_LEAD_ROOT:-$(ls -d "$HOME"/.claude/plugins/cache/dev-lead/dev-lead/* 2>/dev/null | sort -V | tail -1)}
+   "$DEV_LEAD/scripts/snapshot-refs.sh" check "$WORKTREE" "$RUN_DIR/remote-refs.before"
+   ```
+
+   Any delta means something pushed during the run: a stop-and-report
    incident, never a shrug. (A successful `git push` updates the
    remote-tracking ref, which this catches; a review-system push
    (`refs/for/*`) does not create one, so the check is a tripwire for the

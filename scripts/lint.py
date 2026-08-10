@@ -154,22 +154,40 @@ def check_links():
 # sites go through "$DEV_LEAD"; prose uses a relative link, whose target
 # check_links() then proves resolvable.
 SUITE_DIRS = ("scripts", "docs", "data", "templates")
+# `./` and `../` prefixes are consumed BY the match rather than blocked by the
+# lookbehind: `./scripts/freeze-target.sh` resolves against the cwd exactly
+# like the bare form.
 BARE_SUITE_RE = re.compile(
-    r"(?<![\w/$.\-])(?:" + "|".join(SUITE_DIRS) + r")/[\w./\-]+"
+    r"(?<![\w/$.\-])(?:\.{1,2}/)*(?:" + "|".join(SUITE_DIRS) + r")/[\w./\-]+"
 )
-MD_LINK_RE = re.compile(r"\[[^\]]*\]\([^)]*\)")
+# Deliberately matches only what check_links() can VALIDATE — its LINK_RE
+# target class excludes whitespace too. A wider mask here would hide a
+# multiline or titled link from this check while check_links still skipped it,
+# leaving that link checked by nobody.
+MD_LINK_RE = re.compile(r"\[[^\]]*\]\([^)\s]*\)")
 DEV_LEAD_RESOLVER = "plugins/cache/dev-lead/dev-lead/*"
+
+
+def bare_suite_paths(text):
+    """(line, token) for each cwd-relative suite path outside a valid link.
+
+    Declared boundaries, so a reader checks declared-vs-actual rather than
+    declared-vs-infinite: this cannot tell a suite path from a same-named path
+    in the TARGET repo (spell those `"$TARGET/scripts/…"`), it does not mask a
+    link label containing nested brackets, and it knows only SUITE_DIRS.
+    """
+    # a link's target belongs to check_links(); its LABEL may legitimately
+    # spell the bare path. Blank links out, preserving line numbering.
+    prose = MD_LINK_RE.sub(lambda m: "\n" * m.group(0).count("\n"), text)
+    return [(prose[: m.start()].count("\n") + 1, m.group(0))
+            for m in BARE_SUITE_RE.finditer(prose)]
 
 
 def check_paths():
     for md in sorted(ROOT.glob("skills/**/*.md")):
         text = md.read_text(encoding="utf-8")
-        # a link's target belongs to check_links(); its LABEL may legitimately
-        # spell the bare path. Blank links out, preserving line numbering.
-        prose = MD_LINK_RE.sub(lambda m: "\n" * m.group(0).count("\n"), text)
-        for m in BARE_SUITE_RE.finditer(prose):
-            line = prose[: m.start()].count("\n") + 1
-            err(rel(md), f"line {line}: '{m.group(0)}' resolves against the "
+        for line, token in bare_suite_paths(text):
+            err(rel(md), f"line {line}: '{token}' resolves against the "
                          "TARGET repo's cwd, not the suite — use "
                          '"$DEV_LEAD/…" in bash, a relative link in prose')
         if "$DEV_LEAD" in text and DEV_LEAD_RESOLVER not in text:

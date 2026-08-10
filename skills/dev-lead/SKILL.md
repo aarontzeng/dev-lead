@@ -192,7 +192,9 @@ user can set it at invocation. Each round:
    # `scripts/…` resolves against the target and exits 127 — which lands you
    # in the hand-rolled copy this paragraph just warned about.
    DEV_LEAD=${DEV_LEAD_ROOT:-$(ls -d "$HOME"/.claude/plugins/cache/dev-lead/dev-lead/* 2>/dev/null | sort -V | tail -1)}
-   [ -x "$DEV_LEAD/scripts/freeze-target.sh" ] || { echo "dev-lead root unresolved — set DEV_LEAD_ROOT to your checkout"; exit 1; }
+   for helper in freeze-target.sh verify-target.sh; do
+     [ -x "$DEV_LEAD/scripts/$helper" ] || { echo "dev-lead root unresolved (no $helper) — set DEV_LEAD_ROOT to your checkout"; exit 1; }
+   done
 
    REVIEW_HEAD=$("$DEV_LEAD/scripts/freeze-target.sh" "$REPO" "$SHA" "$FROZEN_DIR")
    "$DEV_LEAD/scripts/verify-target.sh" "$FROZEN_DIR" "$REVIEW_HEAD"   # before AND after

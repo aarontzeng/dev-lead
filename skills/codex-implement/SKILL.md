@@ -20,7 +20,8 @@ reviewers from two non-GPT families.
 
 ## Before the first run of a session
 
-Read **`../codex-adversarial-review/references/codex-runtime.md`**. It holds
+Read **[`../codex-adversarial-review/references/codex-runtime.md`](../codex-adversarial-review/references/codex-runtime.md)**.
+It holds
 the family-level mechanics shared by both codex roles — companion
 resolution, the `--background` launcher-output trap, `status` lying about
 liveness, report recovery from session rollouts, what the sandboxes can and

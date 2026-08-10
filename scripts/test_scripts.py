@@ -169,6 +169,57 @@ def test_snapshot(tmp):
     check("snapshot: check FAILS when the baseline is missing", r5.returncode != 0)
 
 
+# -------------------------------------------------------------- lint paths ----
+def test_lint_paths():
+    """check_paths()'s predicate, in BOTH directions.
+
+    A path checker earns its line count only if it still fires after a later
+    edit. Every must-flag case below is a spelling that resolves against the
+    TARGET repo's cwd, and every must-not-flag case is a correct spelling that
+    a false positive would push a contributor away from — the second set is
+    the one an over-eager regex breaks.
+    """
+    sys.path.insert(0, str(SCRIPTS))
+    import lint
+
+    must_flag = {
+        "bare bash call site": 'scripts/freeze-target.sh "$REPO" "$SHA"',
+        "bare prose citation": "see `docs/methodology.md` §5",
+        "./ prefix": "run ./scripts/snapshot-refs.sh save",
+        "../ prefix": "run ../scripts/snapshot-refs.sh save",
+        # masked by the link regex but skipped by check_links() -> checked by
+        # nobody, until MD_LINK_RE was narrowed to what check_links validates
+        "multiline link": "[`docs/x.md`](\n../../docs/x.md)",
+    }
+    for name, text in must_flag.items():
+        check(f"paths: flags {name}", bool(lint.bare_suite_paths(text)),
+              f"{text!r} passed unflagged")
+
+    must_not_flag = {
+        "$DEV_LEAD call site": '"$DEV_LEAD/scripts/freeze-target.sh" "$REPO"',
+        "relative link": "[`docs/methodology.md`](../../docs/methodology.md)",
+        "url": "https://github.com/aarontzeng/dev-lead/docs/methodology.md",
+        "plugin state path": "$HOME/.claude/plugins/data/codex/state/x",
+        "bare directory name": "everything in docs/ is prose",
+    }
+    for name, text in must_not_flag.items():
+        hits = lint.bare_suite_paths(text)
+        check(f"paths: passes {name}", not hits, f"{text!r} flagged {hits}")
+
+    # A wrong line number sends the reader to the wrong place, which is how a
+    # real hit gets dismissed as noise. The masked link must SPAN LINES or
+    # this proves nothing: a single-line link blanks to the same width whether
+    # or not the substitution preserves newlines, and the mutation survives.
+    hits = lint.bare_suite_paths("[a\nb](c.md)\n\nrun scripts/x.sh")
+    check("paths: reports the line number after masking", hits[0][0] == 4,
+          f"got {hits[0][0] if hits else 'no hit'}")
+
+    # the guarded tree must actually pass the guard
+    r = run(sys.executable, SCRIPTS / "lint.py")
+    check("lint: the repo passes its own invariants", r.returncode == 0,
+          r.stdout + r.stderr)
+
+
 def main():
     for script in ("freeze-target.sh", "verify-target.sh", "snapshot-refs.sh"):
         p = SCRIPTS / script
@@ -190,6 +241,9 @@ def main():
         test_verify(tmp, frozen, sha)
         print("snapshot-refs.sh")
         test_snapshot(tmp)
+
+    print("lint.py check_paths")
+    test_lint_paths()
 
     if FAILURES:
         print(f"\nFAIL — {len(FAILURES)} test(s) failed")

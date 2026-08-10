@@ -12,7 +12,8 @@ assumptions, failure modes, and trade-offs, not only local defects.
 
 ## Before the first run of a session
 
-Read **`references/codex-runtime.md`** (same directory). It holds the
+Read **[`references/codex-runtime.md`](references/codex-runtime.md)** (same
+directory). It holds the
 family-level mechanics shared with `codex-implement` — companion resolution,
 the `--background` launcher-output trap, `status` lying about liveness, the
 lossy-pipe report loss, report recovery from session rollouts, sandbox

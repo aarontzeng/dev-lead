@@ -12,7 +12,8 @@ own working directory, permission mode, or model (runtime file).
 
 ## Before the first run of a session
 
-Read **`../claude-adversarial-review/references/claude-runtime.md`** — the
+Read **[`../claude-adversarial-review/references/claude-runtime.md`](../claude-adversarial-review/references/claude-runtime.md)**
+— the
 invocation shapes, measured `acceptEdits` behavior, patience calibration,
 and the instruction-layer inheritance property are there and assumed here.
 

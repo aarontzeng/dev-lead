@@ -13,7 +13,7 @@ congestion is normal, so give it the tasks nobody is waiting on.
 
 ## Before the first run of a session
 
-Read **`../opencode-adversarial-review/references/opencode-runtime.md`**.
+Read **[`../opencode-adversarial-review/references/opencode-runtime.md`](../opencode-adversarial-review/references/opencode-runtime.md)**.
 The two permission traps (zero-commit binding, last-match-wins), the
 congestion retry loop, the model catalogue and the stealth-model
 family-unknown caveat, and the audit log lines all live there and are
@@ -122,9 +122,15 @@ The same lead sequence as every implement skill, none of it optional:
    `git diff "$BASE"...HEAD` — scope verified, not assumed; expect
    `?? opencode.json` (yours) and nothing else untracked; check commit
    messages for trailers.
-2. **Push check**:
-   `"$DEV_LEAD/scripts/snapshot-refs.sh" check "$WORKTREE" "$RUN_DIR/remote-refs.before"` —
-   any delta is a stop-and-report incident.
+2. **Push check** — a later step is a NEW shell and `$DEV_LEAD` does not
+   survive into it, so re-resolve before using it:
+
+   ```bash
+   DEV_LEAD=${DEV_LEAD_ROOT:-$(ls -d "$HOME"/.claude/plugins/cache/dev-lead/dev-lead/* 2>/dev/null | sort -V | tail -1)}
+   "$DEV_LEAD/scripts/snapshot-refs.sh" check "$WORKTREE" "$RUN_DIR/remote-refs.before"
+   ```
+
+   Any delta is a stop-and-report incident.
 3. **Run the full suite yourself** in the worktree — the delegate's counts
    are claims (a measured delegate self-reported 150 on a 445-test suite;
    the code was fine, the number was not).

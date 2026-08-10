@@ -133,7 +133,9 @@ ln -s ~/dev-lead/skills/* ~/.claude/skills/
 > resolve against whatever project you are working on.)
 
 **To try it without installing**: `claude --plugin-dir /path/to/dev-lead`
-loads a local checkout for one session.
+loads a local checkout for one session — set `DEV_LEAD_ROOT` to that same
+path, because a `--plugin-dir` session leaves no cache entry for the
+`scripts/` helpers to resolve against.
 
 **For the other CLIs** — point each CLI's skills/context location at the
 same tree; the exact path is version-dependent (Codex has documented

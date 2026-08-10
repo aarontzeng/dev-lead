@@ -18,7 +18,8 @@ is higher.
 
 ## Before the first run of a session
 
-Read **`references/agy-runtime.md`** (same directory). It holds the
+Read **[`references/agy-runtime.md`](references/agy-runtime.md)** (same
+directory). It holds the
 family-level mechanics shared with `agy-implement` — the permission
 allow-list this CLI needs before it can run `git` at all, the `--add-dir`
 workspace trap, the silent-death mode, the auth diagnosis, and the model

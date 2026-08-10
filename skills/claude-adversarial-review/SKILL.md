@@ -12,7 +12,8 @@ diversity; that is the one pairing that forfeits the point).
 
 ## Before the first run of a session
 
-Read **`references/claude-runtime.md`** (same directory). It holds the
+Read **[`references/claude-runtime.md`](references/claude-runtime.md)** (same
+directory). It holds the
 family mechanics shared with `claude-implement` — invocation shapes, the
 MCP-stack trim, the patience calibration (five minutes of silence is normal,
 not a hang), the headless-plan-mode trap, and the instruction-layer

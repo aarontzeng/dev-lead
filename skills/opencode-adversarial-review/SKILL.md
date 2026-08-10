@@ -13,7 +13,8 @@ trade-off is best-effort capacity — congestion is normal, so this leg is the
 
 ## Before the first run of a session
 
-Read **`references/opencode-runtime.md`** (same directory). It holds the
+Read **[`references/opencode-runtime.md`](references/opencode-runtime.md)**
+(same directory). It holds the
 family mechanics — the free-model catalogue and the stealth-model
 family-unknown caveat, the two silent permission traps (zero-commit project
 binding, last-match-wins ordering), congestion behavior, and the audit log
