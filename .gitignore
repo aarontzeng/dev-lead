@@ -1,0 +1,9 @@
+# templates/AGENTS.md is a deliberate, tracked template of this project.
+# Some environments globally ignore AGENTS.md (installer-managed elsewhere);
+# repo-level negation takes precedence over a user's core.excludesFile.
+!AGENTS.md
+
+# editor droppings
+*.swp
+*.swo
+*~
