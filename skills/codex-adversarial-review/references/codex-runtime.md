@@ -129,3 +129,47 @@ capability gate).
 Use a fresh thread (`--fresh`) for a new task; never reuse a thread across
 unrelated work — context from the previous task contaminates the premise of
 the next.
+
+## Raw-CLI fallback (no Claude Code on this machine)
+
+The role skills drive codex through its Claude Code **companion plugin** by
+default, because the companion adds real things: tracked jobs
+(`status`/`result`), a managed read-only review sandbox, and the
+adversarial-review command's built-in framing. On a machine without Claude
+Code, the same workflow runs against the codex CLI directly:
+
+```bash
+# review leg (read-only) — prompt from a file, output to a file, backgrounded
+codex exec --sandbox read-only --cd "$REVIEW_TARGET_DIR" -m <model> \
+  "$(cat "$RUN_DIR/prompt.md")" > "$RUN_DIR/review.out" 2>&1
+
+# implement leg (workspace-write) — inside the worktree the lead created
+codex exec --sandbox workspace-write --cd "$WORKTREE" -m <model> \
+  "$(cat "$RUN_DIR/task.md")" > "$RUN_DIR/impl.out" 2>&1
+```
+
+Verify the exact flags against your installed version with
+`codex exec --help` first — unlike the companion (where probing flags runs a
+billed job; see above), **the raw CLI has a real `--help`**, so probing is
+safe here. Per-run effort, where supported, rides on config overrides
+(`-c model_reasoning_effort=<tier>`) or your global `~/.codex/config.toml`.
+
+What you keep: the sandbox boundary (the CLI's own `--sandbox` modes are the
+same enforcement layer the companion wraps), headless execution, model
+selection, and everything in this suite's prompts and verification
+discipline — none of that ever depended on the companion.
+
+What you lose, honestly:
+
+- **Job tracking.** No `status`/`result`; stdout redirected to a file IS the
+  delivery channel, and the process's own liveness is the only liveness
+  signal. Launch under your host's background mechanism, exactly as the
+  launcher rules above already require.
+- **The companion's review framing.** `adversarial-review` sets up base/scope
+  handling for you; raw exec means the review skill's focus prompt must
+  carry the base SHA and file list itself (it already should — see the
+  review skill's span-pinning section).
+- **Log-based recovery.** No companion job log; session rollouts under
+  `~/.codex/sessions/` remain your only after-the-fact recovery channel.
+- Never substitute `--sandbox danger-full-access` (or any bypass spelling)
+  for a missing capability — the same rule as the companion's bypass flag.

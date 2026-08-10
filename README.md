@@ -121,6 +121,44 @@ should adopt in your own agent instructions if you don't have them already:
 - **No AI-authorship trailers** in commit messages (adjust to your team's
   policy).
 
+## Portability: which agents can actually use this
+
+Three tiers, honestly labeled:
+
+**Tier 1 — Claude Code: first-class.** Plugin install, automatic skill
+discovery and invocation, frontmatter parsed. Everything works out of the
+box.
+
+**Tier 2 — shell-capable CLI agents (codex, agy, opencode, and peers):
+supported, and field-proven.** The SKILL.md files are plain Markdown and
+every mechanism inside them is bash/git — nothing requires a Claude API. A
+codex-led run has completed the full workflow end-to-end by reading these
+files from a shared directory. Two ways in:
+
+- symlink your CLI's skills/context path at this repo's `skills/` tree, or
+- drop [templates/AGENTS.md](templates/AGENTS.md) into your project root
+  (codex and opencode read `AGENTS.md` natively) — it tells a foreign agent
+  where the skills live, which role it holds, and what to read first.
+
+One caveat in this tier: the codex family skills drive codex through its
+**Claude Code companion plugin** by default (job tracking, managed
+sandboxes). On a machine without Claude Code, use the **raw-CLI fallback**
+documented in
+[skills/codex-adversarial-review/references/codex-runtime.md](skills/codex-adversarial-review/references/codex-runtime.md)
+— same workflow, honestly-listed reduced guarantees.
+
+**Tier 3 — IDE-embedded agents (Cursor, Copilot, and peers): the
+methodology, not the workflow.** The core motion here — launch a headless
+delegate in the background, wait 5–40 minutes, harvest results from logs,
+orchestrate across worktrees — is not the shape of an IDE agent's
+interaction model. For these tools, [docs/methodology.md](docs/methodology.md)
+and [docs/calibration-journal.md](docs/calibration-journal.md) are worth
+wiring into your rules files as reading material (the cross-family
+principle, evidence gates, and mutation discipline apply to *any* review
+regardless of who runs it); the eight delegate skills are not usable as
+written, and this suite deliberately does not contort itself to change
+that.
+
 ## The calibration journal
 
 The model tables in these skills ship with *structure*, not *your numbers*.
