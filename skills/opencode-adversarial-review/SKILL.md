@@ -26,6 +26,7 @@ ours over a project's real config and then deleting "ours" at teardown
 destroys the project's file:
 
 ```bash
+RUN_DIR=$(mktemp -d "${TMPDIR:-/tmp}/opencode-review.XXXXXX")   # created here; every later step reuses it
 [ -f "$REVIEW_TARGET_DIR/opencode.json" ] && \
   mv "$REVIEW_TARGET_DIR/opencode.json" "$RUN_DIR/opencode.json.orig"
 # ... run ...; at teardown, restore:
@@ -88,8 +89,7 @@ against itself and can only pass (see the same note in
 ```bash
 REVIEW_HEAD=$(git -C "$REVIEW_TARGET_DIR" rev-parse HEAD)   # at freeze time
 
-# ... later, at launch:
-RUN_DIR=$(mktemp -d "${TMPDIR:-/tmp}/opencode-review.XXXXXX")
+# ... later, at launch (RUN_DIR was created in the boundary step above):
 # Write the prompt to "$RUN_DIR/prompt.md" in its own FOREGROUND step.
 
 cd "$REVIEW_TARGET_DIR" && \

@@ -201,6 +201,12 @@ anything version-pinned (CLI flags, sandbox behavior, model catalogues) as a
 snapshot to re-verify, not gospel. Pull requests with *measured* corrections —
 what you observed, when, on what version — are the most valuable kind.
 
+CI is `python3 scripts/lint.py` (stdlib only — run it locally before a PR).
+Each check guards an invariant this repo has actually shipped a violation
+of; the script's docstring names which. If you add an invariant, add its
+check, and mutation-test it: break the invariant, watch the check fire,
+restore.
+
 ## License
 
 MIT

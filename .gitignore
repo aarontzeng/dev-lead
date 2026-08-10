@@ -1,7 +1,11 @@
-# templates/AGENTS.md is a deliberate, tracked template of this project.
-# Some environments globally ignore AGENTS.md (installer-managed elsewhere);
-# repo-level negation takes precedence over a user's core.excludesFile.
+# templates/AGENTS.md and .github/ are deliberate, tracked parts of this
+# project. Some environments globally ignore them (AGENTS.md as an
+# installer-managed artifact, **/.github/ wholesale); repo-level negation
+# takes precedence over a user's core.excludesFile. scripts/lint.py's
+# tracked-files check guards against this class regressing silently.
 !AGENTS.md
+!.github/
+!.github/**
 
 # editor droppings
 *.swp
