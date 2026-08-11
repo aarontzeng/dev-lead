@@ -7,6 +7,10 @@ Every check here guards against a failure this repo has ACTUALLY shipped
   structure     a family missing its runtime reference (codex shipped without one)
   frontmatter   a SKILL.md whose name/dir disagree would break skill loading
   manifest      plugin.json must stay valid JSON with the required keys
+  version       plugin.json's version is the ONLY version a consumer sees, and
+                nine commits shipped past v0.1.0 with it unchanged -- a new
+                install requirement and a behavior change in all four review
+                skills, handed to installed users under the version they had
   links         a placeholder link (https://github.com/ with no repo) shipped once
   paths         a skill runs with the TARGET repo as cwd, so a bare `scripts/…`
                 or `docs/…` points at the user's project: freeze-target.sh
@@ -130,6 +134,80 @@ def check_manifest():
         err(rel(mkt), f"does not list this repo's own plugin '{data['name']}' "
                       f"(lists {sorted(n for n in names if n)}) — "
                       "`claude plugin install <name>@<marketplace>` would fail")
+
+
+# ---- version: the manifest's version is the only one a consumer sees ----
+# Measured failure: nine commits landed after v0.1.0 -- among them the
+# DEV_LEAD_ROOT install requirement and one rewritten review-target rule in all
+# four review skills -- while plugin.json still said 0.1.0. This repo is its own
+# marketplace, so `claude plugin marketplace update` hands those changes to an
+# installed user under the version they already have. Nothing else in the tree
+# carries a version, so nothing else could have noticed.
+#
+# Two rules. They fail differently and neither subsumes the other:
+#   1. HEAD carries vX.Y.Z  ->  plugin.json must say exactly X.Y.Z. Guards the
+#      mechanical slip of tagging a release without bumping, in both
+#      directions (a manifest AHEAD of its own tag passes rule 2 and is still
+#      a mislabeled release).
+#   2. HEAD is past the newest reachable v* tag  ->  plugin.json must be
+#      strictly greater than it. This is the drift above, and rule 1 is blind
+#      to it: across those nine commits HEAD carried no tag at all.
+#
+# Rule 2 costs one edit per release cycle -- the first commit after a tag must
+# choose the next version. That choice is the point.
+#
+# Degradation, stated so silence is not misread as safety: both rules need tags
+# in the tree. `actions/checkout` fetches none on a branch push, so in CI this
+# no-ops there and bites only on a tag push. It earns its keep locally, where
+# every lint run has the tags.
+VERSION_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
+
+
+def _semver(text):
+    """(major, minor, patch), or None if `text` is not exactly X.Y.Z."""
+    m = VERSION_RE.match(text or "")
+    return tuple(int(g) for g in m.groups()) if m else None
+
+
+def _git(*args):
+    """stdout, or None when git fails — no tags, no repo, a shallow clone."""
+    p = subprocess.run(["git", "-C", str(ROOT), *args],
+                       capture_output=True, text=True)
+    return p.stdout.strip() if p.returncode == 0 else None
+
+
+def check_version():
+    manifest = ROOT / ".claude-plugin" / "plugin.json"
+    if not manifest.is_file():
+        return                                  # check_manifest() reported it
+    try:
+        declared = json.loads(manifest.read_text(encoding="utf-8")).get("version")
+    except json.JSONDecodeError:
+        return                                  # ditto
+    version = _semver(declared)
+    if version is None:
+        err(rel(manifest), f"version '{declared}' is not X.Y.Z — the tag "
+                           "comparison below and any consumer's own version "
+                           "compare both need semver")
+        return
+
+    tagged = [t for t in (_git("tag", "--points-at", "HEAD") or "").splitlines()
+              if t.startswith("v") and _semver(t[1:])]
+    if tagged:
+        for tag in tagged:
+            if _semver(tag[1:]) != version:
+                err(rel(manifest),
+                    f"version '{declared}' != tag '{tag}' on this commit — "
+                    "the release would ship labelled as something it is not")
+        return                                  # rule 2 does not apply to a tag
+
+    released = _git("describe", "--tags", "--abbrev=0", "--match", "v[0-9]*")
+    previous = _semver((released or "")[1:])
+    if previous and version <= previous:
+        err(rel(manifest),
+            f"version '{declared}' is not ahead of released tag '{released}', "
+            "and this commit is past it — `marketplace update` would hand these "
+            "changes to an installed user under the version they already have")
 
 
 # ---- links: relative links resolve; no accidental placeholders ----
@@ -473,6 +551,7 @@ def check_families():
 
 def main():
     for check in (check_structure, check_frontmatter, check_manifest,
+                  check_version,
                   check_links, check_paths, check_fences, check_mermaid,
                   check_var_order,
                   check_tracked, check_sentinels, check_frozen_target,

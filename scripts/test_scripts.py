@@ -6,6 +6,7 @@ happy path: a helper that silently succeeds on a broken input is exactly the
 class of bug these scripts exist to remove (a bracket that checks the wrong
 directory still exits 0, and reads as a passing safety check).
 """
+import json
 import subprocess
 import sys
 import tempfile
@@ -374,6 +375,89 @@ def test_lint_frozen_target():
           "the shipped review skills disagree")
 
 
+# ------------------------------------------------------------ lint version ----
+def test_lint_version(tmp):
+    """check_version(): both rules, and the compare that must not be textual.
+
+    This one needs REAL repos — the check reads git tags, so a fake directory
+    tree cannot drive it the way the other lint tests are driven.
+
+    The load-bearing cases are the two neither rule catches alone: a manifest
+    AHEAD of the tag on its own commit (rule 2 is satisfied and the release is
+    still mislabeled), and 0.10.0 past v0.9.0, which a string compare rejects.
+    """
+    sys.path.insert(0, str(SCRIPTS))
+    import lint
+
+    def run_against(name, declared, tag=None, commits_after=0):
+        repo = tmp / "ver" / name
+        make_repo(repo, commits=1)
+        (repo / ".claude-plugin").mkdir(parents=True)
+        (repo / ".claude-plugin" / "plugin.json").write_text(
+            json.dumps({"name": "x", "description": "x", "version": declared}))
+        git(repo, "add", "-A")
+        git(repo, "commit", "-qm", "manifest")
+        if tag:
+            git(repo, "tag", "-a", tag, "-m", tag)
+        for i in range(commits_after):
+            (repo / f"later{i}.txt").write_text("x\n")
+            git(repo, "add", "-A")
+            git(repo, "commit", "-qm", f"later {i}")
+        real_root, real_errors = lint.ROOT, lint.ERRORS
+        try:
+            lint.ROOT, lint.ERRORS = repo, []
+            lint.check_version()
+            return list(lint.ERRORS)
+        finally:
+            lint.ROOT, lint.ERRORS = real_root, real_errors
+
+    # rule 1 — HEAD carries a tag
+    got = run_against("match", "0.2.0", tag="v0.2.0")
+    check("version: tagged commit whose manifest matches passes", got == [], f"got {got}")
+
+    got = run_against("behind", "0.1.0", tag="v0.2.0")
+    check("version: flags a manifest behind its own tag",
+          any("!= tag 'v0.2.0'" in e for e in got), f"got {got}")
+
+    # rule 2 cannot see this one: 0.3.0 IS ahead of v0.2.0, and the release
+    # still goes out labelled v0.2.0 while calling itself 0.3.0
+    got = run_against("ahead", "0.3.0", tag="v0.2.0")
+    check("version: flags a manifest ahead of its own tag",
+          any("!= tag 'v0.2.0'" in e for e in got), f"got {got}")
+
+    # rule 2 — HEAD is past the newest tag
+    got = run_against("bumped", "0.2.0", tag="v0.1.0", commits_after=3)
+    check("version: bumped manifest past a release passes", got == [], f"got {got}")
+
+    # THE measured drift: nine commits past v0.1.0, manifest never bumped
+    got = run_against("drifted", "0.1.0", tag="v0.1.0", commits_after=3)
+    check("version: flags commits past a release with no bump",
+          any("not ahead of released tag 'v0.1.0'" in e for e in got), f"got {got}")
+
+    # a textual compare says "0.10.0" <= "0.9.0" and flags this wrongly
+    got = run_against("tenth", "0.10.0", tag="v0.9.0", commits_after=1)
+    check("version: 0.10.0 is ahead of v0.9.0 (numeric, not string, compare)",
+          got == [], f"got {got}")
+
+    # the CI degradation: checkout fetches no tags on a branch push, and a
+    # check that fired there would paint every push red
+    got = run_against("untagged", "0.2.0")
+    check("version: no tags in the tree is silence, not failure", got == [],
+          f"got {got}")
+
+    got = run_against("nonsemver", "0.2", tag="v0.2.0")
+    check("version: flags a non-semver manifest version",
+          any("not X.Y.Z" in e for e in got), f"got {got}")
+
+    # and the shipped tree must satisfy it
+    real = run("git", "-C", str(SCRIPTS.parent), "tag", "--points-at", "HEAD")
+    lint.ERRORS = []
+    lint.check_version()
+    check("version: this repo's own manifest agrees with its tags",
+          lint.ERRORS == [], f"{lint.ERRORS} (tags at HEAD: {real.stdout.strip()!r})")
+    lint.ERRORS = []
+
+
 ROOT_MD = sorted(p for p in SCRIPTS.parent.rglob("*.md") if ".git" not in p.parts)
 
 
@@ -407,6 +491,10 @@ def main():
 
     print("lint.py check_frozen_target")
     test_lint_frozen_target()
+
+    print("lint.py check_version")
+    with tempfile.TemporaryDirectory() as td:
+        test_lint_version(Path(td))
 
     if FAILURES:
         print(f"\nFAIL — {len(FAILURES)} test(s) failed")
