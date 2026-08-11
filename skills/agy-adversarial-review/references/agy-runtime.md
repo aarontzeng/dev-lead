@@ -139,8 +139,19 @@ everything here except `--mode`, whose value is the role.
 - `--print-timeout` — **the default (5m0s) cuts real work off mid-flight.**
   Use `10m0s` for a review, `20m0s` for an implementation.
 - `--disable-slash-commands` — stops prompt text being expanded as slash
-  commands. Prompts are full of paths; a stray leading `/` is otherwise
-  interpreted rather than read.
+  commands (and skills). Prompts are full of paths; a stray leading `/` is
+  otherwise interpreted rather than read. **It cancels `--mode plan` — the
+  two must never be passed together.** The CLI warns
+  (`--mode plan has no effect while slash command expansion is disabled`)
+  and means it: measured three ways on one model in one session — with both
+  flags the delegate CREATED a file it was told to create; with `--mode
+  plan` alone it refused and returned a plan for approval; with `--mode
+  accept-edits` plus the flag it wrote normally and printed no warning. So
+  the cancellation is specific to `plan`, which is presumably expanded as a
+  skill, while `accept-edits` is native. Consequence per role: the review
+  role drops the flag and keeps its no-write mode (leading-`/` lines are
+  avoided by prompt hygiene instead); the implement role keeps the flag,
+  because it has no mode to lose.
 - `--output-format json` plus `--json-schema` for machine-readable findings.
 
 Put long prompts in a file and interpolate (`"$(cat "$RUN_DIR/prompt.md")"`)

@@ -74,6 +74,11 @@ agy -p "$(cat "$RUN_DIR/task.md")" \
     --print-timeout 20m0s
 ```
 
+Unlike the review role, this one keeps `--disable-slash-commands`: measured,
+it does not cancel `--mode accept-edits` (it cancels `--mode plan` only — see
+the [runtime file](../agy-adversarial-review/references/agy-runtime.md)), so
+there is no no-write layer here to lose.
+
 Role-specific choices:
 
 - **`--mode accept-edits`** is the write mode and the whole point.

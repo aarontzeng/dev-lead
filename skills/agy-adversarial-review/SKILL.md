@@ -60,15 +60,24 @@ agy -p "$(cat "$RUN_DIR/prompt.md")" \
     --sandbox \
     --add-dir "$REVIEW_TARGET_DIR" \
     --effort high \
-    --disable-slash-commands \
     --print-timeout 10m0s
 ```
+
+**`--disable-slash-commands` is deliberately absent here, and adding it back
+silently removes plan mode.** The CLI says so — `warning: --mode plan has no
+effect while slash command expansion is disabled` — and measured, with both
+flags the delegate created a file it was asked to create; with `--mode plan`
+alone it refused and returned a plan instead. The pair leaves a review run
+with NO behavioral no-write layer at all while the prompt and this file still
+claim one. Keep paths in the prompt from starting a line with `/` instead;
+the implement role keeps the flag (runtime file: `accept-edits` survives it).
 
 Role-specific choices in that command:
 
 - **`--mode plan`** — research and report, never edit. It is a behavioral
   mode, **not a security boundary**, so the no-write intent is stated again
-  in the prompt and verified in the repo afterward.
+  in the prompt and verified in the repo afterward. It is also the layer
+  `--disable-slash-commands` silently cancels (above) — never pass both.
 - **`--print-timeout 10m0s`** — a real review of a few files takes 5–10
   minutes and the CLI default (5m0s) cuts it off mid-flight.
 - **Model** — see the runtime file's catalogue notes: tiers can silently
