@@ -224,50 +224,82 @@ def test_lint_paths():
 def test_lint_mermaid():
     """check_mermaid()'s predicate, in BOTH directions.
 
-    The must-not-flag set is the load-bearing half. A semicolon is ordinary
-    punctuation everywhere else in these docs — in flowchart labels (which are
-    quoted), in prose, in the bash fences. A checker that fires on those gets
-    silenced, and then the real trap ships anyway.
+    The must-not-flag set is the load-bearing half, and the stateDiagram case
+    is the one that matters: `S1 --> S2 : go; now` has the exact arrow-and-colon
+    shape the regex looks for, and mermaid parses it FINE. It is the only case
+    here that can tell a header-scoped checker from one whose scope has leaked
+    into every diagram type -- a mutation that made scope unconditional
+    survived every other case in this list.
+
+    Which types break is measured against mermaid's own parser, not assumed:
+    sequenceDiagram and classDiagram break, stateDiagram-v2 and flowchart
+    labels do not.
     """
     sys.path.insert(0, str(SCRIPTS))
     import lint
 
-    def hits(body):
-        return lint.mermaid_sequence_messages(f"```mermaid\n{body}\n```\n")
+    def flagged(body):
+        hits = lint.mermaid_risky_messages(f"```mermaid\n{body}\n```\n")
+        return [m for _, m in hits if ";" in m]
 
     must_flag = {
-        "message text": "sequenceDiagram\n    A->>B: alpha; beta",
-        "dotted reply": "sequenceDiagram\n    A-->>B: alpha; beta",
-        "note text": "sequenceDiagram\n    Note over A,B: alpha; beta",
+        "sequence message": "sequenceDiagram\n    A->>B: alpha; beta",
+        "sequence dotted reply": "sequenceDiagram\n    A-->>B: alpha; beta",
+        "sequence note": "sequenceDiagram\n    Note over A,B: alpha; beta",
+        "class relation label": "classDiagram\n    ClassA --> ClassB : has; many",
     }
     for name, body in must_flag.items():
-        found = [m for _, m in hits(body) if ";" in m]
-        check(f"mermaid: flags {name}", bool(found), f"{body!r} passed unflagged")
+        check(f"mermaid: flags {name}", bool(flagged(body)),
+              f"{body!r} passed unflagged")
 
     must_not_flag = {
-        # quoted flowchart labels are a different grammar -- `;` is literal
-        "flowchart label": 'flowchart TD\n    A["alpha; beta"] --> B["x"]',
-        # the trap is scoped to sequence diagrams; a bare graph must not fire
-        "graph label": 'graph LR\n    A["alpha; beta"]',
+        # SAME line shape as a class relation, and mermaid parses it fine --
+        # this is the case that kills an unconditional-scope mutation
+        "stateDiagram transition": "stateDiagram-v2\n    S1 --> S2 : go; now",
+        # quoted, so `;` is literal in both of these
+        "flowchart node label": 'flowchart TD\n    A["alpha; beta"] --> B["x"]',
+        "flowchart edge label": 'flowchart TD\n    A -->|"alpha; beta"| B',
         "clean sequence message": "sequenceDiagram\n    A->>B: alpha, beta",
         "participant line": "sequenceDiagram\n    participant A as One; Two",
     }
     for name, body in must_not_flag.items():
-        found = [m for _, m in hits(body) if ";" in m]
-        check(f"mermaid: passes {name}", not found, f"{body!r} flagged {found}")
+        hits = flagged(body)
+        check(f"mermaid: passes {name}", not hits, f"{body!r} flagged {hits}")
 
-    # the line number must point at the offending line, not the fence
-    found = lint.mermaid_sequence_messages(
+    # a wrong line number sends the reader to the wrong place, which is how a
+    # real hit gets dismissed as noise
+    found = lint.mermaid_risky_messages(
         "intro\n\n```mermaid\nsequenceDiagram\n    A->>B: ok\n    A->>B: bad; here\n```\n")
     bad = [ln for ln, m in found if ";" in m]
-    check("mermaid: reports the offending line", bad == [6],
-          f"got {bad}")
+    check("mermaid: reports the offending line", bad == [6], f"got {bad}")
 
-    # and the real trap: mermaid's own parser rejects what this flags
+    # check_mermaid() ITSELF, not just its predicate. Exercising only the
+    # predicate leaves the check's body untested: a mutation that gutted the
+    # `";" in msg` condition passed every test above, because none of them
+    # ever called the function that lint actually runs.
+    with tempfile.TemporaryDirectory() as td:
+        fake = Path(td)
+        (fake / "bad.md").write_text(
+            "# doc\n\n```mermaid\nsequenceDiagram\n    A->>B: alpha; beta\n```\n")
+        (fake / "good.md").write_text(
+            "# doc\n\n```mermaid\nflowchart TD\n    A[\"alpha; beta\"] --> B\n```\n")
+        real_root, real_errors = lint.ROOT, lint.ERRORS
+        try:
+            lint.ROOT, lint.ERRORS = fake, []
+            lint.check_mermaid()
+            found = list(lint.ERRORS)
+        finally:
+            lint.ROOT, lint.ERRORS = real_root, real_errors
+    check("mermaid: check_mermaid() reports the bad file", len(found) == 1,
+          f"got {found}")
+    check("mermaid: check_mermaid() names file and line",
+          bool(found) and found[0].startswith("bad.md: line 5:"), f"got {found}")
+
+    # and the guarded tree must actually be clean
     check("mermaid: the repo's own diagrams are clean",
           all(";" not in m
               for p in ROOT_MD
-              for _, m in lint.mermaid_sequence_messages(p.read_text(encoding="utf-8"))),
+              for _, m in lint.mermaid_risky_messages(p.read_text(encoding="utf-8"))),
           "a shipped diagram still contains a semicolon")
 
 

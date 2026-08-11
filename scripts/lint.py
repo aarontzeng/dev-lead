@@ -13,9 +13,9 @@ Every check here guards against a failure this repo has ACTUALLY shipped
                 shipped as `scripts/freeze-target.sh` and exited 127 everywhere
                 except this repo, where the cwd happened to hide it
   fences        unbalanced ``` renders half a file as code
-  mermaid       `;` ends a statement in a sequenceDiagram, so a semicolon in
-                message text renders the whole diagram as an error box --
-                docs/workflow.md shipped two
+  mermaid       `;` ends a statement in a sequenceDiagram/classDiagram, so a
+                semicolon in message text renders the whole diagram as an
+                error box -- docs/workflow.md shipped two
   var-order     $RUN_DIR was used 12 lines before its mktemp, in two skills
   tracked       an environment-global gitignore silently ate templates/AGENTS.md
   sentinel      a skill's prose once allowed same-family review, contradicting
@@ -209,50 +209,69 @@ def check_fences():
             err(rel(md), f"odd number of ``` fence lines ({opens})")
 
 
-# ---- mermaid: a semicolon in sequenceDiagram message text kills the render ----
+# ---- mermaid: a semicolon in message text kills the render ----
 # `;` is a STATEMENT SEPARATOR in mermaid, so `A->>B: foo; bar` parses as a
 # message plus the garbage statement `bar`, and GitHub renders the whole block
 # as an error box. Nothing warns: the markdown is valid, the fence is balanced,
 # and the file reads fine in an editor. Measured with mermaid's own parser --
 # two occurrences shipped in docs/workflow.md's round-level diagram.
 #
-# Scope, declared so a reader checks declared-vs-actual: this covers message
-# lines (`A->>B: text`) in ```mermaid blocks that declare `sequenceDiagram`.
-# Flowchart labels are quoted and NOT affected. It is not a mermaid parser --
-# it knows this one trap. Note text is deliberately included: `Note over A,B:`
-# splits on `;` the same way.
-MERMAID_MSG_RE = re.compile(r"^\s*(?:\w+\s*(?:-|=)+[->x)]+\s*\w+|Note\s+(?:over|left of|right of)\s+[^:]+)\s*:(.*)$")
+# Scope, declared so a reader checks declared-vs-actual rather than
+# declared-vs-infinite. AFFECTED, measured against mermaid's parser:
+# `sequenceDiagram` messages and notes, and `classDiagram` relation labels
+# (`A --> B : text`). NOT affected, also measured: flowchart/graph labels and
+# edge labels (quoted, so `;` is literal) and `stateDiagram-v2` transitions,
+# which accept `;` in a label that looks identical to a class relation. That
+# last one is why the header, not the line shape, decides scope.
+#
+# This is not a mermaid parser; it knows this one trap. A diagram type added
+# to mermaid later is outside what has been measured -- re-probe before
+# assuming silence here means safety.
+MERMAID_SCOPED = ("sequenceDiagram", "classDiagram")
+MERMAID_MSG_RE = re.compile(
+    r"^\s*(?:\w+\s*(?:-|=)+[->x)|]*\s*\w+"
+    r"|Note\s+(?:over|left of|right of)\s+[^:]+)\s*:(.*)$"
+)
 
 
-def mermaid_sequence_messages(text):
-    """(line, message_text) for each message line inside a sequenceDiagram."""
-    out, inside, is_seq = [], False, False
+def mermaid_risky_messages(text):
+    """(line, message_text) for each line whose `;` would break the diagram.
+
+    Only inside a ```mermaid fence whose header is one of MERMAID_SCOPED --
+    the same arrow-and-colon shape is harmless in a stateDiagram.
+    """
+    out, inside, scoped = [], False, False
     for i, line in enumerate(text.splitlines(), 1):
         if line.startswith("```mermaid"):
-            inside, is_seq = True, False
+            inside, scoped = True, False
             continue
         if line.startswith("```"):
-            inside = False
+            inside, scoped = False, False
             continue
         if not inside:
             continue
-        if line.strip().startswith("sequenceDiagram"):
-            is_seq = True
+        stripped = line.strip()
+        if not scoped:
+            # the header is the FIRST non-blank line of the block; anything
+            # else means this block declared some other diagram type
+            if stripped:
+                scoped = stripped.startswith(MERMAID_SCOPED)
+                if not scoped:
+                    inside = False      # wrong type -- skip the rest of it
             continue
-        if is_seq:
-            m = MERMAID_MSG_RE.match(line)
-            if m:
-                out.append((i, m.group(1)))
+        m = MERMAID_MSG_RE.match(line)
+        if m:
+            out.append((i, m.group(1)))
     return out
 
 
 def check_mermaid():
     for md in md_files():
-        for line, msg in mermaid_sequence_messages(md.read_text(encoding="utf-8")):
+        for line, msg in mermaid_risky_messages(md.read_text(encoding="utf-8")):
             if ";" in msg:
-                err(rel(md), f"line {line}: ';' in a sequenceDiagram message "
-                             "ends the statement — the whole diagram renders as "
-                             "an error box. Use a comma or a dash")
+                err(rel(md), f"line {line}: ';' in a mermaid message ends the "
+                             "statement — the whole diagram renders as an "
+                             "error box. Use a comma or a dash")
 
 
 # ---- var-order: a $VAR used before the file's own assignment of it ----
