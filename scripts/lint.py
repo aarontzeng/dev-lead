@@ -145,10 +145,12 @@ def check_manifest():
 # carries a version, so nothing else could have noticed.
 #
 # Two rules. They fail differently and neither subsumes the other:
-#   1. HEAD carries vX.Y.Z  ->  plugin.json must say exactly X.Y.Z. Guards the
-#      mechanical slip of tagging a release without bumping, in both
-#      directions (a manifest AHEAD of its own tag passes rule 2 and is still
-#      a mislabeled release).
+#   1. HEAD carries vX.Y.Z  ->  the manifest IN THAT TAG'S TREE must say
+#      exactly X.Y.Z. Guards the mechanical slip of tagging a release without
+#      bumping, in both directions (a manifest AHEAD of its own tag passes
+#      rule 2 and is still a mislabeled release). Read from the tag rather
+#      than the working copy, or the bump rule 2 demands on the very next
+#      commit gets reported as mislabeling the tag it is moving away from.
 #   2. HEAD is past the newest reachable v* tag  ->  plugin.json must be
 #      strictly greater than it. This is the drift above, and rule 1 is blind
 #      to it: across those nine commits HEAD carried no tag at all.
@@ -156,10 +158,11 @@ def check_manifest():
 # Rule 2 costs one edit per release cycle -- the first commit after a tag must
 # choose the next version. That choice is the point.
 #
-# Degradation, stated so silence is not misread as safety: both rules need tags
-# in the tree. `actions/checkout` fetches none on a branch push, so in CI this
-# no-ops there and bites only on a tag push. It earns its keep locally, where
-# every lint run has the tags.
+# Both rules need tags in the tree, and a tagless clone makes them pass
+# VACUOUSLY: `git describe` finding nothing leaves nothing to report, so the
+# check goes green having guarded nothing. CI's checkout runs at fetch-depth: 0
+# for exactly this reason (.github/workflows/ci.yml) -- revert that to the
+# default shallow fetch and this check keeps passing while it stops working.
 VERSION_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
 
 
@@ -195,10 +198,22 @@ def check_version():
               if t.startswith("v") and _semver(t[1:])]
     if tagged:
         for tag in tagged:
-            if _semver(tag[1:]) != version:
+            # what that release DECLARES lives in the tag's tree; the working
+            # copy has legitimately moved on by the time anyone reads it
+            blob = _git("show", f"{tag}:.claude-plugin/plugin.json")
+            if blob is None:
+                err(rel(manifest), f"tag '{tag}' carries no plugin.json — "
+                                   "nothing in that release declares what it is")
+                continue
+            try:
+                shipped = json.loads(blob).get("version")
+            except json.JSONDecodeError:
+                err(rel(manifest), f"tag '{tag}' carries an unparseable plugin.json")
+                continue
+            if _semver(shipped) != _semver(tag[1:]):
                 err(rel(manifest),
-                    f"version '{declared}' != tag '{tag}' on this commit — "
-                    "the release would ship labelled as something it is not")
+                    f"tag '{tag}' ships a manifest declaring '{shipped}' — "
+                    "that release is labelled as something it is not")
         return                                  # rule 2 does not apply to a tag
 
     released = _git("describe", "--tags", "--abbrev=0", "--match", "v[0-9]*")

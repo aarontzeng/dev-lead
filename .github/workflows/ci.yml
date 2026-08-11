@@ -1,17 +1,60 @@
-name: lint
+name: ci
 
 on:
   push:
   pull_request:
+
+# read by default; the release job below asks for write explicitly
+permissions:
+  contents: read
 
 jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # NOT cosmetic. check_version() compares plugin.json against the
+          # release tags, and a tagless clone makes it pass VACUOUSLY -- there
+          # is nothing to report when `git describe` finds no tag, so the gate
+          # would be green and empty. The default shallow fetch brings no tags.
+          fetch-depth: 0
       - name: Repo invariants
         run: python3 scripts/lint.py
       - name: Shell helper tests
         run: python3 scripts/test_scripts.py
       - name: Shell syntax
         run: for f in scripts/*.sh; do bash -n "$f"; done
+
+  # A pushed tag is not a Release. GitHub never promotes one, which is how
+  # v0.2.0's tag landed on origin while the sidebar still read
+  # "dev-lead v0.1.0 (Latest)" -- the tag was there, the Release object was not.
+  release:
+    needs: lint                                  # no Release for a tag that fails its own invariants
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    # this repo's default GITHUB_TOKEN is read-only, so the write scope has to
+    # be asked for here or `gh release create` returns 403
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0                         # --notes-from-tag reads the annotation object
+      - name: Create the Release from the tag annotation
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG already exists — re-running this job is a no-op"
+            exit 0
+          fi
+          # --verify-tag so a deleted tag aborts instead of gh silently creating
+          # one; --notes-from-tag so the annotated message IS the release notes,
+          # which is how v0.1.0's page was written
+          gh release create "$TAG" \
+            --verify-tag \
+            --notes-from-tag \
+            --title "dev-lead $TAG"

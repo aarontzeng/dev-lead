@@ -377,32 +377,46 @@ def test_lint_frozen_target():
 
 # ------------------------------------------------------------ lint version ----
 def test_lint_version(tmp):
-    """check_version(): both rules, and the compare that must not be textual.
+    """check_version(): both rules, and the two things that make them honest.
 
     This one needs REAL repos — the check reads git tags, so a fake directory
     tree cannot drive it the way the other lint tests are driven.
 
-    The load-bearing cases are the two neither rule catches alone: a manifest
-    AHEAD of the tag on its own commit (rule 2 is satisfied and the release is
-    still mislabeled), and 0.10.0 past v0.9.0, which a string compare rejects.
+    Load-bearing cases, in the order they were learned:
+      - a manifest AHEAD of the tag on its own commit: rule 2 is satisfied and
+        the release is still mislabeled, so rule 1 cannot be dropped
+      - 0.10.0 past v0.9.0: a string compare rejects it
+      - the working copy bumped past its own tag: rule 1 reads the TAG's tree,
+        or the bump rule 2 demands would be reported as mislabeling the tag
     """
     sys.path.insert(0, str(SCRIPTS))
     import lint
 
-    def run_against(name, declared, tag=None, commits_after=0):
+    def run_against(name, declared, tag=None, commits_after=0,
+                    working=None, commit_manifest=True):
+        """A real repo, then check_version() with lint.ROOT pointed at it.
+
+        working=X leaves X uncommitted in the working copy after the tag — the
+        state of the first post-release commit, mid-edit.
+        commit_manifest=False tags a commit whose tree has no manifest at all.
+        """
         repo = tmp / "ver" / name
         make_repo(repo, commits=1)
         (repo / ".claude-plugin").mkdir(parents=True)
-        (repo / ".claude-plugin" / "plugin.json").write_text(
-            json.dumps({"name": "x", "description": "x", "version": declared}))
-        git(repo, "add", "-A")
-        git(repo, "commit", "-qm", "manifest")
+        mf = repo / ".claude-plugin" / "plugin.json"
+        body = lambda v: json.dumps({"name": "x", "description": "x", "version": v})
+        mf.write_text(body(declared))
+        if commit_manifest:
+            git(repo, "add", "-A")
+            git(repo, "commit", "-qm", "manifest")
         if tag:
             git(repo, "tag", "-a", tag, "-m", tag)
         for i in range(commits_after):
             (repo / f"later{i}.txt").write_text("x\n")
             git(repo, "add", "-A")
             git(repo, "commit", "-qm", f"later {i}")
+        if working:
+            mf.write_text(body(working))
         real_root, real_errors = lint.ROOT, lint.ERRORS
         try:
             lint.ROOT, lint.ERRORS = repo, []
@@ -411,19 +425,30 @@ def test_lint_version(tmp):
         finally:
             lint.ROOT, lint.ERRORS = real_root, real_errors
 
-    # rule 1 — HEAD carries a tag
+    # rule 1 — HEAD carries a tag, and the tag's own tree is what it declares
     got = run_against("match", "0.2.0", tag="v0.2.0")
     check("version: tagged commit whose manifest matches passes", got == [], f"got {got}")
 
     got = run_against("behind", "0.1.0", tag="v0.2.0")
-    check("version: flags a manifest behind its own tag",
-          any("!= tag 'v0.2.0'" in e for e in got), f"got {got}")
+    check("version: flags a tag shipping a manifest behind it",
+          any("tag 'v0.2.0' ships a manifest declaring '0.1.0'" in e for e in got),
+          f"got {got}")
 
     # rule 2 cannot see this one: 0.3.0 IS ahead of v0.2.0, and the release
     # still goes out labelled v0.2.0 while calling itself 0.3.0
     got = run_against("ahead", "0.3.0", tag="v0.2.0")
-    check("version: flags a manifest ahead of its own tag",
-          any("!= tag 'v0.2.0'" in e for e in got), f"got {got}")
+    check("version: flags a tag shipping a manifest ahead of it",
+          any("tag 'v0.2.0' ships a manifest declaring '0.3.0'" in e for e in got),
+          f"got {got}")
+
+    # the state the two rules would deadlock in if rule 1 read the working copy
+    got = run_against("dirty", "0.2.0", tag="v0.2.0", working="0.2.1")
+    check("version: bumping the working copy on a tagged commit passes",
+          got == [], f"got {got}")
+
+    got = run_against("bare", "0.2.0", tag="v0.2.0", commit_manifest=False)
+    check("version: flags a tag whose tree has no manifest",
+          any("carries no plugin.json" in e for e in got), f"got {got}")
 
     # rule 2 — HEAD is past the newest tag
     got = run_against("bumped", "0.2.0", tag="v0.1.0", commits_after=3)
@@ -439,8 +464,8 @@ def test_lint_version(tmp):
     check("version: 0.10.0 is ahead of v0.9.0 (numeric, not string, compare)",
           got == [], f"got {got}")
 
-    # the CI degradation: checkout fetches no tags on a branch push, and a
-    # check that fired there would paint every push red
+    # a tagless clone must be silent, not red -- but see the check's own
+    # comment: that silence is why CI checks out at fetch-depth 0
     got = run_against("untagged", "0.2.0")
     check("version: no tags in the tree is silence, not failure", got == [],
           f"got {got}")
