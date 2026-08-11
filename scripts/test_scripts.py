@@ -303,6 +303,77 @@ def test_lint_mermaid():
           "a shipped diagram still contains a semicolon")
 
 
+# ------------------------------------------------------------- lint frozen ----
+def test_lint_frozen_target():
+    """check_frozen_target(): the section must exist AND match, in all four.
+
+    Both halves are load-bearing and fail differently. A missing section is
+    the measured defect (claude had none at all); four PRESENT but divergent
+    sections is the other measured defect, and a presence-only sentinel is
+    blind to it.
+    """
+    sys.path.insert(0, str(SCRIPTS))
+    import lint
+
+    good = ("## Establish an immutable review target\n\nfreeze it. "
+            "`$REVIEW_HEAD` is the SHA it was frozen at.\n\n## Run it\n")
+
+    def run_against(bodies):
+        """Point lint at a fake skills tree and collect what it reports."""
+        with tempfile.TemporaryDirectory() as td:
+            fake = Path(td)
+            for fam, body in bodies.items():
+                d = fake / "skills" / f"{fam}-adversarial-review"
+                d.mkdir(parents=True)
+                (d / "SKILL.md").write_text(body)
+            real_root, real_errors = lint.ROOT, lint.ERRORS
+            try:
+                lint.ROOT, lint.ERRORS = fake, []
+                lint.check_frozen_target()
+                return list(lint.ERRORS)
+            finally:
+                lint.ROOT, lint.ERRORS = real_root, real_errors
+
+    allfour = {f: good for f in lint.FAMILIES}
+    check("frozen: four identical sections pass", run_against(allfour) == [],
+          f"got {run_against(allfour)}")
+
+    missing = dict(allfour); missing["claude"] = "# no such section\n"
+    got = run_against(missing)
+    check("frozen: flags a skill with no section",
+          any("claude" in e and "never learn to freeze" in e for e in got), f"got {got}")
+
+    # the terminator matters: a section that stops early is a truncated rule
+    truncated = dict(allfour)
+    truncated["agy"] = "## Establish an immutable review target\n\nfreeze it.\n"
+    got = run_against(truncated)
+    check("frozen: flags a section missing its terminator",
+          any("agy" in e for e in got), f"got {got}")
+
+    # THE case a presence-only sentinel cannot see
+    drifted = dict(allfour)
+    drifted["opencode"] = good.replace("freeze it.", "freeze it whenever possible.")
+    got = run_against(drifted)
+    check("frozen: flags a section that drifted in wording",
+          any("opencode" in e and "differs" in e for e in got), f"got {got}")
+
+    # ALL four truncated is the case the "differs" branch cannot catch: they
+    # still agree with each other, so only the terminator proves the whole
+    # rule is present rather than just its heading
+    headless = {f: "## Establish an immutable review target\n\nfreeze it.\n"
+                for f in lint.FAMILIES}
+    got = run_against(headless)
+    check("frozen: flags four sections that ALL lack the terminator",
+          len(got) == len(lint.FAMILIES), f"got {got}")
+
+    # and the real tree must satisfy it
+    check("frozen: the repo's four review skills agree",
+          run_against({f: (SCRIPTS.parent / "skills" / f"{f}-adversarial-review"
+                           / "SKILL.md").read_text(encoding="utf-8")
+                       for f in lint.FAMILIES}) == [],
+          "the shipped review skills disagree")
+
+
 ROOT_MD = sorted(p for p in SCRIPTS.parent.rglob("*.md") if ".git" not in p.parts)
 
 
@@ -333,6 +404,9 @@ def main():
 
     print("lint.py check_mermaid")
     test_lint_mermaid()
+
+    print("lint.py check_frozen_target")
+    test_lint_frozen_target()
 
     if FAILURES:
         print(f"\nFAIL — {len(FAILURES)} test(s) failed")

@@ -20,6 +20,23 @@ family-unknown caveat, the two silent permission traps (zero-commit project
 binding, last-match-wins ordering), congestion behavior, and the audit log
 lines. This file assumes them and covers only the review role.
 
+## Establish an immutable review target
+
+**One frozen directory per reviewer, at the exact commit, that nothing else
+touches — no lead activity inside it.** Not "whenever possible": a reviewer
+reads the WORKING TREE, not your commit. Measured — a round ran mutation
+testing in the same worktree mid-review and the reviewer opened a CRITICAL on
+a mutated, non-compiling file it was never meant to see.
+
+Freeze it with the suite's tested helpers instead of hand-rolling the shell;
+every bug ever found in this step was in a hand-rolled copy. The suite-root
+resolver and both calls — `freeze-target.sh` to create it, `verify-target.sh`
+before AND after the run — are in
+[dev-lead Phase 2](../dev-lead/SKILL.md), and the reasoning is in
+[methodology.md](../../docs/methodology.md) §7. Everything below assumes
+`$REVIEW_TARGET_DIR` is that frozen directory and `$REVIEW_HEAD` is the SHA it
+was frozen at.
+
 ## The read-only boundary is a config file, not a mode
 
 **If the target already has an `opencode.json`, save it first** — writing
@@ -34,10 +51,9 @@ RUN_DIR=$(mktemp -d "${TMPDIR:-/tmp}/opencode-review.XXXXXX")   # created here; 
 #   mv "$RUN_DIR/opencode.json.orig" "$REVIEW_TARGET_DIR/opencode.json"
 ```
 
-(A dedicated detached review worktree — the strong form in
-[`docs/methodology.md`](../../docs/methodology.md) §7 — sidesteps the
-collision entirely and is preferred; the backup covers reviews run in a
-shared checkout.)
+(The frozen worktree above does NOT make this step optional: it is a checkout
+of the same repo, so a project that tracks its own `opencode.json` has one
+there too. The backup is what stops teardown deleting it.)
 
 Then write this as `opencode.json` in the target (wildcard FIRST — last
 match wins; see runtime):

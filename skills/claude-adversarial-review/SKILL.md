@@ -20,6 +20,23 @@ not a hang), the headless-plan-mode trap, and the instruction-layer
 inheritance property. This file assumes them and covers only the review
 role.
 
+## Establish an immutable review target
+
+**One frozen directory per reviewer, at the exact commit, that nothing else
+touches — no lead activity inside it.** Not "whenever possible": a reviewer
+reads the WORKING TREE, not your commit. Measured — a round ran mutation
+testing in the same worktree mid-review and the reviewer opened a CRITICAL on
+a mutated, non-compiling file it was never meant to see.
+
+Freeze it with the suite's tested helpers instead of hand-rolling the shell;
+every bug ever found in this step was in a hand-rolled copy. The suite-root
+resolver and both calls — `freeze-target.sh` to create it, `verify-target.sh`
+before AND after the run — are in
+[dev-lead Phase 2](../dev-lead/SKILL.md), and the reasoning is in
+[methodology.md](../../docs/methodology.md) §7. Everything below assumes
+`$REVIEW_TARGET_DIR` is that frozen directory and `$REVIEW_HEAD` is the SHA it
+was frozen at.
+
 ## Run it
 
 Capture `REVIEW_HEAD` **when you decide what to review** — at commit/freeze

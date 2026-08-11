@@ -20,6 +20,11 @@ Every check here guards against a failure this repo has ACTUALLY shipped
   tracked       an environment-global gitignore silently ate templates/AGENTS.md
   sentinel      a skill's prose once allowed same-family review, contradicting
                 the suite's headline rule
+  frozen        every review skill must state the frozen-target rule, in the
+                SAME words -- the four shipped four different ones ("or
+                implementation worktree" / "whenever possible" / "preferred"
+                / silence) while all four used $REVIEW_TARGET_DIR without
+                ever saying where it comes from
   families      data/families.json must stay consistent with the skills on
                 disk, and a multi-family adapter must SAY so where a lead
                 reads it (agy serving both Gemini and Claude is exactly the
@@ -350,6 +355,60 @@ def check_sentinels():
                 err(rel(skill), f"never points at its runtime reference ({fam}-runtime.md)")
 
 
+# ---- frozen: one review-target rule, identically worded in all four ----
+# Measured failure: the four review skills were written in one commit with
+# four different formulations of the same rule, and the tested helpers
+# (freeze-target.sh / verify-target.sh) arrived later and were wired into the
+# ORCHESTRATOR only. Every review skill's description says it can be invoked
+# directly -- so a direct invoker read "run from the target repository or
+# implementation worktree", never learned about freezing, and used
+# $REVIEW_TARGET_DIR which no review skill defines.
+#
+# The rule text is compared, not merely detected: a sentinel that only asks
+# "is the phrase present" cannot see three of four skills drifting.
+FROZEN_HEADING = "## Establish an immutable review target"
+FROZEN_END = "was frozen at."
+
+
+def frozen_target_block(text):
+    """The shared rule: FROZEN_HEADING through the FROZEN_END sentence.
+
+    Family-specific text may follow it; only the shared prefix is compared,
+    so a skill can still say something true about its own runtime.
+    Returns None when the section or its terminator is absent.
+    """
+    start = text.find(FROZEN_HEADING)
+    if start < 0:
+        return None
+    end = text.find(FROZEN_END, start)
+    if end < 0:
+        return None
+    return text[start:end + len(FROZEN_END)]
+
+
+def check_frozen_target():
+    blocks = {}
+    for fam in FAMILIES:
+        skill = ROOT / "skills" / f"{fam}-adversarial-review" / "SKILL.md"
+        if not skill.is_file():
+            continue                      # already reported by check_structure
+        block = frozen_target_block(skill.read_text(encoding="utf-8"))
+        if block is None:
+            err(rel(skill), f"no '{FROZEN_HEADING}' section ending in "
+                            f"'{FROZEN_END}' — a directly-invoked review skill "
+                            "would never learn to freeze its target")
+        else:
+            blocks[fam] = block
+    if len(blocks) < 2:
+        return
+    ref = sorted(blocks)[0]
+    for fam in sorted(blocks):
+        if blocks[fam] != blocks[ref]:
+            err(f"skills/{fam}-adversarial-review/SKILL.md",
+                f"its frozen-target rule differs from {ref}'s — that divergence "
+                "is exactly how the suite ended up with four different rules")
+
+
 # ---- families: the accounting model must match what is on disk ----
 def check_families():
     path = ROOT / "data" / "families.json"
@@ -416,7 +475,8 @@ def main():
     for check in (check_structure, check_frontmatter, check_manifest,
                   check_links, check_paths, check_fences, check_mermaid,
                   check_var_order,
-                  check_tracked, check_sentinels, check_families):
+                  check_tracked, check_sentinels, check_frozen_target,
+                  check_families):
         check()
     if ERRORS:
         print(f"FAIL — {len(ERRORS)} problem(s):\n")
