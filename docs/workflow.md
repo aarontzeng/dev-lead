@@ -130,13 +130,10 @@ one per reviewer, that nothing else touches — a reviewer reads the working
 tree, not your commit ([methodology.md](methodology.md) §7). Take that as the
 rule.
 
-> [!WARNING]
-> The four family review skills are softer than that, and they disagree with
-> each other: codex says "run from the target repository *or* implementation
-> worktree", agy says a dedicated review worktree "whenever possible",
-> opencode calls it "preferred" and documents a shared-checkout fallback.
-> Where they differ from the orchestrator, the orchestrator wins — this is a
-> real inconsistency in the suite, recorded here rather than papered over.
+All four review skills open with that rule in the same words, and
+`scripts/lint.py` compares the four texts rather than merely detecting the
+phrase — they shipped with four different formulations once, and a
+presence-only check is blind to exactly that.
 
 The codex row deserves its own note, because the temptation to overclaim it
 is strong. The sandbox **cannot commit in a worktree at all** — the shared git
