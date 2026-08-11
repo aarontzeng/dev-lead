@@ -41,6 +41,27 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0                         # --notes-from-tag reads the annotation object
+      - name: Restore the annotated tag object
+        env:
+          TAG: ${{ github.ref_name }}
+        # MEASURED, in checkout's own log: it fetches the annotated tag
+        # correctly, then re-fetches the trigger ref BY SHA and force-updates
+        # refs/tags/<tag> to point straight at the commit --
+        #     t [tag update]  5b0ab7c... -> v0.2.1
+        # That leaves a LIGHTWEIGHT tag, and `%(contents)` of a lightweight tag
+        # is the COMMIT message by definition. --notes-from-tag reads local git,
+        # so v0.2.1 shipped with the commit message as its release notes.
+        # Re-fetching the ref restores the tag object.
+        run: |
+          set -euo pipefail
+          git fetch --force origin "refs/tags/${TAG}:refs/tags/${TAG}"
+          # loudly, not silently: a lightweight tag here means the notes would
+          # be the commit message again, and nothing downstream would notice
+          kind=$(git cat-file -t "$TAG")
+          if [ "$kind" != tag ]; then
+            echo "::error::$TAG resolves to a '$kind', not an annotated tag object — release notes would be the commit message"
+            exit 1
+          fi
       - name: Create the Release from the tag annotation
         env:
           GH_TOKEN: ${{ github.token }}
