@@ -13,6 +13,9 @@ Every check here guards against a failure this repo has ACTUALLY shipped
                 shipped as `scripts/freeze-target.sh` and exited 127 everywhere
                 except this repo, where the cwd happened to hide it
   fences        unbalanced ``` renders half a file as code
+  mermaid       `;` ends a statement in a sequenceDiagram, so a semicolon in
+                message text renders the whole diagram as an error box --
+                docs/workflow.md shipped two
   var-order     $RUN_DIR was used 12 lines before its mktemp, in two skills
   tracked       an environment-global gitignore silently ate templates/AGENTS.md
   sentinel      a skill's prose once allowed same-family review, contradicting
@@ -206,6 +209,52 @@ def check_fences():
             err(rel(md), f"odd number of ``` fence lines ({opens})")
 
 
+# ---- mermaid: a semicolon in sequenceDiagram message text kills the render ----
+# `;` is a STATEMENT SEPARATOR in mermaid, so `A->>B: foo; bar` parses as a
+# message plus the garbage statement `bar`, and GitHub renders the whole block
+# as an error box. Nothing warns: the markdown is valid, the fence is balanced,
+# and the file reads fine in an editor. Measured with mermaid's own parser --
+# two occurrences shipped in docs/workflow.md's round-level diagram.
+#
+# Scope, declared so a reader checks declared-vs-actual: this covers message
+# lines (`A->>B: text`) in ```mermaid blocks that declare `sequenceDiagram`.
+# Flowchart labels are quoted and NOT affected. It is not a mermaid parser --
+# it knows this one trap. Note text is deliberately included: `Note over A,B:`
+# splits on `;` the same way.
+MERMAID_MSG_RE = re.compile(r"^\s*(?:\w+\s*(?:-|=)+[->x)]+\s*\w+|Note\s+(?:over|left of|right of)\s+[^:]+)\s*:(.*)$")
+
+
+def mermaid_sequence_messages(text):
+    """(line, message_text) for each message line inside a sequenceDiagram."""
+    out, inside, is_seq = [], False, False
+    for i, line in enumerate(text.splitlines(), 1):
+        if line.startswith("```mermaid"):
+            inside, is_seq = True, False
+            continue
+        if line.startswith("```"):
+            inside = False
+            continue
+        if not inside:
+            continue
+        if line.strip().startswith("sequenceDiagram"):
+            is_seq = True
+            continue
+        if is_seq:
+            m = MERMAID_MSG_RE.match(line)
+            if m:
+                out.append((i, m.group(1)))
+    return out
+
+
+def check_mermaid():
+    for md in md_files():
+        for line, msg in mermaid_sequence_messages(md.read_text(encoding="utf-8")):
+            if ";" in msg:
+                err(rel(md), f"line {line}: ';' in a sequenceDiagram message "
+                             "ends the statement — the whole diagram renders as "
+                             "an error box. Use a comma or a dash")
+
+
 # ---- var-order: a $VAR used before the file's own assignment of it ----
 ASSIGN_RE = re.compile(r"^\s*(?:export\s+)?([A-Z][A-Z0-9_]{2,})=(?!=)")
 USE_RE = re.compile(r"\$\{?([A-Z][A-Z0-9_]{2,})\}?")
@@ -346,7 +395,8 @@ def check_families():
 
 def main():
     for check in (check_structure, check_frontmatter, check_manifest,
-                  check_links, check_paths, check_fences, check_var_order,
+                  check_links, check_paths, check_fences, check_mermaid,
+                  check_var_order,
                   check_tracked, check_sentinels, check_families):
         check()
     if ERRORS:

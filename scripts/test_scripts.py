@@ -220,6 +220,60 @@ def test_lint_paths():
           r.stdout + r.stderr)
 
 
+# ------------------------------------------------------------ lint mermaid ----
+def test_lint_mermaid():
+    """check_mermaid()'s predicate, in BOTH directions.
+
+    The must-not-flag set is the load-bearing half. A semicolon is ordinary
+    punctuation everywhere else in these docs — in flowchart labels (which are
+    quoted), in prose, in the bash fences. A checker that fires on those gets
+    silenced, and then the real trap ships anyway.
+    """
+    sys.path.insert(0, str(SCRIPTS))
+    import lint
+
+    def hits(body):
+        return lint.mermaid_sequence_messages(f"```mermaid\n{body}\n```\n")
+
+    must_flag = {
+        "message text": "sequenceDiagram\n    A->>B: alpha; beta",
+        "dotted reply": "sequenceDiagram\n    A-->>B: alpha; beta",
+        "note text": "sequenceDiagram\n    Note over A,B: alpha; beta",
+    }
+    for name, body in must_flag.items():
+        found = [m for _, m in hits(body) if ";" in m]
+        check(f"mermaid: flags {name}", bool(found), f"{body!r} passed unflagged")
+
+    must_not_flag = {
+        # quoted flowchart labels are a different grammar -- `;` is literal
+        "flowchart label": 'flowchart TD\n    A["alpha; beta"] --> B["x"]',
+        # the trap is scoped to sequence diagrams; a bare graph must not fire
+        "graph label": 'graph LR\n    A["alpha; beta"]',
+        "clean sequence message": "sequenceDiagram\n    A->>B: alpha, beta",
+        "participant line": "sequenceDiagram\n    participant A as One; Two",
+    }
+    for name, body in must_not_flag.items():
+        found = [m for _, m in hits(body) if ";" in m]
+        check(f"mermaid: passes {name}", not found, f"{body!r} flagged {found}")
+
+    # the line number must point at the offending line, not the fence
+    found = lint.mermaid_sequence_messages(
+        "intro\n\n```mermaid\nsequenceDiagram\n    A->>B: ok\n    A->>B: bad; here\n```\n")
+    bad = [ln for ln, m in found if ";" in m]
+    check("mermaid: reports the offending line", bad == [6],
+          f"got {bad}")
+
+    # and the real trap: mermaid's own parser rejects what this flags
+    check("mermaid: the repo's own diagrams are clean",
+          all(";" not in m
+              for p in ROOT_MD
+              for _, m in lint.mermaid_sequence_messages(p.read_text(encoding="utf-8"))),
+          "a shipped diagram still contains a semicolon")
+
+
+ROOT_MD = sorted(p for p in SCRIPTS.parent.rglob("*.md") if ".git" not in p.parts)
+
+
 def main():
     for script in ("freeze-target.sh", "verify-target.sh", "snapshot-refs.sh"):
         p = SCRIPTS / script
@@ -244,6 +298,9 @@ def main():
 
     print("lint.py check_paths")
     test_lint_paths()
+
+    print("lint.py check_mermaid")
+    test_lint_mermaid()
 
     if FAILURES:
         print(f"\nFAIL — {len(FAILURES)} test(s) failed")

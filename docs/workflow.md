@@ -63,7 +63,7 @@ sequenceDiagram
     participant R as Reviewer (another family)
 
     U->>L: task + acceptance criteria
-    L->>L: premise-check against the code; assign risk class
+    L->>L: premise-check against the code, then assign risk class
     L->>W: git worktree add -b family/slug $BASE
     Note over L,W: snapshot refs/remotes now, diff it at handoff
     L->>D: task file — scope, existing test seams,<br/>where new tests belong, the no-push rule
@@ -77,7 +77,7 @@ sequenceDiagram
     L->>R: review the frozen commit<br/>evidence gate + this leg's own brief
     R-->>L: findings
     Note over L: findings are hypotheses, not verdicts
-    L->>L: verify each against the code;<br/>rejections carry refuting evidence
+    L->>L: verify each against the code —<br/>rejections carry refuting evidence
     alt verified blocking findings, rounds remain
         L->>D: next round — each finding quoted verbatim,<br/>why it is real, what fix is required
     else clean, or a stop condition fired
@@ -102,10 +102,15 @@ suite ships *structure*, not somebody else's benchmark — see
 
 | Adapter | Families it can serve | Write leg | Review leg | How "no push" is really enforced | Worktree |
 |---|---|---|---|---|---|
-| **claude** | Claude | `claude -p --permission-mode acceptEdits` | `claude -p --permission-mode plan`, MCP servers stripped — otherwise the leg hangs on server startup | **Instruction level only.** No machine allow-list; it inherits the operator's standing rules. Observed refusing and printing the command instead | Required when driven as a worker for a foreign lead |
+| **claude** | Claude | `claude -p --permission-mode acceptEdits` | `claude -p --permission-mode plan`, MCP servers stripped — otherwise it loads every configured tool server before reading a line of code, and the startup silence *reads* as a hang from outside | **Instruction level only.** No machine allow-list; it inherits the operator's standing rules. Observed refusing and printing the command instead | Always |
 | **codex** | GPT | companion `task --write --fresh`, workspace-write sandbox | companion `adversarial-review`, read-only sandbox | **Structural, and by accident.** The sandbox cannot commit in a worktree at all — the shared git index sits outside it — so the precondition for pushing is never reached | Always |
 | **agy** | Gemini **and** a separate Claude pool | `--mode accept-edits --sandbox --add-dir` | `--mode plan --sandbox --add-dir` | **Machine allow-list**, enforced by omission: push/reset/checkout/clean/worktree are simply absent. One deliberate hole — the test runner is allow-listed, so *inside a test process* the boundary drops back to instruction level | Always |
 | **opencode** | DeepSeek, Nemotron, and stealth models whose family is undisclosed | write `opencode.json` (`bash:*:allow` plus explicit denies) | read-only `opencode.json` (`bash:*:deny`, a few git reads allowed, `edit:deny`) | **Machine config — with an ordering trap: last match wins.** The wildcard must come *first* and the denies *after*, or the denies never fire | Always |
+
+Every write leg gets its own worktree, without exception — the one case that
+does not is a Claude lead using an in-session subagent, which is not this
+adapter at all. Once you drive `claude-implement`, the worktree is required
+like everywhere else.
 
 > [!IMPORTANT]
 > The family column is the one the cross-family rule reads, and it is a
