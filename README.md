@@ -53,6 +53,26 @@ cross-family rule structural:
 | 🧪 **Nothing trusted on self-report** | The lead re-runs tests itself, mutation-proofs every new regression test, and verifies every review finding before acting |
 | 🙋 **The merge gate is human** | Agents commit locally; pushing is always a person's decision |
 
+## How a run flows
+
+```mermaid
+flowchart LR
+    A["Task"] --> B["<b>Phase 0</b><br/>Intake<br/><i>premise-check<br/>risk class</i>"]
+    B --> C["<b>Phase 1</b><br/>Dispatch<br/><i>pinned BASE<br/>isolated worktree</i>"]
+    C --> D["<b>Phase 2</b><br/>Rounds, 3 max<br/><i>implement → lead verifies<br/>→ cross-family review</i>"]
+    D --> E["<b>Phase 3</b><br/>Merge gate<br/><i>human approves the diff</i>"]
+    E --> F[["<b>Push</b><br/><i>human only</i>"]]
+    D -.->|"stop condition"| G["<b>Report and hold</b><br/><i>worktree preserved<br/>no merge</i>"]
+```
+
+Each arrow hides a gate that has to be *earned* — a premise checked against
+the code rather than trusted, a suite the lead re-ran itself, a regression
+test watched failing before it was allowed to pass.
+**[docs/workflow.md](docs/workflow.md)** expands this into the full phase
+diagram, a round-by-round sequence, what each phase owes the next, and the
+four adapters side by side (including how each one really enforces no-push —
+one of them only by accident).
+
 ## What's in the box
 
 | Skill | Role |

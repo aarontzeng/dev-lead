@@ -4,6 +4,10 @@ The skills carry the *how* — commands, flags, traps. This document carries the
 *why*, so that when a CLI changes under you (they all do), you can rebuild the
 how from first principles.
 
+If you have not seen a run's shape yet, read [workflow.md](workflow.md) first:
+it maps the phases, the gates between them, and the adapters. This document
+argues for each of those choices in turn.
+
 ## 1. The cross-family rule
 
 **No change merges reviewed only by its own model family.** The implementer's
