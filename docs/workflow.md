@@ -14,12 +14,12 @@ flowchart TD
     B -->|"HIGH risk or<br/>ambiguous spec"| L["<b>The lead implements directly</b><br/>delegation adds a supervision layer<br/>exactly where supervision is hardest"]
     B -->|"LOW / MEDIUM"| D["<b>Phase 1 · Dispatch</b><br/>probe each family's availability cheaply<br/>pick implementer + reviewer families<br/>pin BASE = merge-base of target and HEAD<br/>one isolated worktree per delegate"]
     D --> R1
-    L --> R3
+    L --> R2
 
     subgraph R["Phase 2 · Rounds — ROUNDS_MAX = 3 by default (initial + two fix rounds)"]
         direction TB
         R1["Delegate implements / fixes<br/>same worktree across rounds, new commits on top"]
-        R1 --> R2["<b>Lead verifies — never from the self-report</b><br/>1 · working tree first, before any ranged diff<br/>2 · re-run the whole suite itself<br/>3 · lead makes the checkpoint commit<br/>4 · mutation-proof every new regression test"]
+        R1 --> R2["<b>Lead verifies — its own work too</b><br/>a self-report is never evidence<br/>1 · working tree first, before any ranged diff<br/>2 · re-run the whole suite itself<br/>3 · lead makes the checkpoint commit<br/>4 · mutation-proof every new regression test"]
         R2 --> R3["<b>Adversarial review, cross-family</b><br/>against a FROZEN directory at that commit<br/>evidence gate per leg · a different brief per leg"]
         R3 --> R4["Lead verifies each finding against the code<br/>a rejection carries the same grade of evidence"]
         R4 --> R5{"Verified blocking<br/>findings left?"}
@@ -33,10 +33,12 @@ flowchart TD
 
 Two edges in that diagram carry most of the argument:
 
-- **`L --> R3`** — work the lead implemented itself still goes through
-  cross-family review. The lead's own verification shares the lead's blind
-  spots, so skipping review for "I wrote it myself" removes exactly the
-  independence the role exists to supply.
+- **`L --> R2`** — work the lead implemented itself enters at *verification*
+  and goes through cross-family review like anything else. Both halves
+  matter. The suite re-run and the mutation proof are not delegate-policing
+  rituals, they are how any change is checked; and the lead's own review
+  shares the lead's blind spots, so "I wrote it myself" is the weakest
+  possible reason to skip the other family.
 - **`R5 -->|a stop condition fired|`** — not every run ends in a merge, and
   a run that stops with its worktree intact and its findings written down is
   a successful run. Looping until something looks green is the failure mode.
@@ -80,7 +82,9 @@ sequenceDiagram
     L->>L: verify each against the code —<br/>rejections carry refuting evidence
     alt verified blocking findings, rounds remain
         L->>D: next round — each finding quoted verbatim,<br/>why it is real, what fix is required
-    else clean, or a stop condition fired
+    else a stop condition fired
+        L->>U: findings history, worktree preserved<br/>the run ends here — NO merge
+    else clean
         L->>U: verdict + diff stat against $BASE
         U->>L: explicit approval
         L->>W: fast-forward merge, tear down worktree
@@ -95,15 +99,22 @@ at the working tree first, commit second, range third.
 
 ## The adapters, side by side
 
-Four runtime adapters, each usable as an implementer or a reviewer. Model
-names are deliberately absent: catalogues change every few weeks, and the
-suite ships *structure*, not somebody else's benchmark — see
-[calibration-journal.md](calibration-journal.md).
+Four runtime adapters, each usable as an implementer or a reviewer. Specific
+model IDs are deliberately absent — catalogues change every few weeks and the
+suite ships *structure*, not somebody else's benchmark (see
+[calibration-journal.md](calibration-journal.md)). The *family* labels below
+are a different thing and are deliberately present: they are exactly the ones
+[`data/families.json`](../data/families.json) declares, and they are what the
+cross-family rule is accounted in.
 
-| Adapter | Families it can serve | Write leg | Review leg | How "no push" is really enforced | Worktree |
+The command column shows the **shape** of each leg, not its full invocation —
+the flags that matter, the traps, and the per-family task-prompt rules live in
+the skills.
+
+| Adapter | Families it can serve | Write leg | Review leg | How "no push" is really enforced | Worktree (write leg) |
 |---|---|---|---|---|---|
 | **claude** | Claude | `claude -p --permission-mode acceptEdits` | `claude -p --permission-mode plan`, MCP servers stripped — otherwise it loads every configured tool server before reading a line of code, and the startup silence *reads* as a hang from outside | **Instruction level only.** No machine allow-list; it inherits the operator's standing rules. Observed refusing and printing the command instead | Always |
-| **codex** | GPT | companion `task --write --fresh`, workspace-write sandbox | companion `adversarial-review`, read-only sandbox | **Structural, and by accident.** The sandbox cannot commit in a worktree at all — the shared git index sits outside it — so the precondition for pushing is never reached | Always |
+| **codex** | GPT | companion `task --write --fresh`, workspace-write sandbox | companion `adversarial-review`, read-only sandbox | **Instruction level**, same as claude — the task prompt states the rule. Nothing in this suite has *measured* the sandbox refusing `git push` | Always |
 | **agy** | Gemini **and** a separate Claude pool | `--mode accept-edits --sandbox --add-dir` | `--mode plan --sandbox --add-dir` | **Machine allow-list**, enforced by omission: push/reset/checkout/clean/worktree are simply absent. One deliberate hole — the test runner is allow-listed, so *inside a test process* the boundary drops back to instruction level | Always |
 | **opencode** | DeepSeek, Nemotron, and stealth models whose family is undisclosed | write `opencode.json` (`bash:*:allow` plus explicit denies) | read-only `opencode.json` (`bash:*:deny`, a few git reads allowed, `edit:deny`) | **Machine config — with an ordering trap: last match wins.** The wildcard must come *first* and the denies *after*, or the denies never fire | Always |
 
@@ -111,6 +122,30 @@ Every write leg gets its own worktree, without exception — the one case that
 does not is a Claude lead using an in-session subagent, which is not this
 adapter at all. Once you drive `claude-implement`, the worktree is required
 like everywhere else.
+
+**Review directories are a separate question from the column above**, and the
+orchestrator's answer is stricter than any individual family skill's: the
+reviewed directory must be a frozen detached worktree at the exact commit,
+one per reviewer, that nothing else touches — a reviewer reads the working
+tree, not your commit ([methodology.md](methodology.md) §7). Take that as the
+rule.
+
+> [!WARNING]
+> The four family review skills are softer than that, and they disagree with
+> each other: codex says "run from the target repository *or* implementation
+> worktree", agy says a dedicated review worktree "whenever possible",
+> opencode calls it "preferred" and documents a shared-checkout fallback.
+> Where they differ from the orchestrator, the orchestrator wins — this is a
+> real inconsistency in the suite, recorded here rather than papered over.
+
+The codex row deserves its own note, because the temptation to overclaim it
+is strong. The sandbox **cannot commit in a worktree at all** — the shared git
+index lives outside the writable scope, so `index.lock` fails with EPERM, and
+codex work comes back uncommitted for the lead to check and commit. That is
+real, measured, and load-bearing for how you verify the work. It is *not* a
+push boundary: pushing an already-existing ref never needs an index write, so
+"cannot commit" does not imply "cannot push". No file in this suite records a
+sandbox test of `git push`, so the honest entry is instruction level.
 
 > [!IMPORTANT]
 > The family column is the one the cross-family rule reads, and it is a
