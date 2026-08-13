@@ -1,7 +1,7 @@
 {
   "name": "dev-lead",
-  "version": "0.2.3",
-  "description": "Cross-model delegation and adversarial review for CLI coding agents: one lead, four runtime adapters, and no change merges reviewed only by its own model family.",
+  "version": "0.3.0",
+  "description": "Cross-model delegation and adversarial review for CLI coding agents: one lead, five runtime adapters, and no change merges reviewed only by its own model family.",
   "author": {
     "name": "Aaron Tzeng",
     "url": "https://github.com/aarontzeng"
@@ -27,6 +27,8 @@
     "./skills/agy-implement",
     "./skills/agy-adversarial-review",
     "./skills/opencode-implement",
-    "./skills/opencode-adversarial-review"
+    "./skills/opencode-adversarial-review",
+    "./skills/grok-implement",
+    "./skills/grok-adversarial-review"
   ]
 }
