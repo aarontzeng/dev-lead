@@ -22,14 +22,16 @@ flowchart TD
     X["codex<br/>· implement<br/>· adv-review"]
     A["agy<br/>· implement<br/>· adv-review"]
     O["opencode<br/>· implement<br/>· adv-review"]
+    G["grok<br/>· implement<br/>· adv-review"]
     LEAD --> C
     LEAD --> X
     LEAD --> A
     LEAD --> O
+    LEAD --> G
 ```
 
 > [!IMPORTANT]
-> **Adapters are not families.** The four columns are *runtime adapters* —
+> **Adapters are not families.** The five columns are *runtime adapters* —
 > which CLI you drive. The cross-family rule is accounted in *model
 > families* — whose training produced the output — and one adapter can serve
 > several: agy exposes both Gemini and Claude pools; opencode serves
@@ -70,7 +72,7 @@ the code rather than trusted, a suite the lead re-ran itself, a regression
 test watched failing before it was allowed to pass.
 **[docs/workflow.md](docs/workflow.md)** expands this into the full phase
 diagram, a round-by-round sequence, what each phase owes the next, and the
-four adapters side by side (including how each one really enforces no-push —
+five adapters side by side (including how each one really enforces no-push —
 one of them only by accident).
 
 ## What's in the box
@@ -82,6 +84,7 @@ one of them only by accident).
 | `codex-implement` / `codex-adversarial-review` | OpenAI Codex via its Claude Code companion plugin — or the raw CLI |
 | `agy-implement` / `agy-adversarial-review` | Google Antigravity CLI (Gemini + a separate Claude pool) |
 | `opencode-implement` / `opencode-adversarial-review` | OpenCode's free pool (DeepSeek, Nemotron, …) — zero quota cost |
+| `grok-implement` / `grok-adversarial-review` | xAI's Grok Build CLI — a paid pool, tier peer of codex/agy, and a sixth accounting family (integrated 2026-08-13; no field-proven round yet) |
 
 Each family also carries a **runtime reference**
 (`skills/<family>-adversarial-review/references/<family>-runtime.md`) holding
@@ -89,7 +92,7 @@ its operational mechanics: permission traps, silent failure modes, auth
 diagnosis, model catalogues. Every item in those files was paid for with a
 real incident, and each is dated so you can judge freshness.
 
-The lead role is portable: all four CLIs can read the same skills directory,
+The lead role is portable: all five CLIs can read the same skills directory,
 so a Codex or Gemini lead can follow the same playbook and delegate to
 Claude via `claude-implement`.
 

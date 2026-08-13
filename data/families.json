@@ -28,6 +28,11 @@
       "cli": "opencode",
       "serves": ["DeepSeek", "Nemotron", "unknown"],
       "note": "free pool; catalogue changes, verify with `opencode models`"
+    },
+    "grok": {
+      "cli": "grok (Grok Build)",
+      "serves": ["Grok"],
+      "note": "paid pool, tier peer of codex/agy -- weekly shared quota on xAI plans; positioned by the owner 2026-08-13"
     }
   },
   "families": {
@@ -36,6 +41,7 @@
     "Gemini": {"accounting_valid": true},
     "DeepSeek": {"accounting_valid": true},
     "Nemotron": {"accounting_valid": true},
+    "Grok": {"accounting_valid": true},
     "unknown": {
       "accounting_valid": false,
       "why": "stealth models whose family is undisclosed by design; they might secretly share any family, so they can never SATISFY the cross-family rule -- fine as an additional pair of eyes, never the accounting leg"

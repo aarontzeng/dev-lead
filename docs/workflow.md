@@ -117,6 +117,7 @@ the skills.
 | **codex** | GPT | companion `task --write --fresh`, workspace-write sandbox | companion `adversarial-review`, read-only sandbox | **Instruction level**, same as claude — the task prompt states the rule. Nothing in this suite has *measured* the sandbox refusing `git push` | Always |
 | **agy** | Gemini **and** a separate Claude pool | `--mode accept-edits --sandbox --add-dir` | `--mode plan --sandbox --add-dir` | **Machine allow-list**, enforced by omission: push/reset/checkout/clean/worktree are simply absent. One deliberate hole — the test runner is allow-listed, so *inside a test process* the boundary drops back to instruction level | Always |
 | **opencode** | DeepSeek, Nemotron, and stealth models whose family is undisclosed | write `opencode.json` (`bash:*:allow` plus explicit denies) | read-only `opencode.json` (`bash:*:deny`, a few git reads allowed, `edit:deny`) | **Machine config — with an ordering trap: last match wins.** The wildcard must come *first* and the denies *after*, or the denies never fire | Always |
+| **grok** | Grok | `--permission-mode bypassPermissions --sandbox workspace`, stated per run — the config default may already be always-approve, which is exactly why it is never inherited | headless `--tools "read_file,grep,list_dir"` allowlist (no shell at all) + `--disallowed-tools "Agent"`; `--sandbox read-only` rides along but is a warned no-op on kernels older than Landlock (5.13) | **Instruction level** — the shell tool is unrestricted inside its mode, so the refs snapshot diffed at handoff is the evidence either way | Always |
 
 Every write leg gets its own worktree, without exception — the one case that
 does not is a Claude lead using an in-session subagent, which is not this
@@ -130,8 +131,8 @@ one per reviewer, that nothing else touches — a reviewer reads the working
 tree, not your commit ([methodology.md](methodology.md) §7). Take that as the
 rule.
 
-All four review skills open with that rule in the same words, and
-`scripts/lint.py` compares the four texts rather than merely detecting the
+All five review skills open with that rule in the same words, and
+`scripts/lint.py` compares the five texts rather than merely detecting the
 phrase — they shipped with four different formulations once, and a
 presence-only check is blind to exactly that.
 
