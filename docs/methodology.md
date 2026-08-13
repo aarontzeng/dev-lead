@@ -28,7 +28,7 @@ Corollaries:
 
 - **The family is a property of the served model, not the CLI.** One runtime
   adapter can serve several families (agy serves Gemini and Claude pools;
-  opencode serves DeepSeek, Nemotron, and stealth models; grok serves Grok), and adapters can
+  opencode serves DeepSeek, Nemotron, and stealth models; grok serves Grok; cursor serves whatever model you pin, six families wide), and adapters can
   silently substitute the tier you asked for. Account the rule against the
   *verified served model's* family — the run log records adapter, served
   model, and family as three separate fields.
