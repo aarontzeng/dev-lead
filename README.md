@@ -23,15 +23,17 @@ flowchart TD
     A["agy<br/>· implement<br/>· adv-review"]
     O["opencode<br/>· implement<br/>· adv-review"]
     G["grok<br/>· implement<br/>· adv-review"]
+    U["cursor<br/>· implement<br/>· adv-review"]
     LEAD --> C
     LEAD --> X
     LEAD --> A
     LEAD --> O
     LEAD --> G
+    LEAD --> U
 ```
 
 > [!IMPORTANT]
-> **Adapters are not families.** The five columns are *runtime adapters* —
+> **Adapters are not families.** The six columns are *runtime adapters* —
 > which CLI you drive. The cross-family rule is accounted in *model
 > families* — whose training produced the output — and one adapter can serve
 > several: agy exposes both Gemini and Claude pools; opencode serves
@@ -72,7 +74,7 @@ the code rather than trusted, a suite the lead re-ran itself, a regression
 test watched failing before it was allowed to pass.
 **[docs/workflow.md](docs/workflow.md)** expands this into the full phase
 diagram, a round-by-round sequence, what each phase owes the next, and the
-five adapters side by side (including how each one really enforces no-push —
+six adapters side by side (including how each one really enforces no-push —
 one of them only by accident).
 
 ## What's in the box
@@ -85,6 +87,7 @@ one of them only by accident).
 | `agy-implement` / `agy-adversarial-review` | Google Antigravity CLI (Gemini + a separate Claude pool) |
 | `opencode-implement` / `opencode-adversarial-review` | OpenCode's free pool (DeepSeek, Nemotron, …) — zero quota cost |
 | `grok-implement` / `grok-adversarial-review` | xAI's Grok Build CLI — a paid pool, tier peer of codex/agy, and a sixth accounting family (integrated 2026-08-13; no field-proven round yet) |
+| `cursor-implement` / `cursor-adversarial-review` | Cursor's CLI (`cursor-agent`) — one paid adapter serving GPT, Claude, Grok, Kimi, Composer, and auto; the pinned model decides the family (integrated 2026-08-13, postures live-probed) |
 
 Each family also carries a **runtime reference**
 (`skills/<family>-adversarial-review/references/<family>-runtime.md`) holding
@@ -92,7 +95,7 @@ its operational mechanics: permission traps, silent failure modes, auth
 diagnosis, model catalogues. Every item in those files was paid for with a
 real incident, and each is dated so you can judge freshness.
 
-The lead role is portable: all five CLIs can read the same skills directory,
+The lead role is portable: all six CLIs can read the same skills directory,
 so a Codex or Gemini lead can follow the same playbook and delegate to
 Claude via `claude-implement`.
 
@@ -191,7 +194,7 @@ rules — adopt them in your own agent instructions if you don't have them:
 |---|---|---|
 | 🥇 **First-class** | Claude Code | Plugin install, automatic skill discovery and invocation. Works out of the box |
 | 🥈 **Supported, field-proven** | codex, agy, opencode, any shell-capable CLI | The SKILL.md files are plain Markdown and every mechanism is bash/git. A codex-led run has completed the full workflow end-to-end. Enter via symlink or [templates/AGENTS.md](templates/AGENTS.md) |
-| 🥉 **Methodology only** | Cursor, Copilot, IDE-embedded agents | [docs/methodology.md](docs/methodology.md) and [docs/calibration-journal.md](docs/calibration-journal.md) as rules-file reading material. The workflow's core motion — background delegates, 5–40 min waits, worktree orchestration — is not an IDE agent's interaction shape, and this suite deliberately does not contort itself to change that |
+| 🥉 **Methodology only** | Copilot and other IDE-embedded agents (Cursor's IDE side lands here too — its CLI is a full adapter above) | [docs/methodology.md](docs/methodology.md) and [docs/calibration-journal.md](docs/calibration-journal.md) as rules-file reading material. The workflow's core motion — background delegates, 5–40 min waits, worktree orchestration — is not an IDE agent's interaction shape, and this suite deliberately does not contort itself to change that |
 
 > [!NOTE]
 > Tier-2 caveat: the codex family skills drive codex through its **Claude

@@ -13,7 +13,7 @@ underlying skill before invoking it; every operational gotcha (sandbox
 allow-lists, workspace traps, silent-death modes, status commands that lie)
 lives there and is not repeated here.
 
-The lead role itself is portable: all five CLIs can read the same skills
+The lead role itself is portable: all six CLIs can read the same skills
 directory (symlink the others' skills paths to Claude's), and the
 `claude-implement`/`claude-adversarial-review` skills supply the missing
 direction — Claude as a worker for a codex or agy lead. A codex-led run has

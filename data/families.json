@@ -33,6 +33,11 @@
       "cli": "grok (Grok Build)",
       "serves": ["Grok"],
       "note": "paid pool, tier peer of codex/agy -- weekly shared quota on xAI plans; positioned by the owner 2026-08-13"
+    },
+    "cursor": {
+      "cli": "cursor-agent (Cursor CLI)",
+      "serves": ["GPT", "Claude", "Grok", "Kimi", "Composer", "unknown"],
+      "note": "paid pool, the widest adapter -- the pinned model decides the family; `auto` routes server-side and lands in unknown"
     }
   },
   "families": {
@@ -42,6 +47,11 @@
     "DeepSeek": {"accounting_valid": true},
     "Nemotron": {"accounting_valid": true},
     "Grok": {"accounting_valid": true},
+    "Kimi": {"accounting_valid": true},
+    "Composer": {
+      "accounting_valid": false,
+      "why": "Cursor's in-house model; its pretraining lineage is undisclosed, which is the stealth-model hazard again -- it might share any family's blind spots. Extra eyes, never the accounting leg"
+    },
     "unknown": {
       "accounting_valid": false,
       "why": "stealth models whose family is undisclosed by design; they might secretly share any family, so they can never SATISFY the cross-family rule -- fine as an additional pair of eyes, never the accounting leg"
