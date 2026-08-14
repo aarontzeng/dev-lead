@@ -49,24 +49,31 @@ cd "$REVIEW_TARGET_DIR" && \
   [ "$(git rev-parse HEAD)" = "$REVIEW_HEAD" ] && \
   cursor-agent -p --mode ask --trust \
     --model '<family-pinned-model>' \
-    --output-format text \
-    "$(cat "$RUN_DIR/prompt.md")" > "$RUN_DIR/review.out" 2>&1
+    --output-format json \
+    "$(cat "$RUN_DIR/prompt.md")" > "$RUN_DIR/review.json" 2> "$RUN_DIR/review.err"
 ```
 
-Launch under the host's background mechanism with output redirected to a
-file. Role-specific choices:
+Launch under the host's background mechanism. Keep stdout as the JSON audit
+record and stderr separate; mixing them makes a failed launch look like a
+malformed successful response. Role-specific choices:
 
 - **`--mode ask` is load-bearing** (measured: refuses writes, still
   reports). Never `--mode plan` here — measured twice returning empty
   stdout on exit 0, which reads as a completed run that found nothing.
 - **`--model` is the accounting decision.** Pin an explicit family-bearing
   model (`gpt-…`, `claude-…`, `cursor-grok-…`, `kimi-…`) chosen for the
-  round's cross-family needs; record adapter, flag, and `request_id` in the
-  run log. `auto`/`composer-*` are extra eyes only.
+  round's cross-family needs; record adapter, flag, and the `request_id`
+  returned in `$RUN_DIR/review.json` in the run log. `auto`/`composer-*` are
+  extra eyes only.
+- **JSON audit output is mandatory.** On success, preserve the whole
+  `review.json`: `result` is the review text, while `session_id` and
+  `request_id` make the run traceable. Do not reconstruct an identifier from
+  prose or stderr.
 - **Never** `-f`, `--yolo`, or `--approve-mcps` on a review run.
-- An empty `review.out` is a FAILED run on this adapter, not an empty
-  verdict — the one measured way to produce it is the forbidden plan mode,
-  so treat silence as a launch bug and inspect before re-running.
+- A non-zero exit, or an empty/malformed `review.json` with no `result`, is a
+  FAILED run, not an empty verdict; inspect `review.err` before re-running.
+  A response without `request_id` is not sufficiently auditable to serve as
+  the accounting gate — retain it as an extra eye only and report the gap.
 
 Verify the target again after the run:
 

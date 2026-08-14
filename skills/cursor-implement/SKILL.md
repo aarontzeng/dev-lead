@@ -53,16 +53,20 @@ prove what happened either way.
 cd "$WORKTREE" && \
   cursor-agent -p --trust \
     --model '<family-pinned-model>' \
-    --output-format text \
-    "$(cat "$RUN_DIR/task.md")" > "$RUN_DIR/impl.out" 2>&1
+    --output-format json \
+    "$(cat "$RUN_DIR/task.md")" > "$RUN_DIR/impl.json" 2> "$RUN_DIR/impl.err"
 ```
 
 - Bare `-p` IS the write posture (measured: creates files, runs shell, no
   prompting) — that is exactly why this launch happens only inside a
   dedicated worktree, and why the review leg never uses it.
 - **`--model` pinned and recorded** — the run log must name adapter, model
-  flag, and `request_id`; the reviewer-family decision downstream depends
-  on it.
+  flag, and the `request_id` returned in `$RUN_DIR/impl.json`; the
+  reviewer-family decision downstream depends on it.
+- **JSON audit output** — preserve the whole `impl.json`: its `result` is the
+  delegate's report and its `session_id`/`request_id` bind that report to the
+  dispatch. On failure, inspect `impl.err`; never fabricate an id from mixed
+  stdout/stderr.
 - Task prompt must state: local commits only, never push, list what was not
   finished rather than improvising around it.
 

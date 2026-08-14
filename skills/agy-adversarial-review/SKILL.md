@@ -53,13 +53,17 @@ was frozen at.
 ```bash
 RUN_DIR=$(mktemp -d "${TMPDIR:-/tmp}/agy-review.XXXXXX")
 # Write the prompt to "$RUN_DIR/prompt.md" in its own step.
+# Confirm this Gemini pair is in the account catalogue; if not, replace BOTH
+# values with one available suffix pair. The first 3.7 Flash run is calibration.
+AGY_MODEL=gemini-3.7-flash-high
+AGY_EFFORT=high
 
 agy -p "$(cat "$RUN_DIR/prompt.md")" \
-    --model <gemini-tier> \
+    --model "$AGY_MODEL" \
     --mode plan \
     --sandbox \
     --add-dir "$REVIEW_TARGET_DIR" \
-    --effort high \
+    --effort "$AGY_EFFORT" \
     --print-timeout 10m0s
 ```
 
@@ -80,13 +84,16 @@ Role-specific choices in that command:
   `--disable-slash-commands` silently cancels (above) — never pass both.
 - **`--print-timeout 10m0s`** — a real review of a few files takes 5–10
   minutes and the CLI default (5m0s) cuts it off mid-flight.
-- **Model** — see the runtime file's catalogue notes: tiers can silently
-  resolve to other tiers on some accounts (verify from the log which model
-  actually served), and the CLI may expose a second family's pool (e.g.
-  Claude models) billed on a separate quota — a legitimate cross-family
-  reviewer for anything that second family did NOT write.
-- **`--effort high`** — always, for a review. agy's effort flag tops out
-  there and is Gemini-only (see runtime).
+- **Gemini model/effort pair** — the current review default is
+  `gemini-3.7-flash-high` with `high`, only when the account catalogue offers
+  it. The suffix and effort must match exactly: `-medium` needs `medium` and
+  `-low` needs `low`. Verify from the log which model actually served; this
+  new model has no calibration rows, so its first verified use is not a gate
+  merely because it is newer.
+- **Model family** — the CLI may expose a second family's pool (e.g. Claude)
+  on separate quota, a legitimate cross-family reviewer for anything that
+  family did NOT write. That is a different template: remove `AGY_EFFORT`
+  and `--effort` entirely for Claude models (see runtime).
 
 Verify the TARGET before launching — `git -C "$REVIEW_TARGET_DIR" rev-parse
 HEAD` must equal `$REVIEW_HEAD` (a wrong-target launch from a stale cwd is

@@ -32,6 +32,8 @@ Every check here guards against a failure this repo has ACTUALLY shipped
   delegates     review findings must keep Grok MCP calls denied and write
                 delegates must use the fail-closed remote-ref checker, not a
                 raw diff that merely reports a changed snapshot
+  audit         Cursor delegate output must preserve its request identity, and
+                agy's displayed Gemini model tier must match its effort flag
   families      data/families.json must stay consistent with the skills on
                 disk, and a multi-family adapter must SAY so where a lead
                 reads it (agy serving both Gemini and Claude is exactly the
@@ -545,6 +547,54 @@ def check_delegate_guardrails():
                 err(rel(path), f"unsafe delegate handoff still contains: {forbidden}")
 
 
+# ---- delegate audit trails: preserve identity and valid Gemini tier pairs ----
+CURSOR_AUDIT_OUTPUTS = {
+    "skills/cursor-adversarial-review/SKILL.md": "review",
+    "skills/cursor-implement/SKILL.md": "impl",
+}
+AGY_ROLE_SKILLS = (
+    "skills/agy-adversarial-review/SKILL.md",
+    "skills/agy-implement/SKILL.md",
+)
+AGY_PAIR_RE = re.compile(
+    r"^AGY_MODEL=gemini-[A-Za-z0-9._-]+-(?P<tier>low|medium|high)$\n"
+    r"^AGY_EFFORT=(?P<effort>low|medium|high)$",
+    re.M,
+)
+
+
+def check_delegate_audit_trails():
+    for name, stem in CURSOR_AUDIT_OUTPUTS.items():
+        path = ROOT / name
+        if not path.is_file():
+            continue                          # check_structure() reports it
+        text = path.read_text(encoding="utf-8")
+        required = (
+            "--output-format json",
+            f'> "$RUN_DIR/{stem}.json" 2> "$RUN_DIR/{stem}.err"',
+            "request_id",
+        )
+        for fragment in required:
+            if fragment not in text:
+                err(rel(path), f"missing required audit trail: {fragment}")
+        if "--output-format text" in text:
+            err(rel(path), "text output drops request_id; use JSON audit output")
+
+    for name in AGY_ROLE_SKILLS:
+        path = ROOT / name
+        if not path.is_file():
+            continue                          # check_structure() reports it
+        text = path.read_text(encoding="utf-8")
+        pair = AGY_PAIR_RE.search(text)
+        if pair is None:
+            err(rel(path), "missing AGY_MODEL/AGY_EFFORT Gemini tier pair")
+        elif pair.group("tier") != pair.group("effort"):
+            err(rel(path), "AGY_MODEL suffix does not match AGY_EFFORT")
+        for fragment in ('--model "$AGY_MODEL"', '--effort "$AGY_EFFORT"'):
+            if fragment not in text:
+                err(rel(path), f"does not use its declared model/effort pair: {fragment}")
+
+
 # ---- families: the accounting model must match what is on disk ----
 def check_families():
     path = ROOT / "data" / "families.json"
@@ -614,6 +664,7 @@ def main():
                   check_var_order,
                   check_tracked, check_sentinels, check_frozen_target,
                   check_delegate_guardrails,
+                  check_delegate_audit_trails,
                   check_families):
         check()
     if ERRORS:

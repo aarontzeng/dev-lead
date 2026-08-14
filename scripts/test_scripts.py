@@ -441,6 +441,85 @@ def test_lint_delegate_guardrails():
           f"got {got}")
 
 
+# ------------------------------------------------ lint delegate audit trails ----
+def test_lint_delegate_audit_trails():
+    """check_delegate_audit_trails(): preserve run identity and tier pairing."""
+    sys.path.insert(0, str(SCRIPTS))
+    import lint
+
+    good = {
+        "skills/cursor-adversarial-review/SKILL.md": (
+            "--output-format json\n"
+            '"$(cat \"$RUN_DIR/prompt.md\")" > "$RUN_DIR/review.json" 2> "$RUN_DIR/review.err"\n'
+            "request_id\n"
+        ),
+        "skills/cursor-implement/SKILL.md": (
+            "--output-format json\n"
+            '"$(cat \"$RUN_DIR/task.md\")" > "$RUN_DIR/impl.json" 2> "$RUN_DIR/impl.err"\n'
+            "request_id\n"
+        ),
+        "skills/agy-adversarial-review/SKILL.md": (
+            "AGY_MODEL=gemini-3.7-flash-high\nAGY_EFFORT=high\n"
+            '--model "$AGY_MODEL"\n--effort "$AGY_EFFORT"\n'
+        ),
+        "skills/agy-implement/SKILL.md": (
+            "AGY_MODEL=gemini-3.7-flash-high\nAGY_EFFORT=high\n"
+            '--model "$AGY_MODEL"\n--effort "$AGY_EFFORT"\n'
+        ),
+    }
+
+    def run_against(files):
+        with tempfile.TemporaryDirectory() as td:
+            fake = Path(td)
+            for name, body in files.items():
+                path = fake / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(body)
+            real_root, real_errors = lint.ROOT, lint.ERRORS
+            try:
+                lint.ROOT, lint.ERRORS = fake, []
+                lint.check_delegate_audit_trails()
+                return list(lint.ERRORS)
+            finally:
+                lint.ROOT, lint.ERRORS = real_root, real_errors
+
+    check("audit: complete JSON and tier policy passes", run_against(good) == [],
+          f"got {run_against(good)}")
+
+    text_output = dict(good)
+    text_output["skills/cursor-adversarial-review/SKILL.md"] = "--output-format text\n"
+    got = run_against(text_output)
+    check("audit: flags Cursor text output", any("--output-format json" in e for e in got),
+          f"got {got}")
+
+    merged_streams = dict(good)
+    merged_streams["skills/cursor-implement/SKILL.md"] = (
+        "--output-format json\n"
+        '"$(cat \"$RUN_DIR/task.md\")" > "$RUN_DIR/impl.json" 2>&1\nrequest_id\n'
+    )
+    got = run_against(merged_streams)
+    check("audit: flags Cursor JSON contaminated by stderr", any("impl.err" in e for e in got),
+          f"got {got}")
+
+    missing_request_id = dict(good)
+    missing_request_id["skills/cursor-adversarial-review/SKILL.md"] = (
+        "--output-format json\n"
+        '"$(cat \"$RUN_DIR/prompt.md\")" > "$RUN_DIR/review.json" 2> "$RUN_DIR/review.err"\n'
+    )
+    got = run_against(missing_request_id)
+    check("audit: flags Cursor output with no request identity",
+          any("request_id" in e for e in got), f"got {got}")
+
+    mismatched_tier = dict(good)
+    mismatched_tier["skills/agy-adversarial-review/SKILL.md"] = (
+        "AGY_MODEL=gemini-3.7-flash-high\nAGY_EFFORT=low\n"
+        '--model "$AGY_MODEL"\n--effort "$AGY_EFFORT"\n'
+    )
+    got = run_against(mismatched_tier)
+    check("audit: flags mismatched agy model and effort tiers",
+          any("does not match" in e for e in got), f"got {got}")
+
+
 # ------------------------------------------------------------ lint version ----
 def test_lint_version(tmp):
     """check_version(): both rules, and the two things that make them honest.
@@ -585,6 +664,9 @@ def main():
 
     print("lint.py check_delegate_guardrails")
     test_lint_delegate_guardrails()
+
+    print("lint.py check_delegate_audit_trails")
+    test_lint_delegate_audit_trails()
 
     print("lint.py check_version")
     with tempfile.TemporaryDirectory() as td:
