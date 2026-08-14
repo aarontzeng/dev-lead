@@ -375,6 +375,72 @@ def test_lint_frozen_target():
           "the shipped review skills disagree")
 
 
+# --------------------------------------------------- lint delegate guardrails ----
+def test_lint_delegate_guardrails():
+    """check_delegate_guardrails(): dispatch safety must stay fail-closed.
+
+    These are review findings against real role skills.  A presence-only
+    check would miss the unsafe `remote-refs.after` handoff, so exercise both
+    required and forbidden forms in a synthetic tree.
+    """
+    sys.path.insert(0, str(SCRIPTS))
+    import lint
+
+    good = {
+        "skills/grok-adversarial-review/SKILL.md": "--deny 'MCPTool(*)'\n",
+        "skills/grok-implement/SKILL.md":
+            '"$DEV_LEAD/scripts/snapshot-refs.sh" check "$WORKTREE" "$RUN_DIR/remote-refs.before" || exit 1\n',
+        "skills/cursor-implement/SKILL.md":
+            '"$DEV_LEAD/scripts/snapshot-refs.sh" check "$WORKTREE" "$RUN_DIR/remote-refs.before" || exit 1\n',
+    }
+
+    def run_against(files):
+        with tempfile.TemporaryDirectory() as td:
+            fake = Path(td)
+            for name, body in files.items():
+                path = fake / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(body)
+            real_root, real_errors = lint.ROOT, lint.ERRORS
+            try:
+                lint.ROOT, lint.ERRORS = fake, []
+                lint.check_delegate_guardrails()
+                return list(lint.ERRORS)
+            finally:
+                lint.ROOT, lint.ERRORS = real_root, real_errors
+
+    check("delegate: hardened policy passes", run_against(good) == [],
+          f"got {run_against(good)}")
+
+    no_mcp_deny = dict(good)
+    no_mcp_deny["skills/grok-adversarial-review/SKILL.md"] = "--tools read_file\n"
+    got = run_against(no_mcp_deny)
+    check("delegate: flags a Grok review without MCP denial",
+          any("MCPTool" in e for e in got), f"got {got}")
+
+    raw_after_snapshot = dict(good)
+    raw_after_snapshot["skills/grok-implement/SKILL.md"] += "remote-refs.after\n"
+    got = run_against(raw_after_snapshot)
+    check("delegate: flags a raw refs-after handoff",
+          any("remote-refs.after" in e for e in got), f"got {got}")
+
+    non_aborting_check = dict(good)
+    non_aborting_check["skills/grok-implement/SKILL.md"] = (
+        '"$DEV_LEAD/scripts/snapshot-refs.sh" check "$WORKTREE" '
+        '"$RUN_DIR/remote-refs.before"\n'
+    )
+    got = run_against(non_aborting_check)
+    check("delegate: flags a ref check that can continue after failure",
+          any("|| exit 1" in e for e in got), f"got {got}")
+
+    missing_check = dict(good)
+    missing_check["skills/cursor-implement/SKILL.md"] = "git status --short\n"
+    got = run_against(missing_check)
+    check("delegate: flags a Cursor handoff without fail-closed ref check",
+          any("cursor-implement" in e and "snapshot-refs.sh" in e for e in got),
+          f"got {got}")
+
+
 # ------------------------------------------------------------ lint version ----
 def test_lint_version(tmp):
     """check_version(): both rules, and the two things that make them honest.
@@ -516,6 +582,9 @@ def main():
 
     print("lint.py check_frozen_target")
     test_lint_frozen_target()
+
+    print("lint.py check_delegate_guardrails")
+    test_lint_delegate_guardrails()
 
     print("lint.py check_version")
     with tempfile.TemporaryDirectory() as td:

@@ -40,7 +40,7 @@ DEV_LEAD=${DEV_LEAD_ROOT:-$(ls -d "$HOME"/.claude/plugins/cache/dev-lead/dev-lea
 The snapshot matters MORE here than on agy: grok's shell tool is
 unrestricted inside its permission mode, so the no-push rule is
 **instruction level** on this adapter (state it in the task prompt), and the
-refs snapshot diffed at handoff is what turns "surely it didn't push" into
+fail-closed ref check at handoff is what turns "surely it didn't push" into
 evidence, either way.
 
 ## Launch
@@ -73,15 +73,18 @@ cd "$WORKTREE" && \
 
 ## Handoff
 
-Diff the refs snapshot, verify the worktree, then the lead reviews and
+Check the refs snapshot, verify the worktree, then the lead reviews and
 commits:
 
 ```bash
-"$DEV_LEAD/scripts/snapshot-refs.sh" save "$WORKTREE" "$RUN_DIR/remote-refs.after"
-diff "$RUN_DIR/remote-refs.before" "$RUN_DIR/remote-refs.after"   # any delta = a push happened; stop and report
+"$DEV_LEAD/scripts/snapshot-refs.sh" check "$WORKTREE" "$RUN_DIR/remote-refs.before" || exit 1
 git -C "$WORKTREE" status --porcelain=v1
 git -C "$WORKTREE" diff "$BASE" --stat
 ```
+
+The helper exits nonzero on a remote-ref delta, and `|| exit 1` makes that
+failure terminal for this handoff. Do not replace it with a second snapshot
+and a raw `diff`, which can be noticed but accidentally continued past.
 
 Whether grok leaves work committed or uncommitted in the worktree is
 UNVERIFIED (runtime file) — expect either, and treat the lead's own

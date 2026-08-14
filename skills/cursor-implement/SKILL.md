@@ -43,8 +43,8 @@ DEV_LEAD=${DEV_LEAD_ROOT:-$(ls -d "$HOME"/.claude/plugins/cache/dev-lead/dev-lea
 
 The snapshot is the no-push evidence on this adapter: the shell tool is
 fully available in the write posture, so the rule is instruction level —
-state it in the task prompt, then let the refs diff at handoff prove what
-happened either way.
+state it in the task prompt, then let the fail-closed ref check at handoff
+prove what happened either way.
 
 ## Launch
 
@@ -69,11 +69,14 @@ cd "$WORKTREE" && \
 ## Handoff
 
 ```bash
-"$DEV_LEAD/scripts/snapshot-refs.sh" save "$WORKTREE" "$RUN_DIR/remote-refs.after"
-diff "$RUN_DIR/remote-refs.before" "$RUN_DIR/remote-refs.after"   # any delta = a push happened; stop and report
+"$DEV_LEAD/scripts/snapshot-refs.sh" check "$WORKTREE" "$RUN_DIR/remote-refs.before" || exit 1
 git -C "$WORKTREE" status --porcelain=v1
 git -C "$WORKTREE" diff "$BASE" --stat
 ```
+
+The helper exits nonzero on a remote-ref delta, and `|| exit 1` makes that
+failure terminal for this handoff. Do not replace it with a second snapshot
+and a raw `diff`, which can be noticed but accidentally continued past.
 
 Whether cursor-agent leaves the worktree committed or dirty is UNVERIFIED —
 expect either; the lead's own verification pass (build, tests, real code
