@@ -74,9 +74,14 @@ through those entries; prefer ZDR-covered tiers for anything sensitive.
   hang is UNVERIFIED, so keep headless prompts lean and put the bulk (the
   embedded diff) early.
 - `--output-format json` (with `-p`) returns `result`, `session_id`,
-  `request_id`, token usage — and **no served-model field** (measured). Pin
-  `--model` explicitly and record the run's `request_id`; a stronger
-  served-model verification path is UNVERIFIED.
+  `request_id`, token usage — and **no served-model field** (measured). It is
+  this suite's only audit format for either role: redirect stdout to a per-run
+  `.json` file and stderr to a separate `.err` file, then preserve the JSON object.
+  `result` is the human-readable report; `session_id` and `request_id` bind
+  it to the dispatch. A missing `request_id` is an audit gap, not a value to
+  invent. The [Cursor output-format reference](https://cursor.com/docs/cli/reference/output-format)
+  documents the JSON fields; pin `--model` explicitly because a stronger
+  served-model verification path remains UNVERIFIED.
 - `--trust` is required for headless runs in fresh directories — every
   probe used it; without it a workspace-trust prompt has nowhere to go.
 - Flags that must never appear on a review launch: `-f`/`--force`,

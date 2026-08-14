@@ -63,13 +63,17 @@ risk observable instead of assumed away.
 ```bash
 # RUN_DIR was created in the worktree step above.
 # Write the task prompt to "$RUN_DIR/task.md" in its own step.
+# Confirm this Gemini pair is in the account catalogue; if not, replace BOTH
+# values with one available suffix pair. The first 3.7 Flash run is calibration.
+AGY_MODEL=gemini-3.7-flash-high
+AGY_EFFORT=high
 
 agy -p "$(cat "$RUN_DIR/task.md")" \
-    --model <gemini-tier> \
+    --model "$AGY_MODEL" \
     --mode accept-edits \
     --sandbox \
     --add-dir "$WORKTREE" \
-    --effort high \
+    --effort "$AGY_EFFORT" \
     --disable-slash-commands \
     --print-timeout 20m0s
 ```
@@ -84,11 +88,16 @@ Role-specific choices:
 - **`--mode accept-edits`** is the write mode and the whole point.
 - **`--add-dir "$WORKTREE"`** — the worktree, never the main checkout.
 - **`--print-timeout 20m0s`** — implementations run longer than reviews.
-- **Model** — your account's working Gemini tier. If the CLI exposes a
-  second family's pool on separate quota, that pool's strong model is a
-  legitimate implementer too (diversity does not constrain the implementer —
-  it constrains whoever reviews it afterward). Beware silently-downgrading
-  tier ids; verify from the log which model actually served (runtime file).
+- **Gemini model/effort pair** — the default keeps the current 3.7 Flash
+  `-high` suffix paired with `high`. If you deliberately choose `-medium` or
+  `-low` to suit the task, change both values together; mismatches are a CLI
+  error. Verify from the log which model actually served (runtime file), and
+  treat the first verified 3.7 run as calibration rather than an automatic
+  quality upgrade.
+- **Model family** — if the CLI exposes a second family's pool on separate
+  quota, that pool's strong model is a legitimate implementer too (diversity
+  constrains the reviewer, not the implementer). For Claude models, remove
+  `AGY_EFFORT` and `--effort` entirely.
 
 ## Writing the task prompt
 

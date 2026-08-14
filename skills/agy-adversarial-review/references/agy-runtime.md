@@ -132,10 +132,11 @@ everything here except `--mode`, whose value is the role.
 - `--effort` — a real flag (`low|medium|high`); agy tops out at `high`.
   **Gemini models only** — measured: it is rejected outright for the Claude
   pool's models (the "-thinking" in those ids is the whole effort control);
-  drop the flag entirely there. Not orthogonal to the `-high`/`-low` suffix
-  in Gemini model ids either — a CONTRADICTING pair
-  (`--effort low` with a `-high` model id) is a hard CLI error; a matching
-  explicit value is fine and preferred in a run log.
+  drop the flag entirely there. It is not orthogonal to the Gemini model-id
+  suffix: `-low`, `-medium`, and `-high` each require the identically named
+  explicit effort. A contradicting pair (for example `--effort low` with a
+  `-high` model id) is a hard CLI error; a matching value is preferred in the
+  run log.
 - `--print-timeout` — **the default (5m0s) cuts real work off mid-flight.**
   Use `10m0s` for a review, `20m0s` for an implementation.
 - `--disable-slash-commands` — stops prompt text being expanded as slash
@@ -176,6 +177,24 @@ second-pool Claude model is fine as an implementer anywhere, fine as a
 reviewer of Gemini/GPT work, and forbidden as a reviewer of Claude's own
 work.
 
+### Gemini 3.7 Flash: local catalogue baseline
+
+On 2026-08-14, this account's `agy models` catalogue included:
+
+```text
+gemini-3.7-flash-high
+gemini-3.7-flash-medium
+gemini-3.7-flash-low
+```
+
+[Google's 3.7 Flash announcement](https://blog.google/innovation-and-ai/models-and-research/gemini-models/introducing-gemini-3-7-flash/)
+establishes the release, not an account entitlement or a quality gate. The
+role skills therefore use the matching `-high`/`high` pair as their current
+Gemini default, but a different account must substitute an available matched
+pair and verify the served model from its log. The first locally verified 3.7
+run is calibration: append its verified outcome to the local journal before
+using it to make dispatch or gate decisions.
+
 Catalogue facts to re-verify on YOUR account (all measured on at least one):
 
 - **A requested model can be silently downgraded — the id you passed is not
@@ -192,9 +211,9 @@ Catalogue facts to re-verify on YOUR account (all measured on at least one):
   deeper tier only with evidence that the escalation actually took effect.
 - Entitlements differ per account and per machine — an id from another
   machine's notes may not be in your picker.
-- Newer flash tiers have superseded older ones on cost, cutoff, and coding
-  strength; a terser prose style is irrelevant for a delegate whose output
-  you parse.
+- A new flash generation is a calibration point, not an automatic reason to
+  retire an older tier or change the review gate. Compare local verified
+  outcomes after the first runs, not release branding or prose style.
 
 ## A mid-generation hang, distinct from the auth-layer failures below
 
