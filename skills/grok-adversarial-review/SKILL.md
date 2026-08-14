@@ -40,9 +40,10 @@ before AND after the run — are in
 was frozen at.
 ## Launch one machine-bounded read-only run
 
-The boundary is the headless tool allowlist, not trust: no shell tool, no
-edit tools, no subagents. The diff is embedded in the prompt because a
-delegate without a shell cannot run git (and must not need to).
+The boundary is the headless built-in tool allowlist plus explicit MCP denial,
+not trust: no shell tool, no edit tools, no MCP calls, no subagents. The diff
+is embedded in the prompt because a delegate without a shell cannot run git
+(and must not need to).
 
 ```bash
 RUN_DIR=$(mktemp -d "${TMPDIR:-/tmp}/grok-review.XXXXXX")
@@ -59,6 +60,7 @@ cd "$REVIEW_TARGET_DIR" && \
     --sandbox read-only \
     --tools "read_file,grep,list_dir" \
     --disallowed-tools "Agent" \
+    --deny 'MCPTool(*)' \
     --no-memory --disable-web-search --verbatim \
     --max-turns 40 \
     --output-format plain > "$RUN_DIR/review.out" 2>&1
@@ -75,6 +77,10 @@ file. Role-specific choices:
 - **`--disallowed-tools "Agent"`** is mandatory: subagents are documented as
   exempt from edit gates and inherit the account's always-approve default.
   It is also the suite's only machine-enforced no-recursive-delegation.
+- **`--deny 'MCPTool(*)'`** is mandatory: `--tools` limits built-in tools,
+  but MCP tools remain separately available. Grok matches their names as
+  `server__tool` (not `mcp__server__tool`), and a deny rule wins over any
+  account allow rule or always-approve setting; see the runtime reference.
 - **`-m grok-4.6` explicitly** — never inherit the catalogue default
   silently; `grok models` before the run, and verify the served model from
   the output once UNVERIFIED 5 is captured.

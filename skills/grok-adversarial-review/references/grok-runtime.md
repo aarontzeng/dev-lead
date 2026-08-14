@@ -71,13 +71,15 @@ Three mechanisms exist. They are not equivalent and they fail differently:
    warning. Pass it anyway (free where it works), but never count it as the
    boundary until the run log's warning-or-silence has been checked on YOUR
    host (UNVERIFIED: the warning's exact text).
-2. **`--tools "read_file,grep,list_dir"`** — a headless-only allowlist at
-   the tool layer (documented). No shell tool at all, so no git, no
-   redirection, no test runs: the delegate reads files and nothing else.
-   This is the layer the review skill actually leans on. Documented caveat:
-   MCP meta-tools remain available unless denied — on an account with MCP
-   servers wired, add them to `--disallowed-tools` (UNVERIFIED whether any
-   load headlessly on this account).
+2. **`--tools "read_file,grep,list_dir"` plus `--deny 'MCPTool(*)'`** — a
+   headless-only built-in allowlist, paired with a permission denial for the
+   separate MCP tool class. No shell tool at all, so no git, no redirection,
+   no test runs; the MCP denial closes the path that the built-in allowlist
+   does not cover. The [official permission reference](https://docs.x.ai/build/features/permissions)
+   documents that `MCPTool(...)` uses Grok's `server__tool` name form and
+   that deny wins over allow; `MCPTool(*)` therefore denies every configured
+   MCP server even under always-approve. This pair is the load-bearing review
+   boundary on hosts where the sandbox cannot enforce itself.
 3. **Plan mode** — an edit gate at the approval layer. The bundled guide is
    unusually honest about its two holes (documented, 1.0.3): bash commands
    are not inspected for file writes, and **subagents are not covered by the
@@ -143,9 +145,7 @@ family's rows are cited in any dispatch decision.
    `--sandbox read-only` on a pre-5.13 kernel; grep the log).
 2. Whether `--tools "read_file,grep,list_dir"` alone leaves any write path
    (probe: instruct a file write, verify refusal + clean tree).
-3. Whether MCP meta-tools appear headlessly on this account, and the
-   `--disallowed-tools` spelling that removes them.
-4. `grok-4.6`'s advertised `--effort` menu.
-5. How the served model is recorded in `--output-format json` (the
+3. `grok-4.6`'s advertised `--effort` menu.
+4. How the served model is recorded in `--output-format json` (the
    verify-served-model step every family requires).
-6. First real review: findings count, verified hit rate → journal row one.
+5. First real review: findings count, verified hit rate → journal row one.

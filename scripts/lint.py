@@ -29,6 +29,9 @@ Every check here guards against a failure this repo has ACTUALLY shipped
                 implementation worktree" / "whenever possible" / "preferred"
                 / silence) while all four used $REVIEW_TARGET_DIR without
                 ever saying where it comes from
+  delegates     review findings must keep Grok MCP calls denied and write
+                delegates must use the fail-closed remote-ref checker, not a
+                raw diff that merely reports a changed snapshot
   families      data/families.json must stay consistent with the skills on
                 disk, and a multi-family adapter must SAY so where a lead
                 reads it (agy serving both Gemini and Claude is exactly the
@@ -502,6 +505,46 @@ def check_frozen_target():
                 "is exactly how the suite ended up with four different rules")
 
 
+# ---- delegates: operational safety rules found by a real review ----
+# These are deliberately exact command fragments.  They are not broad prose
+# sentinels: each is the machine-enforced form that makes the intended
+# boundary real when a lead copies the launch or handoff block.
+DELEGATE_GUARDRAILS = {
+    "skills/grok-adversarial-review/SKILL.md": {
+        "required": ("--deny 'MCPTool(*)'",),
+        "forbidden": (),
+    },
+    "skills/grok-implement/SKILL.md": {
+        "required": (
+            '"$DEV_LEAD/scripts/snapshot-refs.sh" check "$WORKTREE" '
+            '"$RUN_DIR/remote-refs.before" || exit 1',
+        ),
+        "forbidden": ("remote-refs.after",),
+    },
+    "skills/cursor-implement/SKILL.md": {
+        "required": (
+            '"$DEV_LEAD/scripts/snapshot-refs.sh" check "$WORKTREE" '
+            '"$RUN_DIR/remote-refs.before" || exit 1',
+        ),
+        "forbidden": ("remote-refs.after",),
+    },
+}
+
+
+def check_delegate_guardrails():
+    for name, rules in DELEGATE_GUARDRAILS.items():
+        path = ROOT / name
+        if not path.is_file():
+            continue                          # check_structure() reports it
+        text = path.read_text(encoding="utf-8")
+        for required in rules["required"]:
+            if required not in text:
+                err(rel(path), f"missing required delegate guardrail: {required}")
+        for forbidden in rules["forbidden"]:
+            if forbidden in text:
+                err(rel(path), f"unsafe delegate handoff still contains: {forbidden}")
+
+
 # ---- families: the accounting model must match what is on disk ----
 def check_families():
     path = ROOT / "data" / "families.json"
@@ -570,6 +613,7 @@ def main():
                   check_links, check_paths, check_fences, check_mermaid,
                   check_var_order,
                   check_tracked, check_sentinels, check_frozen_target,
+                  check_delegate_guardrails,
                   check_families):
         check()
     if ERRORS:
