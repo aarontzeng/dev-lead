@@ -48,10 +48,17 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 FAMILIES = ("claude", "codex", "agy", "opencode", "grok", "cursor")
 ERRORS = []
+#: Things a check could NOT decide. Not failures -- but "all checks passed" is a
+#: lie when a check guarded nothing, and silence is how that lie gets believed.
+NOTES = []
 
 
 def err(path, msg):
     ERRORS.append(f"{path}: {msg}")
+
+
+def note(msg):
+    NOTES.append(msg)
 
 
 def md_files():
@@ -168,6 +175,18 @@ def check_manifest():
 # check goes green having guarded nothing. CI's checkout runs at fetch-depth: 0
 # for exactly this reason (.github/workflows/ci.yml) -- revert that to the
 # default shallow fetch and this check keeps passing while it stops working.
+#
+# CI is covered. A LOCAL run is not, and that is where it was measured biting:
+# 2026-08-15, an agent ran this lint twice in a marketplace clone whose tags had
+# never been fetched, read "all checks passed" both times, and committed two
+# changes past v0.3.2 with the manifest still declaring 0.3.2. One `git fetch`
+# later the same tree failed the same check. The paragraph above had predicted
+# it exactly -- prose in the source does not reach whoever is reading stdout.
+#
+# So a tagless run stays a PASS (a fresh clone is not a defect, and the tagless
+# case is deliberately not an error), but it no longer stays SILENT: it emits a
+# note saying which rule went unchecked and what to run. The distinction being
+# preserved is "this check did not fail" versus "this check did not happen".
 VERSION_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
 
 
@@ -222,7 +241,14 @@ def check_version():
         return                                  # rule 2 does not apply to a tag
 
     released = _git("describe", "--tags", "--abbrev=0", "--match", "v[0-9]*")
-    previous = _semver((released or "")[1:])
+    if not released:
+        note("version: no v* tag is reachable from HEAD, so the "
+             "'manifest must be ahead of the last release' rule was NOT "
+             "checked -- this run guarded nothing. A shallow or tag-less "
+             "clone looks identical to a genuinely untagged repo. "
+             "`git fetch --tags` and re-run before trusting a green here.")
+        return
+    previous = _semver(released[1:])
     if previous and version <= previous:
         err(rel(manifest),
             f"version '{declared}' is not ahead of released tag '{released}', "
@@ -667,12 +693,22 @@ def main():
                   check_delegate_audit_trails,
                   check_families):
         check()
+    if NOTES:
+        # Before the verdict, not after: a note that scrolls past the word
+        # "passed" is a note nobody reads.
+        print(f"lint: {len(NOTES)} check(s) could not be decided:\n")
+        for n in NOTES:
+            print(f"  {n}")
+        print()
     if ERRORS:
         print(f"FAIL — {len(ERRORS)} problem(s):\n")
         for e in ERRORS:
             print(f"  {e}")
         sys.exit(1)
-    print("lint: all checks passed")
+    if NOTES:
+        print("lint: no failures, but see the undecided check(s) above")
+    else:
+        print("lint: all checks passed")
 
 
 if __name__ == "__main__":
