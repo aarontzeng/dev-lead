@@ -537,6 +537,11 @@ def test_lint_version(tmp):
     sys.path.insert(0, str(SCRIPTS))
     import lint
 
+    #: what the LAST run_against() call could not decide -- errors are the
+    #: verdict, notes are "this rule never executed", and the difference is the
+    #: whole point of the two checks at the end of this function.
+    last_notes = []
+
     def run_against(name, declared, tag=None, commits_after=0,
                     working=None, commit_manifest=True):
         """A real repo, then check_version() with lint.ROOT pointed at it.
@@ -562,13 +567,14 @@ def test_lint_version(tmp):
             git(repo, "commit", "-qm", f"later {i}")
         if working:
             mf.write_text(body(working))
-        real_root, real_errors = lint.ROOT, lint.ERRORS
+        real_root, real_errors, real_notes = lint.ROOT, lint.ERRORS, lint.NOTES
         try:
-            lint.ROOT, lint.ERRORS = repo, []
+            lint.ROOT, lint.ERRORS, lint.NOTES = repo, [], []
             lint.check_version()
+            last_notes[:] = list(lint.NOTES)
             return list(lint.ERRORS)
         finally:
-            lint.ROOT, lint.ERRORS = real_root, real_errors
+            lint.ROOT, lint.ERRORS, lint.NOTES = real_root, real_errors, real_notes
 
     # rule 1 — HEAD carries a tag, and the tag's own tree is what it declares
     got = run_against("match", "0.2.0", tag="v0.2.0")
@@ -614,6 +620,22 @@ def test_lint_version(tmp):
     got = run_against("untagged", "0.2.0")
     check("version: no tags in the tree is silence, not failure", got == [],
           f"got {got}")
+    # ...but silence in the ERROR channel is not silence on stdout. Measured
+    # 2026-08-15: an agent ran this lint twice in a marketplace clone whose tags
+    # had never been fetched, read "all checks passed" both times, and shipped
+    # two commits past v0.3.2 with the manifest still declaring 0.3.2. The
+    # check's own comment had predicted exactly that -- prose in the source does
+    # not reach whoever is reading stdout. A tagless run stays a PASS and stops
+    # being SILENT.
+    check("version: a tagless run SAYS it guarded nothing",
+          any("guarded nothing" in n for n in last_notes), f"notes {last_notes}")
+
+    # The other direction, which is the one that would rot: a run that really
+    # did check must not emit the note, or the note becomes wallpaper and the
+    # tagless case is invisible again.
+    run_against("bumped_quiet", "0.2.0", tag="v0.1.0", commits_after=3)
+    check("version: a run that DID check stays quiet", last_notes == [],
+          f"notes {last_notes}")
 
     got = run_against("nonsemver", "0.2", tag="v0.2.0")
     check("version: flags a non-semver manifest version",
