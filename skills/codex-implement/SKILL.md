@@ -56,7 +56,10 @@ Worktrees isolate tracked working files, not databases, ports, credentials,
 absolute paths, or the shared `.git` directory. They also **omit** everything
 git does not track — the virtualenv, the `.env`, built assets — so a pinned
 test command naming any of those cannot run there at all; see `dev-lead`
-Phase 1 for the measured incident and what to do before dispatch. Do not run two writers in the
+Phase 1 for the measured incident and what to do before dispatch. **Provision
+the delegate a sanitized minimum, never the real `.env`** — this sandbox is
+`workspace-write` over the whole worktree, so a secrets file copied in is a
+secrets file handed over. Do not run two writers in the
 same worktree. Serialize tests that share a schema or service, or use an
 isolated test resource. Do not pass `--add-dir` unless the extra writable
 directory is necessary and explicitly in scope.

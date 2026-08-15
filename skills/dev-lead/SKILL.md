@@ -121,11 +121,33 @@ is what missing extras look like when nobody compares the totals. The lead's
 own re-run in the worktree then failed at *collection* until `.env` was copied
 in, which no test output would have explained.
 
-So, before dispatch: run the pinned command in the worktree yourself, or copy
-in the untracked prerequisites and say in the task prompt which interpreter to
-use. And when a delegate reports a suite total, **compare it to your baseline
-digit for digit** — a total that differs by more than the tests you added is a
-different environment, not a different result.
+So, before dispatch: run the pinned command in the worktree yourself, provision
+what it needs, and say in the task prompt which interpreter to use. And when a
+delegate reports a suite total, **compare it to your baseline digit for
+digit** — a total that differs by more than the tests you added is a different
+environment, not a different result.
+
+**"Provision" is not "copy the real one."** The untracked file the suite wants
+is very often the one holding every credential the project has, and a write
+delegate has its whole worktree inside its sandbox — so copying it in hands a
+third-party model your API keys, your database URL, and, in the repo this was
+measured on, a **broker** key that moves real money. Twenty-two credential keys
+in one `.env`. Never that.
+
+The split that keeps both halves honest:
+
+- **Delegate worktree** — the minimum sanitized config, and nothing that is
+  secret. Better still, let the delegate mint its own: measured on the same
+  run, the delegate hit the missing config, set a throwaway
+  `SECRET_KEY='test-only-<slug>'` inline, and completed 2511 tests without ever
+  needing a real value. The safe path is not a compromise here; it is what
+  actually happened, unprompted.
+- **The lead's own verification run** — the real file is fine. The lead already
+  holds these credentials; using them is not an exposure. This is the run whose
+  total is authoritative anyway.
+
+If the suite genuinely cannot start without a real secret, that is a finding
+about the repo's test setup, not a reason to ship the secret into a sandbox.
 
 Reviewer — the cross-family rule is absolute (implementer's family never
 reviews its own change). Review is the leverage point, so it gets the
