@@ -97,6 +97,20 @@ believed it. Ordered roughly by how early in a round they bite.
   that killed it — the other fix in the same round supplied the value
   before the code under test was reached. A combined revert cannot tell
   "both covered" from "one covered twice".
+- **One mutation does not clear a round that shipped two DIFFERENT KINDS
+  of test.** A behavioural test and a static/structural guard (an AST sweep,
+  an import-graph rule, a "no call site may…" check) answer different
+  questions, so they need different mutations — and the behavioural one can
+  leave the guard's predicate untouched. Measured: a round shipped a two-user
+  database test plus an AST guard reading "no function may query this table
+  without a user identity in scope". Deleting the `user_id` filter killed the
+  database test and the guard **passed** — the enclosing function still took
+  `user_id` for an unrelated query, so the predicate was still satisfied. The
+  guard was not broken; it guards a different proposition than the round's
+  prose claimed. Mutate each test with the shape IT forbids (for the guard: add a
+  fresh violating function, then a renamed copy in another file), and when the
+  two disagree, the honest fix is to write the measured boundary into the
+  guard's own docstring — the divergence IS the finding.
 - **Mutate the EXECUTION site, not the wiring site.** Killing a mutation
   by deleting the config/registration that feeds a feature proves only
   that some test notices the config is missing. Re-mutate the code path
