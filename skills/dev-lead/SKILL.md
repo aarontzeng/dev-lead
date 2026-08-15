@@ -104,6 +104,29 @@ dispatch. Reusing a task file verbatim across a family switch produces a
 silent, output-less death that reads like a code problem and is a prompt
 problem. Re-read the target skill's task-prompt section on every switch.
 
+**The worktree is missing everything the suite needs that git does not track,
+and the delegate will not tell you — it will quietly use something else.**
+Worktree isolation is usually discussed as "what is shared" (databases, ports,
+the `.git` index). The failure that actually bites is the opposite category:
+the virtualenv, the `.env`, the built assets, the fixture cache. They are
+gitignored, so they exist only in the main checkout, and a pinned test command
+naming any of them cannot run in the worktree at all.
+
+Measured: a lead pinned `cd backend && source venv/bin/activate && pytest …`
+with a baseline of "2649 passed". `venv/` is gitignored. The delegate found the
+activate script absent, fell back to the login shell's `python`, and reported
+**2511 passed / 137 skipped** as its green. Nothing lied — but a different
+interpreter's green and the repo's green are not the same claim, and 137 skips
+is what missing extras look like when nobody compares the totals. The lead's
+own re-run in the worktree then failed at *collection* until `.env` was copied
+in, which no test output would have explained.
+
+So, before dispatch: run the pinned command in the worktree yourself, or copy
+in the untracked prerequisites and say in the task prompt which interpreter to
+use. And when a delegate reports a suite total, **compare it to your baseline
+digit for digit** — a total that differs by more than the tests you added is a
+different environment, not a different result.
+
 Reviewer — the cross-family rule is absolute (implementer's family never
 reviews its own change). Review is the leverage point, so it gets the
 strongest tier available:
@@ -206,6 +229,16 @@ user can set it at invocation. Each round:
    the same grade the finding needed** — the `file:line` that refutes it, or
    a command actually run. "I judged it wrong" is not a rejection; it is an
    unaudited veto at the one step where the lead reviews nobody but itself.
+   **What the lead fixes directly never gets reviewed, and that is where the
+   next defect is.** The fix round runs after the legs have returned, so the
+   lead's own edits — the ones the skill explicitly encourages for small,
+   precisely diagnosed defects — enter the merge with zero cross-family eyes on
+   them. Measured: in one round the only BROKEN verdict any leg returned was
+   about a test the LEAD had written after the delegate finished, and it was
+   right. Either fold lead fixes into a re-review, or at minimum hold them to
+   the mutation standard you hold the delegate's work to, and say in the run
+   log which parts of the final diff no leg ever saw.
+
 4. **Route**: no verified blocking findings → merge gate. Verified findings →
    next round. Small, precisely diagnosed defects (a fake test, a stray
    trailer) the lead fixes directly in-place — a delegation round for a

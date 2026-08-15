@@ -53,7 +53,10 @@ git worktree add -b codex/<short-task-slug> ../<repo>-codex-<short-task-slug> "$
 ```
 
 Worktrees isolate tracked working files, not databases, ports, credentials,
-absolute paths, or the shared `.git` directory. Do not run two writers in the
+absolute paths, or the shared `.git` directory. They also **omit** everything
+git does not track — the virtualenv, the `.env`, built assets — so a pinned
+test command naming any of those cannot run there at all; see `dev-lead`
+Phase 1 for the measured incident and what to do before dispatch. Do not run two writers in the
 same worktree. Serialize tests that share a schema or service, or use an
 isolated test resource. Do not pass `--add-dir` unless the extra writable
 directory is necessary and explicitly in scope.
