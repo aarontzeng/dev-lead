@@ -59,6 +59,17 @@ differently-briefed legs each found the only instance of their own class:
   but still reads as live? Append-only docs create this hazard by
   construction, and no other role looks for it.
 
+**Write your own findings down BEFORE the legs fire.** The overlap number is
+the whole evidence base for brief diversity, and a lead who reads three reports
+and then recalls what it "already knew" will produce a flattering one every
+time. Seal the lead's list into the run log first — including the candidates
+you checked and rejected, with the evidence that refuted them. Measured on a
+three-leg round: one sealed lead finding was independently reproduced by
+exactly one leg, principal findings overlapped on one item out of nine, and the
+single strongest finding came from the free leg on a diff two paid legs had
+already read. None of those three numbers survives being reconstructed
+afterwards.
+
 A model can be wrong for one role and right for another. A "fast" tier that
 underperforms on defect-hunting produced the deepest finding of a five-round
 sequence when given the challenge brief. Blanket "model X is unfit for review"
