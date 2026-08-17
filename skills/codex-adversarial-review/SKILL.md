@@ -130,6 +130,13 @@ test -z "$(git status --porcelain)"
 If either check fails, stop and report the unexpected mutation before
 trusting the review output.
 
+- **Materializing evidence the frozen tree does not contain** — another
+  revision's copy, a merge-base baseline — has cross-family rules on where it
+  goes and what guarantees it carries:
+  [`docs/materializing-evidence.md`](../../docs/materializing-evidence.md).
+  Never write scratch files into the frozen target: `verify-target.sh` takes no
+  whitelist and refuses to certify a dirty directory.
+
 ## Write a useful focus prompt
 
 Supply focus text with all of the following:
