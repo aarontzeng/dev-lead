@@ -7,6 +7,7 @@ class of bug these scripts exist to remove (a bracket that checks the wrong
 directory still exits 0, and reads as a passing safety check).
 """
 import json
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -173,6 +174,23 @@ def test_verify(tmp, frozen, sha):
     r11b = run(verify, frozen, sha, "opencode.json", "f0.txt")
     check("verify: a clean tracked path cannot be declared as scaffolding", r11b.returncode != 0)
     scaffold.unlink()
+
+    # An untracked DIRECTORY collapses to one "?? scaffold/" entry under the
+    # porcelain default, so declaring the directory would permit everything
+    # inside it: adding a second file leaves that single entry unchanged.
+    # Measured before the --untracked-files=all fix: both calls returned 0.
+    subdir = Path(frozen) / "scaffolddir"
+    subdir.mkdir()
+    (subdir / "a.txt").write_text("one\n")
+    r13 = run(verify, frozen, sha, "scaffolddir/")
+    check("verify: a bare directory declaration is not accepted", r13.returncode != 0)
+    r13b = run(verify, frozen, sha, "scaffolddir/a.txt")
+    check("verify: the file inside it can be declared by name", r13b.returncode == 0, r13b.stderr)
+    (subdir / "SMUGGLED.txt").write_text("undeclared\n")
+    r13c = run(verify, frozen, sha, "scaffolddir/a.txt")
+    check("verify: an undeclared sibling in a declared dir is caught", r13c.returncode != 0)
+    check("verify: names the smuggled file", "SMUGGLED.txt" in r13c.stderr, r13c.stderr)
+    shutil.rmtree(subdir)
 
     r12 = run(verify, frozen, sha)
     check("verify: clean again after scaffolding is removed", r12.returncode == 0, r12.stderr)

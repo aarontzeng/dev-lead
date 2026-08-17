@@ -113,6 +113,28 @@ reads the same after a rewrite, and this leg's allow-list reaches
 in the lead as well; the two answer different questions. Remove the claims file
 and restore any original config after the run.
 
+**A declaration only works when the config is untracked.** If the target's own
+repo tracks `opencode.json`, the `mv`-and-write above produces ` M
+opencode.json`, and `verify-target.sh` rejects a declared tracked path by
+design — a modified tracked file is a mutation of the reviewed tree, never
+scaffolding, and loosening that would reopen exactly the hole the rule closes.
+Bracket **outside** the scaffold window instead, which is strictly stronger
+than a declaration would have been:
+
+| step | tracked `opencode.json` | untracked |
+|---|---|---|
+| after freeze, before writing the config | `verify-target.sh "$DIR" "$REVIEW_HEAD"` — no declarations, must be fully clean | same |
+| write scaffold, record `SCAFFOLD_SHA`, run the leg | — | — |
+| after the run | compare `SCAFFOLD_SHA` — this is what covers the window | same |
+| then restore | `mv "$RUN_DIR/opencode.json.orig"` back; `rm REVIEW-CLAIMS.md` | `rm opencode.json REVIEW-CLAIMS.md` |
+| after restoring | `verify-target.sh "$DIR" "$REVIEW_HEAD"` — no declarations, must be fully clean | same |
+
+The closing bracket proving clean is what proves the restore was byte-exact:
+a `mv`-back that produced anything other than the committed content would
+still show ` M opencode.json`. Order matters — compare `SCAFFOLD_SHA` **before**
+restoring, or the restore erases the evidence of a rewrite and cleanup's
+success gets reported as the run's.
+
 ## Run it
 
 Capture `REVIEW_HEAD` **when you freeze the target**, not immediately before

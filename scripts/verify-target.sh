@@ -41,13 +41,19 @@ if [ "$actual" != "$expected" ]; then
   die "HEAD moved: $dir is at $actual, expected $expected -- the review target was NOT frozen; discard this run's conclusions"
 fi
 
+# --untracked-files=all: the default collapses an untracked directory to a
+# single "?? scaffold/" entry, so a declaration of "scaffold/" would permit an
+# entire subtree — adding scaffold/anything leaves that one entry unchanged.
+# Measured: declaring "scaffold/" certified a target after an undeclared second
+# file appeared inside it. Listing every file makes one declaration permit one
+# file, which is what the flag name promises.
 # -c core.excludesFile=/dev/null: a LEAD's personal global gitignore must not
 # decide what counts as a clean review target. Measured — a procedure that
 # dropped `REVIEW-*.md` scaffolding into frozen targets certified fine on the
 # machine that wrote it, because that machine's ~/.gitignore matched the name,
 # and would have failed for everyone else. The project's own .gitignore still
 # applies; only the operator's personal file is neutralised.
-dirty=$(git -C "$dir" -c core.excludesFile=/dev/null status --porcelain=v1)
+dirty=$(git -C "$dir" -c core.excludesFile=/dev/null status --porcelain=v1 --untracked-files=all)
 
 if [ $# -eq 0 ]; then
   if [ -n "$dirty" ]; then

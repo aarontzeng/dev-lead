@@ -83,8 +83,9 @@ Check these, not the syntax of the example below:
 2. **Explicit inventory**, not a glob — a `*.md` digest silently ignores
    a `handler.py` you also placed there.
 3. **Immutable for the duration**, not merely equal at the endpoints:
-   make `$RUN_DIR` unwritable before launch. Edit → read → restore
-   passes a before/after digest.
+   make `$RUN_DIR/evidence` unwritable before launch — **not `$RUN_DIR`
+   itself**, which every leg still needs writable for its own log and prompt
+   file. Edit → read → restore passes a before/after digest.
 4. **Digest held by the lead**, never written into a granted directory,
    and re-checked after the run alongside the `verify-target.sh`
    bracket — which only inspects `$REVIEW_TARGET_DIR`.
