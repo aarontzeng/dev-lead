@@ -173,12 +173,32 @@ model:
   second `--add-dir`** (the flag is repeatable):
 
   ```bash
+  set -o pipefail   # git show's failure must not be masked by sed's success
   git -C "$REPO" show "$OTHER_REV":path/to/file.md \
     | sed -n '/^## Section/,/^## Next/p' > "$RUN_DIR/parent-section.md"
+  [ -s "$RUN_DIR/parent-section.md" ] \
+    || { echo "materialized evidence is empty: wrong rev, wrong path, or the heading moved" >&2; exit 1; }
+  sha256sum "$RUN_DIR"/*.md > "$RUN_DIR/evidence.sha256"
 
   agy -p "$(cat "$RUN_DIR/prompt.md")" --model <gemini-tier> --mode plan --sandbox \
       --add-dir "$REVIEW_TARGET_DIR" --add-dir "$RUN_DIR" --effort high --print-timeout 15m0s
+
+  sha256sum -c "$RUN_DIR/evidence.sha256"   # evidence unchanged — run this
+                                            # alongside the verify-target.sh
+                                            # bracket the section above requires
   ```
+
+  **Both post-run checks are required, and the emptiness guard is not
+  optional.** A wrong `$OTHER_REV`, a wrong path, or a heading that moved
+  leaves `parent-section.md` empty while the pipeline still exits 0
+  (without `pipefail` the status is `sed`'s), and the launch below it is
+  unconditional — so the leg compares against nothing and reports whatever
+  that produces. And because `--add-dir` grants a *writable* directory
+  while plan mode is behavioral rather than enforced, the second
+  `sha256sum -c` is what makes the evidence as trustworthy as the frozen
+  target: without it, a delegate that edited its own comparison input
+  would still pass `verify-target.sh`, which only ever looks at
+  `$REVIEW_TARGET_DIR`.
 
   **Do not write these files into the frozen target.** The suite ships no
   ignore rule for them, so an untracked scratch file there shows up in
