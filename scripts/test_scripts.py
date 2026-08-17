@@ -275,13 +275,14 @@ def test_snapshot(tmp):
 
 # -------------------------------------------------------------- lint paths ----
 def test_lint_helper_args():
-    """HELPER_CALL_RE must see BOTH written forms of a call site.
+    """The regex must see every written form, and the ROLE must decide the name.
 
-    The first version required whitespace immediately after `.sh`, so it
-    matched the markdown-table shorthand that motivated it and missed
-    `"$DEV_LEAD/scripts/verify-target.sh" "$DIR"` — this repo's own canonical
-    form — where a closing quote sits in between. A check that only fires on
-    the instance you already fixed is not a check.
+    Three shipped versions of this check were each wrong in a way that looked
+    right: it required whitespace after `.sh` (missing the repo's own quoted,
+    path-qualified form); it listed snapshot-refs.sh, whose subcommand sits
+    where the pattern wants the variable, matching 0 of 12 call sites; and it
+    accepted both target names everywhere, which green-lights $FROZEN_DIR
+    inside a review skill that never defines it.
     """
     sys.path.insert(0, str(SCRIPTS))
     import lint
@@ -296,15 +297,29 @@ def test_lint_helper_args():
         check(f"helper-args: sees the {name} form",
               found == [("verify-target.sh", "DIR")], f"{name}: {found!r}")
 
-    ok = '"$DEV_LEAD/scripts/verify-target.sh" "$REVIEW_TARGET_DIR" "$REVIEW_HEAD"'
-    found = lint.HELPER_CALL_RE.findall(ok)
-    check("helper-args: the correct var is matched, then accepted",
-          found == [("verify-target.sh", "REVIEW_TARGET_DIR")], repr(found))
-
     # freeze-target.sh legitimately takes the SOURCE repo, not the frozen dir
     check("helper-args: freeze-target.sh is matched but exempted at the call site",
           lint.HELPER_CALL_RE.findall('freeze-target.sh "$REPO" "$SHA"')
           == [("freeze-target.sh", "REPO")])
+
+    # snapshot-refs.sh save|check <dir> <outfile> — the subcommand sits where
+    # the pattern wants the variable, and its <dir> is an implement $WORKTREE,
+    # not a frozen review target. Claiming coverage of it was the defect.
+    check("helper-args: snapshot-refs.sh is out of scope, not silently unmatched",
+          lint.HELPER_CALL_RE.findall(
+              '"$DEV_LEAD/scripts/snapshot-refs.sh" save "$WORKTREE" "$OUT"') == [],
+          "snapshot-refs.sh must not be in HELPER_CALL_RE at all")
+    check("helper-args: and it is absent from the pattern by construction",
+          "snapshot-refs" not in lint.HELPER_CALL_RE.pattern)
+
+    # the role decides the name — an allowlist accepting both would pass all
+    # four of these, and the middle two are the defect it was meant to catch
+    check("helper-args: the lead skill's own name is $FROZEN_DIR",
+          lint.LEAD_DIR_VAR == "FROZEN_DIR" and lint.LEG_DIR_VAR == "REVIEW_TARGET_DIR")
+    check("helper-args: the lead-skill path is compared as a string, not a Path",
+          lint.LEAD_SKILL == "skills/dev-lead/SKILL.md"
+          and str(lint.rel(lint.ROOT / lint.LEAD_SKILL)) == lint.LEAD_SKILL,
+          "rel() returns a PosixPath; PosixPath == str is always False")
 
 
 def test_lint_paths():
