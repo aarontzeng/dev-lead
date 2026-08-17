@@ -177,50 +177,64 @@ model:
   gitignore happens to cover the name will not see this and will ship a
   procedure that fails for everyone else.
 
-  Four properties that step must have. The snippet below is one way to
-  get them, not the only one — check the properties, not the syntax:
+  **Materialize whole files, not extracted sections, unless the file is
+  genuinely too large for the delegate's budget.** A section extracted by
+  delimiter matching cannot be verified by delimiter matching: a fenced
+  example inside the section containing a line that looks like the closing
+  heading stops the extraction early, and a naive "did it end at the right
+  heading" check then passes, because the last line really is that
+  heading. Markdown contract pages are full of fenced blocks; this is not
+  hypothetical. Handing over the whole file removes the entire class. When
+  a range is unavoidable, resolve its line numbers first, read them
+  yourself, and pass explicit `sed -n 'A,Bp'` bounds rather than patterns.
 
-  1. **Extraction verified, not assumed.** A wrong rev, a wrong path, a
-     missing opening heading, *or a missing closing one* must stop the
-     run. `set -o pipefail` (or `git show` fails silently into `sed`'s
-     success) plus a non-empty check plus a check that extraction ended
-     where you expected — a `sed` range whose closing delimiter moved
-     prints to EOF, which is non-empty and passes a naive guard.
-  2. **Explicit inventory.** List the files you materialized; do not
-     select them by glob or extension. A `*.md` digest silently ignores a
-     `handler.py` you also placed there.
-  3. **Digest held by the lead, never on disk.** `$RUN_DIR` is writable
-     by the delegate, so a manifest stored there can be regenerated
-     beside the file it certifies.
-  4. **Checked again after the run**, alongside the `verify-target.sh`
-     bracket — which only ever inspects `$REVIEW_TARGET_DIR`.
+  Four properties the materialization step must have. The snippet is one
+  way to get them, not the only one — check the properties, not the syntax:
+
+  1. **Extraction verified, not assumed.** A wrong rev or path must stop
+     the run — `set -o pipefail`, or `git show`'s failure disappears into
+     `sed`'s success — and so must an empty result.
+  2. **Explicit inventory.** List what you materialized; do not select by
+     glob or extension. A `*.md` digest silently ignores a `handler.py`
+     you also placed there.
+  3. **Immutable for the duration, not merely equal at the endpoints.**
+     Make `$RUN_DIR` unwritable before launching. A before/after digest
+     alone proves only the final state: a delegate that edits evidence,
+     reads what it wrote, and restores the original still passes.
+  4. **Digest held by the lead and re-checked after the run.** `$RUN_DIR`
+     was delegate-readable, so a manifest stored there could be
+     regenerated beside what it certifies. Re-check alongside the
+     `verify-target.sh` bracket, which only inspects `$REVIEW_TARGET_DIR`.
 
   ```bash
   set -o pipefail
-  EVIDENCE=("$RUN_DIR/parent-section.md")            # explicit inventory
+  EVIDENCE=("$RUN_DIR/parent-file.md")                 # explicit inventory
 
-  git -C "$REPO" show "$OTHER_REV":path/to/file.md \
-    | sed -n '/^## Section/,/^## Next/p' > "${EVIDENCE[0]}"
-  [ -s "${EVIDENCE[0]}" ] || { echo "no evidence extracted: rev, path, or opening heading" >&2; exit 1; }
-  tail -n1 "${EVIDENCE[0]}" | grep -q '^## Next' \
-    || { echo "extraction ran past its closing heading — range is wrong" >&2; exit 1; }
+  git -C "$REPO" show "$OTHER_REV":path/to/file.md > "${EVIDENCE[0]}"
+  [ -s "${EVIDENCE[0]}" ] || { echo "no evidence materialized: wrong rev or path" >&2; exit 1; }
 
   EVIDENCE_SHA=$(sha256sum "${EVIDENCE[@]}" | sha256sum)   # lead-held, never written to disk
+  chmod -R a-w "$RUN_DIR"                                  # immutable while the delegate runs
 
   agy -p "$(cat "$RUN_DIR/prompt.md")" --model <gemini-tier> --mode plan --sandbox \
       --add-dir "$REVIEW_TARGET_DIR" --add-dir "$RUN_DIR" --effort high --print-timeout 15m0s
 
+  chmod -R u+w "$RUN_DIR"
   [ "$(sha256sum "${EVIDENCE[@]}" | sha256sum)" = "$EVIDENCE_SHA" ] \
     || { echo "evidence changed during the run — discard this review" >&2; exit 1; }
   ```
 
+  (Write `prompt.md` before the `chmod`, or keep it outside `$RUN_DIR`.)
+
   **The rule these four share, worth carrying to any future guard in this
   suite: a check stored where the thing it checks can be modified is
-  decoration, and a guard that cannot fail on the input it screens is
-  decoration too.** Four review rounds went into rediscovering it on this
-  one paragraph — each fix correct about the defect in front of it and
-  wrong about where it put the guarantee. Ask where the record lives, and
-  what input would make the check fire, before trusting what it says.
+  decoration; a guard that cannot fail on the input it screens is
+  decoration; and a check that only samples the endpoints says nothing
+  about the interval between them.** Five review rounds went into
+  rediscovering that on this one paragraph, each fix correct about the
+  defect in front of it and wrong one level down. Ask where the record
+  lives, what input would make the check fire, and over what window it
+  holds — before trusting what it says.
 
   **Do not write these files into the frozen target.** The suite ships no
   ignore rule for them, so an untracked scratch file there shows up in
