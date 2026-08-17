@@ -245,6 +245,18 @@ user can set it at invocation. Each round:
    "$DEV_LEAD/scripts/verify-target.sh" "$FROZEN_DIR" "$REVIEW_HEAD"   # before AND after
    ```
 
+   **Tear the frozen directories down only after every leg has actually
+   returned, and read the leg's own exit line rather than the wrapper's.**
+   A background launcher usually runs with its cwd inside the frozen
+   directory; removing that directory out from under a still-open shell
+   makes the wrapper fail on something unrelated — measured, a `pwd` after
+   teardown produced `getcwd: cannot access parent directories` and the
+   harness reported the task as exit 1, while the leg's own line in the
+   same output read `exit=0` and its report was complete. A leg declared
+   dead by its wrapper's exit code is the same class of mistake as a leg
+   declared empty by one grep: the signal you read was not the signal you
+   wanted.
+
    Findings are
    hypotheses: verify each against the code, reject false ones explicitly,
    record **every** finding in the run log. **A rejection carries evidence of
