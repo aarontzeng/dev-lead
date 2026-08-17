@@ -98,11 +98,24 @@ The config file itself will appear as untracked in the target — and that is a
 **known conflict with `verify-target.sh`, which takes no whitelist and refuses
 to certify any dirty directory** (`usage: verify-target.sh <dir> <expected-sha>`).
 This leg cannot simply move the file out: the config must sit at the project
-root to bind. Until the helper learns an expected-paths argument, run the
-before/after certification with the scaffolding accounted for explicitly —
-compare `git status --porcelain=v1` against the exact set you placed there, and
-treat anything else as the failure `verify-target.sh` would have called. Remove
-the file after the run (and restore any original you set aside above).
+root to bind. Until the helper learns an expected-paths argument, do **not** hand-roll a
+substitute by comparing `git status --porcelain=v1` against an expected set:
+a modified scaffold keeps the same entry (`?? opencode.json` stays
+`?? opencode.json`), and this leg's own allow-list reaches
+`git diff --output=<path>`, so the reviewer can rewrite the config while the
+status line never moves. Instead hold a digest of every path you placed there
+and check it after the run, then remove/restore the scaffolding and let
+`verify-target.sh` certify a genuinely clean directory:
+
+Hold the digest in the lead, never in the target:
+
+```bash
+SCAFFOLD_SHA=$(sha256sum "$REVIEW_TARGET_DIR"/{opencode.json,REVIEW-CLAIMS.md} | sha256sum)
+```
+
+After the run, compare it, then remove the claims file and restore any original
+config — so that the certification step this skill already requires runs against
+a genuinely clean directory rather than an excused one.
 See [`docs/materializing-evidence.md`](../../docs/materializing-evidence.md)
 for the cross-family rules this is the one documented exception to.
 

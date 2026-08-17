@@ -12,14 +12,48 @@ Per-family mechanics (how the directory is granted, which commands a brief may
 name) stay in that family's skill and runtime file. This page carries the part
 that does not vary.
 
-## Where it goes
+## Where it goes — and how it reaches the delegate
 
-`$RUN_DIR`, granted with a second `--add-dir` (the flag is repeatable).
-**Never the frozen target**: the suite ships no ignore rule for scratch files,
-so an untracked one there makes `verify-target.sh` refuse to certify the
-directory, and its own message tells you to discard the run. A lead whose
-personal global gitignore happens to cover the name will not see this and will
-ship a procedure that fails for everyone else.
+Two separate questions. The first has one answer for every family; the second
+does not.
+
+**Never the frozen target.** `verify-target.sh` takes exactly two arguments
+(`<dir> <expected-sha>`) and refuses to certify a directory with any
+`git status --porcelain=v1` output. It has no whitelist. A lead whose personal
+global gitignore happens to match the filenames will not see this and will ship
+a procedure that fails for everyone else.
+
+**Delivery is family-specific — do not assume `--add-dir`.**
+
+| family | how evidence reaches the delegate |
+|---|---|
+| `agy` | second `--add-dir "$RUN_DIR/evidence"` (the flag is repeatable) |
+| `claude` | the launch cwd is the frozen target; pass absolute paths in the prompt |
+| `codex` | the companion runs in the frozen worktree; absolute paths in the focus text |
+| `cursor` | `--trust` grants the launch cwd; absolute paths in the prompt |
+| `grok` | `--tools` allowlists reads; absolute paths in the prompt file |
+| `opencode` | **cannot take out-of-project paths at all** — see below |
+
+`opencode` auto-rejects anything outside the project root
+(`permission=external_directory`, fatal headless: measured, died in seven
+seconds having read nothing) and has no `--add-dir`. Its evidence therefore has
+to live *inside* the project, which is exactly the frozen-target conflict this
+page opens with. **Cross-revision evidence for an opencode leg is blocked until
+`verify-target.sh` learns an expected-paths argument** — embed small material in
+the prompt instead, and do not hand-roll a substitute certification (see that
+skill for why a status-entry comparison does not detect a modified scaffold).
+
+**Keep the run's own output directory writable.** Every family redirects its log
+into `$RUN_DIR` (`$RUN_DIR/review.log`, `review.out`, `review.json`), and the
+prompt file is written there too. Making `$RUN_DIR` itself read-only fails the
+shell redirection *before* the delegate launches. Put the evidence in
+`$RUN_DIR/evidence/` and freeze only that:
+
+```bash
+mkdir -p "$RUN_DIR/evidence"
+# … materialize into $RUN_DIR/evidence/ …
+chmod -R a-w "$RUN_DIR/evidence"     # not $RUN_DIR — the log still needs writing
+```
 
 ## The four properties
 
@@ -42,11 +76,11 @@ Check these, not the syntax of the example below:
 
 ```bash
 set -o pipefail
-EVIDENCE=("$RUN_DIR/parent-file.md")
+EVIDENCE=("$RUN_DIR/evidence/parent-file.md")
 git -C "$REPO" show "$OTHER_REV":path/to/file.md > "${EVIDENCE[0]}"
 [ -s "${EVIDENCE[0]}" ] || { echo "no evidence: wrong rev or path" >&2; exit 1; }
 EVIDENCE_SHA=$(sha256sum "${EVIDENCE[@]}" | sha256sum)   # lead-held, never on disk
-chmod -R a-w "$RUN_DIR"                                  # prompt.md written before this
+chmod -R a-w "$RUN_DIR/evidence"                         # NOT $RUN_DIR: the log needs writing
 
 # `if`, not a bare call + `$?` — a caller's `set -e` would exit before the
 # capture and leave $RUN_DIR unwritable (agy-runtime.md, retry section).
@@ -54,7 +88,7 @@ if agy -p "$(cat "$RUN_DIR/prompt.md")" --model <gemini-tier> --mode plan --sand
        --add-dir "$REVIEW_TARGET_DIR" --add-dir "$RUN_DIR" --effort high --print-timeout 15m0s
 then status=0; else status=$?; fi
 
-chmod -R u+w "$RUN_DIR"
+chmod -R u+w "$RUN_DIR/evidence"
 [ "$(sha256sum "${EVIDENCE[@]}" | sha256sum)" = "$EVIDENCE_SHA" ] \
   || { echo "evidence changed during the run — discard this review" >&2; exit 1; }
 [ "$status" -eq 0 ] || { echo "agy exited $status — the review did not complete" >&2; exit "$status"; }
