@@ -169,17 +169,29 @@ model:
   So this leg's brief may only say **"read these files."** When the review
   needs material the working tree does not contain — another revision's
   section, a sibling change's version of the same file, a merge-base copy —
-  **the lead materializes it first** and names the files in the prompt:
+  **the lead materializes it first, into `$RUN_DIR`, and grants it with a
+  second `--add-dir`** (the flag is repeatable):
 
   ```bash
   git -C "$REPO" show "$OTHER_REV":path/to/file.md \
-    | sed -n '/^## Section/,/^## Next/p' > "$REVIEW_TARGET_DIR/REVIEW-PARENT-section.md"
+    | sed -n '/^## Section/,/^## Next/p' > "$RUN_DIR/parent-section.md"
+
+  agy -p "$(cat "$RUN_DIR/prompt.md")" --model <gemini-tier> --mode plan --sandbox \
+      --add-dir "$REVIEW_TARGET_DIR" --add-dir "$RUN_DIR" --effort high --print-timeout 15m0s
   ```
 
-  Name them `REVIEW-*` so the suite's usual ignore rules keep the frozen
-  target clean, and tell the delegate to compare the working-tree file
-  against those. Re-running with a materialized brief turned the same
-  zero-byte leg into a full byte-level comparison.
+  **Do not write these files into the frozen target.** The suite ships no
+  ignore rule for them, so an untracked scratch file there shows up in
+  `git status --porcelain` and `verify-target.sh` refuses to certify the
+  directory — its own message tells you to discard the run's conclusions.
+  A lead whose personal global gitignore happens to cover the name will
+  not see this and will ship a procedure that fails for everyone else.
+  Keeping the material in `$RUN_DIR` leaves the frozen target byte-clean
+  and still readable by the delegate.
+
+  Then tell the delegate to compare the working-tree file against the
+  named `$RUN_DIR` copies. Re-running with a materialized brief turned the
+  same zero-byte leg into a full byte-level comparison.
 - **Ask what the tests do not enumerate**, in those words (see
   [`docs/methodology.md`](../../docs/methodology.md) — measured as the
   highest-yield sentence in the prompt across every family).
