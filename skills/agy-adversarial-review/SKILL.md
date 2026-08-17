@@ -157,6 +157,29 @@ model:
   (globally — there is no per-role scoping), a disobedient reviewer can
   actually execute it, while every *other* build command dies silently with
   zero output. Both outcomes are wrong; the prompt line stays mandatory.
+- **Never write a brief that tells this leg to RUN anything — not even
+  `git show`.** Under `--sandbox`, shell is denied; headless has nowhere to
+  prompt for the `unsandboxed` permission, so the call is auto-denied and
+  the run ends with **zero bytes** — the same shape as a silent death, on a
+  leg that was working fine. Measured: a brief whose first instruction was
+  "實際用 git 指令比對，不要用推測" returned nothing at all, with
+  `a tool required the "unsandboxed" permission that headless mode cannot
+  prompt for`. That is the lead's authoring bug, not a leg failure.
+
+  So this leg's brief may only say **"read these files."** When the review
+  needs material the working tree does not contain — another revision's
+  section, a sibling change's version of the same file, a merge-base copy —
+  **the lead materializes it first** and names the files in the prompt:
+
+  ```bash
+  git -C "$REPO" show "$OTHER_REV":path/to/file.md \
+    | sed -n '/^## Section/,/^## Next/p' > "$REVIEW_TARGET_DIR/REVIEW-PARENT-section.md"
+  ```
+
+  Name them `REVIEW-*` so the suite's usual ignore rules keep the frozen
+  target clean, and tell the delegate to compare the working-tree file
+  against those. Re-running with a materialized brief turned the same
+  zero-byte leg into a full byte-level comparison.
 - **Ask what the tests do not enumerate**, in those words (see
   [`docs/methodology.md`](../../docs/methodology.md) — measured as the
   highest-yield sentence in the prompt across every family).

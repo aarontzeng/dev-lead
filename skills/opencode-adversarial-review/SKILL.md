@@ -150,9 +150,32 @@ cd "$REVIEW_TARGET_DIR" && \
   metric, not a verdict.** Measured: two runs with that fingerprint were
   genuinely empty; a third with the identical fingerprint contained a
   complete review with quoted evidence, verified 4/4 against the real
-  files' line counts and last lines. Before discarding a run,
-  `grep -c '^## '` (or your prompt's required section headers) against the
-  log — a hit means the review is real regardless of the token counter.
+  files' line counts and last lines.
+
+  **The header grep is a ONE-WAY signal, and reading it as two-way cost a
+  round.** A hit (`grep -c '^## '`, or your prompt's required section
+  headers) does mean the review is real regardless of the token counter.
+  **A zero does NOT mean the run was empty.** Measured: a leg returned a
+  full report — a citation table, four findings, two of them that round's
+  only catches — written entirely in bold labels and tables with no
+  markdown headings at all, so the header count was 0. On that count alone
+  it was called a silent-empty run, reported as such to the user, and its
+  findings were nearly dropped. Nothing in the prompt had required `##`.
+
+  So the discard decision needs more than one signal. In cost order:
+
+  ```bash
+  wc -c "$RUN_DIR/review.log"                              # a real report is rarely tiny
+  grep -o 'step=[0-9]*' "$RUN_DIR/review.log" | tail -1    # loop depth: did it work at all?
+  grep -cE '^#{1,4} |^\*\*|^\| |NOT REACHED|HOLDS|BROKEN' "$RUN_DIR/review.log"
+  grep -v '^timestamp=' "$RUN_DIR/review.log" | tail -200  # then just read the tail
+  ```
+
+  The last line is what actually settles it. A 150 KB log whose final
+  screen is `git status` output is empty; one whose final screen is prose
+  carrying `file:line` citations is not — and no counter substitutes for
+  looking. Reading 200 lines is cheaper than re-running the leg, and much
+  cheaper than telling the user a leg produced nothing when it did.
 - **The tell that it is the provider and not your prompt: did this SHAPE
   work recently?** Measured: three consecutive failures on a
   six-property prompt made the shape look like the cause — but five reviews
