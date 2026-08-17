@@ -61,6 +61,18 @@ fi
 # therefore something that appeared after the freeze, which is exactly what
 # this bracket is looking for. No noise, and no ignore rule can launder a
 # write into the reviewed tree.
+# A declaration names ONE FILE. A trailing slash cannot: git collapses both an
+# untracked directory (default porcelain) and an ignored one (--ignored=matching,
+# which by documented design does not descend into a directory that itself
+# matches) to a single entry, so "dir/" would permit every child, present and
+# future. Measured twice: once via `?? scaffold/`, and again after `!!` entries
+# were admitted, which reopened the same hole through `!! ignored-dir/`.
+for want in "$@"; do
+  case "$want" in
+    */) die "declared path '$want' ends in '/': a declaration names one file, and a directory entry would permit every child — declare each file" ;;
+  esac
+done
+
 dirty=$(git -C "$dir" -c core.excludesFile=/dev/null status --porcelain=v1 --untracked-files=all --ignored=matching)
 
 if [ $# -eq 0 ]; then
@@ -76,8 +88,8 @@ fi
 # Declared-scaffolding mode. Porcelain v1 is "XY <path>": status code in the
 # first two columns, path from column 4.
 #
-# A declaration may only excuse an entry that is not part of the reviewed
-# content: untracked ("??") or ignored ("!!"). Scaffolding is a
+# A declaration may only excuse a FILE entry that is not part of the reviewed
+# content: untracked ("??") or ignored ("!!"), never a "dir/" entry. Scaffolding is a
 # file the leg adds; a tracked path that is modified, deleted or renamed is a
 # mutation of the reviewed tree, and no declaration may hide it — that is the
 # one thing this script exists to catch. Measured: an earlier version compared
@@ -91,7 +103,9 @@ while IFS= read -r line; do
   code=${line:0:2}
   path=${line:3}
   match=""
-  if [ "$code" = "??" ] || [ "$code" = "!!" ]; then
+  # a "dir/" entry stands for an unknown number of files; no declaration can
+  # name it, so it always lands in $unexpected below
+  if { [ "$code" = "??" ] || [ "$code" = "!!" ]; } && [ "${path%/}" = "$path" ]; then
     for want in "$@"; do
       if [ "$path" = "$want" ]; then match=1; seen="$seen $want"; break; fi
     done

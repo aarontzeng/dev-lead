@@ -32,7 +32,7 @@ def make_repo(path, commits=1):
     git(path, "config", "user.name", "Test")
     # a tracked ignore rule: verify-target must not let the PROJECT's own
     # .gitignore hide an undeclared file either
-    (path / ".gitignore").write_text("*.secret\n")
+    (path / ".gitignore").write_text("*.secret\nignored-dir/\n")
     shas = []
     for i in range(commits):
         (path / f"f{i}.txt").write_text(f"content {i}\n")
@@ -206,6 +206,26 @@ def test_verify(tmp, frozen, sha):
     check("verify: an ignored path CAN be declared", r14b.returncode == 0, r14b.stderr)
     shutil.rmtree(subdir)
 
+    # An IGNORED directory collapses to one "!! ignored-dir/" entry even under
+    # --ignored=matching (documented: git does not descend into a directory
+    # that itself matches). Admitting "!!" entries in the previous commit
+    # therefore reopened the very directory hole that commit closed for "??".
+    # Measured: declaring "ignored-dir/" returned 0 both before and after two
+    # undeclared children appeared inside it.
+    ign = Path(frozen) / "ignored-dir"
+    ign.mkdir()
+    (ign / "a.txt").write_text("one\n")
+    r15 = run(verify, frozen, sha, "ignored-dir/")
+    check("verify: an ignored-DIRECTORY declaration is refused", r15.returncode != 0)
+    check("verify: says why a trailing slash cannot be declared",
+          "ends in '/'" in r15.stderr, r15.stderr)
+    r15b = run(verify, frozen, sha, "ignored-dir/a.txt")
+    check("verify: a file inside an ignored dir cannot be declared either",
+          r15b.returncode != 0, r15b.stderr)
+    check("verify: names the collapsed directory entry",
+          "ignored-dir/" in r15b.stderr, r15b.stderr)
+    shutil.rmtree(ign)
+
     r12 = run(verify, frozen, sha)
     check("verify: clean again after scaffolding is removed", r12.returncode == 0, r12.stderr)
 
@@ -254,6 +274,39 @@ def test_snapshot(tmp):
 
 
 # -------------------------------------------------------------- lint paths ----
+def test_lint_helper_args():
+    """HELPER_CALL_RE must see BOTH written forms of a call site.
+
+    The first version required whitespace immediately after `.sh`, so it
+    matched the markdown-table shorthand that motivated it and missed
+    `"$DEV_LEAD/scripts/verify-target.sh" "$DIR"` — this repo's own canonical
+    form — where a closing quote sits in between. A check that only fires on
+    the instance you already fixed is not a check.
+    """
+    sys.path.insert(0, str(SCRIPTS))
+    import lint
+
+    forms = {
+        "table shorthand": 'verify-target.sh "$DIR" "$REVIEW_HEAD"',
+        "quoted, path-qualified": '"$DEV_LEAD/scripts/verify-target.sh" "$DIR" "$REVIEW_HEAD"',
+        "braced var": 'verify-target.sh "${DIR}" "$REVIEW_HEAD"',
+    }
+    for name, text in forms.items():
+        found = lint.HELPER_CALL_RE.findall(text)
+        check(f"helper-args: sees the {name} form",
+              found == [("verify-target.sh", "DIR")], f"{name}: {found!r}")
+
+    ok = '"$DEV_LEAD/scripts/verify-target.sh" "$REVIEW_TARGET_DIR" "$REVIEW_HEAD"'
+    found = lint.HELPER_CALL_RE.findall(ok)
+    check("helper-args: the correct var is matched, then accepted",
+          found == [("verify-target.sh", "REVIEW_TARGET_DIR")], repr(found))
+
+    # freeze-target.sh legitimately takes the SOURCE repo, not the frozen dir
+    check("helper-args: freeze-target.sh is matched but exempted at the call site",
+          lint.HELPER_CALL_RE.findall('freeze-target.sh "$REPO" "$SHA"')
+          == [("freeze-target.sh", "REPO")])
+
+
 def test_lint_paths():
     """check_paths()'s predicate, in BOTH directions.
 
@@ -760,6 +813,9 @@ def main():
 
     print("lint.py check_paths")
     test_lint_paths()
+
+    print("lint.py check_helper_args")
+    test_lint_helper_args()
 
     print("lint.py check_mermaid")
     test_lint_mermaid()

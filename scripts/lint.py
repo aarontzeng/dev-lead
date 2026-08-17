@@ -453,9 +453,23 @@ def check_var_order():
 # externals, so both of its rules looked away and the review caught it instead.
 # The frozen-target directory has exactly one name across every skill; a call
 # site using any other var is a typo, wherever in the file it sits.
+# The `"?` after `.sh` is load-bearing: this repo's own canonical call site is
+# `"$DEV_LEAD/scripts/verify-target.sh" "$DIR" ...`, where the closing quote
+# sits between the command and the whitespace. The first version of this regex
+# required whitespace immediately after `.sh`, so it caught the markdown-table
+# shorthand that motivated it and missed every executable fenced example —
+# a check that fires only on the one instance you already fixed.
 HELPER_CALL_RE = re.compile(
-    r"(freeze-target\.sh|verify-target\.sh|snapshot-refs\.sh)\s+\"?\$\{?([A-Z][A-Z0-9_]{2,})\}?")
-TARGET_DIR_VAR = "REVIEW_TARGET_DIR"
+    r"(freeze-target\.sh|verify-target\.sh|snapshot-refs\.sh)\"?\s+\"?\$\{?([A-Z][A-Z0-9_]{2,})\}?")
+# Two legitimate names, one per role — this is not laxity, it is the actual
+# shape of the workflow: the LEAD creates the directory and passes it to
+# freeze-target.sh ($FROZEN_DIR), and the LEG receives it already frozen
+# ($REVIEW_TARGET_DIR). The first version of this check asserted a single
+# global name; widening the regex to see quoted call sites immediately made it
+# flag skills/dev-lead/SKILL.md:245, which is correct code. The broken regex
+# had been concealing a wrong premise — the check passed because it was
+# looking at almost nothing.
+TARGET_DIR_VARS = ("REVIEW_TARGET_DIR", "FROZEN_DIR")
 
 
 def check_helper_args():
@@ -464,10 +478,11 @@ def check_helper_args():
             for helper, var in HELPER_CALL_RE.findall(line):
                 if helper == "freeze-target.sh":
                     continue          # freeze takes the SOURCE repo, not the frozen dir
-                if var != TARGET_DIR_VAR:
+                if var not in TARGET_DIR_VARS:
+                    names = " or ".join("$" + v for v in TARGET_DIR_VARS)
                     err(rel(md),
                         f"line {lineno}: {helper} called with ${var} — the frozen "
-                        f"review target is ${TARGET_DIR_VAR} everywhere else")
+                        f"review target is {names}, and nothing defines ${var}")
 
 
 # ---- tracked: files a contributor's global gitignore might silently eat ----
