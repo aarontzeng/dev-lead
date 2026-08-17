@@ -51,9 +51,17 @@ fi
 # decide what counts as a clean review target. Measured — a procedure that
 # dropped `REVIEW-*.md` scaffolding into frozen targets certified fine on the
 # machine that wrote it, because that machine's ~/.gitignore matched the name,
-# and would have failed for everyone else. The project's own .gitignore still
-# applies; only the operator's personal file is neutralised.
-dirty=$(git -C "$dir" -c core.excludesFile=/dev/null status --porcelain=v1 --untracked-files=all)
+# and would have failed for everyone else.
+#
+# --ignored=matching: the project's OWN .gitignore hid files just as
+# effectively. Measured: with a tracked .gitignore containing `*.secret`,
+# declaring scaffold/a.txt certified a tree that also held an undeclared
+# scaffold/SECRET.secret — invisible to `-uall` alone. A frozen worktree is a
+# fresh checkout, so it starts with ZERO ignored entries; every `!!` line is
+# therefore something that appeared after the freeze, which is exactly what
+# this bracket is looking for. No noise, and no ignore rule can launder a
+# write into the reviewed tree.
+dirty=$(git -C "$dir" -c core.excludesFile=/dev/null status --porcelain=v1 --untracked-files=all --ignored=matching)
 
 if [ $# -eq 0 ]; then
   if [ -n "$dirty" ]; then
@@ -68,7 +76,8 @@ fi
 # Declared-scaffolding mode. Porcelain v1 is "XY <path>": status code in the
 # first two columns, path from column 4.
 #
-# A declaration may only excuse an UNTRACKED entry ("??"). Scaffolding is a
+# A declaration may only excuse an entry that is not part of the reviewed
+# content: untracked ("??") or ignored ("!!"). Scaffolding is a
 # file the leg adds; a tracked path that is modified, deleted or renamed is a
 # mutation of the reviewed tree, and no declaration may hide it — that is the
 # one thing this script exists to catch. Measured: an earlier version compared
@@ -82,7 +91,7 @@ while IFS= read -r line; do
   code=${line:0:2}
   path=${line:3}
   match=""
-  if [ "$code" = "??" ]; then
+  if [ "$code" = "??" ] || [ "$code" = "!!" ]; then
     for want in "$@"; do
       if [ "$path" = "$want" ]; then match=1; seen="$seen $want"; break; fi
     done

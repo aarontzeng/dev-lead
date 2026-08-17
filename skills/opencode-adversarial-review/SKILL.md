@@ -123,11 +123,11 @@ than a declaration would have been:
 
 | step | tracked `opencode.json` | untracked |
 |---|---|---|
-| after freeze, before writing the config | `verify-target.sh "$DIR" "$REVIEW_HEAD"` — no declarations, must be fully clean | same |
+| after freeze, before writing the config | `verify-target.sh "$REVIEW_TARGET_DIR" "$REVIEW_HEAD"` — no declarations, must be fully clean | same |
 | write scaffold, record `SCAFFOLD_SHA`, run the leg | — | — |
 | after the run | compare `SCAFFOLD_SHA` — this is what covers the window | same |
 | then restore | `mv "$RUN_DIR/opencode.json.orig"` back; `rm REVIEW-CLAIMS.md` | `rm opencode.json REVIEW-CLAIMS.md` |
-| after restoring | `verify-target.sh "$DIR" "$REVIEW_HEAD"` — no declarations, must be fully clean | same |
+| after restoring | `verify-target.sh "$REVIEW_TARGET_DIR" "$REVIEW_HEAD"` — no declarations, must be fully clean | same |
 
 The closing bracket proving clean is what proves the restore was byte-exact:
 a `mv`-back that produced anything other than the committed content would

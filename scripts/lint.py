@@ -446,6 +446,30 @@ def check_var_order():
                     f"line {first_assign[var]} — a reader following top-to-bottom fails here")
 
 
+# ---- helper-arg: a helper call site naming a directory var the file never defines ----
+# Measured: the tracked-config flow added to opencode-adversarial-review called
+# `verify-target.sh "$DIR" ...` inside a markdown TABLE. check_var_order only
+# scans ```bash fences, and it skips never-assigned vars as documented
+# externals, so both of its rules looked away and the review caught it instead.
+# The frozen-target directory has exactly one name across every skill; a call
+# site using any other var is a typo, wherever in the file it sits.
+HELPER_CALL_RE = re.compile(
+    r"(freeze-target\.sh|verify-target\.sh|snapshot-refs\.sh)\s+\"?\$\{?([A-Z][A-Z0-9_]{2,})\}?")
+TARGET_DIR_VAR = "REVIEW_TARGET_DIR"
+
+
+def check_helper_args():
+    for md in md_files():
+        for lineno, line in enumerate(md.read_text(encoding="utf-8").splitlines(), 1):
+            for helper, var in HELPER_CALL_RE.findall(line):
+                if helper == "freeze-target.sh":
+                    continue          # freeze takes the SOURCE repo, not the frozen dir
+                if var != TARGET_DIR_VAR:
+                    err(rel(md),
+                        f"line {lineno}: {helper} called with ${var} — the frozen "
+                        f"review target is ${TARGET_DIR_VAR} everywhere else")
+
+
 # ---- tracked: files a contributor's global gitignore might silently eat ----
 def check_tracked():
     out = subprocess.run(
@@ -688,7 +712,7 @@ def main():
                   check_version,
                   check_links, check_paths, check_fences, check_mermaid,
                   check_var_order,
-                  check_tracked, check_sentinels, check_frozen_target,
+                  check_tracked, check_helper_args, check_sentinels, check_frozen_target,
                   check_delegate_guardrails,
                   check_delegate_audit_trails,
                   check_families):

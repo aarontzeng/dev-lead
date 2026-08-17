@@ -30,6 +30,9 @@ def make_repo(path, commits=1):
     git(path, "init", "-q")
     git(path, "config", "user.email", "test@example.invalid")
     git(path, "config", "user.name", "Test")
+    # a tracked ignore rule: verify-target must not let the PROJECT's own
+    # .gitignore hide an undeclared file either
+    (path / ".gitignore").write_text("*.secret\n")
     shas = []
     for i in range(commits):
         (path / f"f{i}.txt").write_text(f"content {i}\n")
@@ -190,6 +193,17 @@ def test_verify(tmp, frozen, sha):
     r13c = run(verify, frozen, sha, "scaffolddir/a.txt")
     check("verify: an undeclared sibling in a declared dir is caught", r13c.returncode != 0)
     check("verify: names the smuggled file", "SMUGGLED.txt" in r13c.stderr, r13c.stderr)
+    (subdir / "SMUGGLED.txt").unlink()
+
+    # The project's OWN .gitignore hides a file just as effectively as the
+    # operator's. Measured before --ignored=matching: declaring scaffold/a.txt
+    # certified a tree that also held an undeclared, ignored scaffold/SECRET.
+    (subdir / "SMUGGLED.secret").write_text("ignored but present\n")
+    r14 = run(verify, frozen, sha, "scaffolddir/a.txt")
+    check("verify: an IGNORED undeclared file is still caught", r14.returncode != 0)
+    check("verify: names the ignored file", "SMUGGLED.secret" in r14.stderr, r14.stderr)
+    r14b = run(verify, frozen, sha, "scaffolddir/a.txt", "scaffolddir/SMUGGLED.secret")
+    check("verify: an ignored path CAN be declared", r14b.returncode == 0, r14b.stderr)
     shutil.rmtree(subdir)
 
     r12 = run(verify, frozen, sha)
