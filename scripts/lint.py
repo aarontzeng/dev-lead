@@ -446,6 +446,58 @@ def check_var_order():
                     f"line {first_assign[var]} — a reader following top-to-bottom fails here")
 
 
+# ---- helper-arg: a helper call site naming the wrong target-directory var ----
+# Measured, in three rounds, and each round the check was wrong in a way that
+# made it look right:
+#   1. the tracked-config flow called `verify-target.sh "$DIR"` inside a
+#      markdown TABLE. check_var_order reads only ```bash fences AND skips
+#      never-assigned vars as documented externals, so both of its rules looked
+#      away. This check was added for that.
+#   2. it required whitespace immediately after `.sh`, so it missed
+#      `"$DEV_LEAD/scripts/verify-target.sh" "$DIR"` -- the repo's own canonical
+#      form. It fired on the one instance already fixed and nothing else.
+#   3. it listed snapshot-refs.sh, whose syntax is `snapshot-refs.sh save <dir>
+#      <outfile>`: the subcommand sits where the pattern wants the variable, so
+#      it matched 0 of 12 call sites while advertising coverage of them. Its
+#      <dir> is $WORKTREE -- an implement worktree, not a frozen review target
+#      -- so this check has no business validating it at all. Removed rather
+#      than taught to parse it.
+# The through-line: a guard that reports success while inspecting nothing.
+#
+# The `"?` after `.sh` is load-bearing (round 2 above).
+HELPER_CALL_RE = re.compile(
+    r"(freeze-target\.sh|verify-target\.sh)\"?\s+\"?\$\{?([A-Z][A-Z0-9_]{2,})\}?")
+
+# The permitted name is a function of the file's ROLE, not a global allowlist.
+# Two names exist because two roles do: the LEAD creates the directory and
+# passes it to freeze-target.sh ($FROZEN_DIR); the LEG receives it already
+# frozen ($REVIEW_TARGET_DIR). An allowlist accepting both everywhere -- which
+# is what this check shipped as -- green-lights $FROZEN_DIR inside a review
+# skill that never defines it, which is the exact defect the check exists for.
+# Deriving the name from the file instead is circular: skills/dev-lead names
+# $FROZEN_DIR only AT the call sites, so the file would always agree with
+# itself.
+LEAD_SKILL = "skills/dev-lead/SKILL.md"
+LEAD_DIR_VAR = "FROZEN_DIR"
+LEG_DIR_VAR = "REVIEW_TARGET_DIR"
+
+
+def check_helper_args():
+    for md in md_files():
+        # str(): rel() returns a PosixPath, and PosixPath == str is always
+        # False — the first version of this line compared them directly, so
+        # every file silently got the LEG name. lint caught it on the next run.
+        want = LEAD_DIR_VAR if str(rel(md)) == LEAD_SKILL else LEG_DIR_VAR
+        for lineno, line in enumerate(md.read_text(encoding="utf-8").splitlines(), 1):
+            for helper, var in HELPER_CALL_RE.findall(line):
+                if helper == "freeze-target.sh":
+                    continue          # freeze takes the SOURCE repo, not the frozen dir
+                if var != want:
+                    err(rel(md),
+                        f"line {lineno}: {helper} called with ${var} — in this file "
+                        f"the frozen review target is ${want}")
+
+
 # ---- tracked: files a contributor's global gitignore might silently eat ----
 def check_tracked():
     out = subprocess.run(
@@ -688,7 +740,7 @@ def main():
                   check_version,
                   check_links, check_paths, check_fences, check_mermaid,
                   check_var_order,
-                  check_tracked, check_sentinels, check_frozen_target,
+                  check_tracked, check_helper_args, check_sentinels, check_frozen_target,
                   check_delegate_guardrails,
                   check_delegate_audit_trails,
                   check_families):

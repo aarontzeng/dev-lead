@@ -7,6 +7,7 @@ class of bug these scripts exist to remove (a bracket that checks the wrong
 directory still exits 0, and reads as a passing safety check).
 """
 import json
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -29,6 +30,9 @@ def make_repo(path, commits=1):
     git(path, "init", "-q")
     git(path, "config", "user.email", "test@example.invalid")
     git(path, "config", "user.name", "Test")
+    # a tracked ignore rule: verify-target must not let the PROJECT's own
+    # .gitignore hide an undeclared file either
+    (path / ".gitignore").write_text("*.secret\nignored-dir/\n")
     shas = []
     for i in range(commits):
         (path / f"f{i}.txt").write_text(f"content {i}\n")
@@ -126,6 +130,105 @@ def test_verify(tmp, frozen, sha):
     r4 = run(verify, otherrepo, sha)
     check("verify: checks the DIR it was given, not the cwd", r4.returncode != 0)
 
+    # ---- declared scaffolding: permits an ENTRY, never loosens anything else
+    scaffold = Path(frozen) / "opencode.json"
+    scaffold.write_text('{"permission":{"edit":"deny"}}\n')
+
+    r6 = run(verify, frozen, sha)
+    check("verify: an undeclared scaffold file still fails", r6.returncode != 0, r6.stderr)
+
+    r7 = run(verify, frozen, sha, "opencode.json")
+    check("verify: declaring the path certifies the target", r7.returncode == 0, r7.stderr)
+    check("verify: says the permission was by entry, not content",
+          "not verified by CONTENT" in r7.stderr, r7.stderr)
+
+    # a declared path does not excuse a SECOND stray file
+    stray = Path(frozen) / "stray.txt"
+    stray.write_text("not declared\n")
+    r8 = run(verify, frozen, sha, "opencode.json")
+    check("verify: declaring one path does not permit another", r8.returncode != 0)
+    check("verify: names the undeclared file", "stray.txt" in r8.stderr, r8.stderr)
+    check("verify: does not name the declared one as the problem",
+          "opencode.json" not in r8.stderr.split("declared scaffolding")[-1], r8.stderr)
+    stray.unlink()
+
+    # declaring a path that is NOT there is a failure too: the setup you
+    # certified is not the setup that ran.
+    r9 = run(verify, frozen, sha, "opencode.json", "REVIEW-CLAIMS.md")
+    check("verify: a declared-but-absent path fails", r9.returncode != 0)
+    check("verify: names the absent path", "REVIEW-CLAIMS.md" in r9.stderr, r9.stderr)
+
+    # the SHA guard is not weakened by declaring paths
+    r10 = run(verify, frozen, other, "opencode.json")
+    check("verify: declared paths do not excuse a moved HEAD", r10.returncode != 0)
+    check("verify: still names the drift", "HEAD moved" in r10.stderr, r10.stderr)
+
+    # A tracked file modified in place is never scaffolding. Declaring its path
+    # must NOT excuse it — this assertion was inverted in the first version of
+    # this test, which passed while proving the opposite of its own comment.
+    (Path(frozen) / "f0.txt").write_text("mutated\n")
+    r11 = run(verify, frozen, sha, "opencode.json", "f0.txt")
+    check("verify: a declared TRACKED path does not excuse a mutation", r11.returncode != 0)
+    check("verify: names the mutated tracked file", "f0.txt" in r11.stderr, r11.stderr)
+    (Path(frozen) / "f0.txt").write_text("content 0\n")
+
+    # a declared path that is tracked-and-clean is simply absent from porcelain,
+    # so it trips the declared-but-absent guard rather than silently passing
+    r11b = run(verify, frozen, sha, "opencode.json", "f0.txt")
+    check("verify: a clean tracked path cannot be declared as scaffolding", r11b.returncode != 0)
+    scaffold.unlink()
+
+    # An untracked DIRECTORY collapses to one "?? scaffold/" entry under the
+    # porcelain default, so declaring the directory would permit everything
+    # inside it: adding a second file leaves that single entry unchanged.
+    # Measured before the --untracked-files=all fix: both calls returned 0.
+    subdir = Path(frozen) / "scaffolddir"
+    subdir.mkdir()
+    (subdir / "a.txt").write_text("one\n")
+    r13 = run(verify, frozen, sha, "scaffolddir/")
+    check("verify: a bare directory declaration is not accepted", r13.returncode != 0)
+    r13b = run(verify, frozen, sha, "scaffolddir/a.txt")
+    check("verify: the file inside it can be declared by name", r13b.returncode == 0, r13b.stderr)
+    (subdir / "SMUGGLED.txt").write_text("undeclared\n")
+    r13c = run(verify, frozen, sha, "scaffolddir/a.txt")
+    check("verify: an undeclared sibling in a declared dir is caught", r13c.returncode != 0)
+    check("verify: names the smuggled file", "SMUGGLED.txt" in r13c.stderr, r13c.stderr)
+    (subdir / "SMUGGLED.txt").unlink()
+
+    # The project's OWN .gitignore hides a file just as effectively as the
+    # operator's. Measured before --ignored=matching: declaring scaffold/a.txt
+    # certified a tree that also held an undeclared, ignored scaffold/SECRET.
+    (subdir / "SMUGGLED.secret").write_text("ignored but present\n")
+    r14 = run(verify, frozen, sha, "scaffolddir/a.txt")
+    check("verify: an IGNORED undeclared file is still caught", r14.returncode != 0)
+    check("verify: names the ignored file", "SMUGGLED.secret" in r14.stderr, r14.stderr)
+    r14b = run(verify, frozen, sha, "scaffolddir/a.txt", "scaffolddir/SMUGGLED.secret")
+    check("verify: an ignored path CAN be declared", r14b.returncode == 0, r14b.stderr)
+    shutil.rmtree(subdir)
+
+    # An IGNORED directory collapses to one "!! ignored-dir/" entry even under
+    # --ignored=matching (documented: git does not descend into a directory
+    # that itself matches). Admitting "!!" entries in the previous commit
+    # therefore reopened the very directory hole that commit closed for "??".
+    # Measured: declaring "ignored-dir/" returned 0 both before and after two
+    # undeclared children appeared inside it.
+    ign = Path(frozen) / "ignored-dir"
+    ign.mkdir()
+    (ign / "a.txt").write_text("one\n")
+    r15 = run(verify, frozen, sha, "ignored-dir/")
+    check("verify: an ignored-DIRECTORY declaration is refused", r15.returncode != 0)
+    check("verify: says why a trailing slash cannot be declared",
+          "ends in '/'" in r15.stderr, r15.stderr)
+    r15b = run(verify, frozen, sha, "ignored-dir/a.txt")
+    check("verify: a file inside an ignored dir cannot be declared either",
+          r15b.returncode != 0, r15b.stderr)
+    check("verify: names the collapsed directory entry",
+          "ignored-dir/" in r15b.stderr, r15b.stderr)
+    shutil.rmtree(ign)
+
+    r12 = run(verify, frozen, sha)
+    check("verify: clean again after scaffolding is removed", r12.returncode == 0, r12.stderr)
+
 
 # -------------------------------------------------------------- snapshot ----
 def test_snapshot(tmp):
@@ -171,6 +274,54 @@ def test_snapshot(tmp):
 
 
 # -------------------------------------------------------------- lint paths ----
+def test_lint_helper_args():
+    """The regex must see every written form, and the ROLE must decide the name.
+
+    Three shipped versions of this check were each wrong in a way that looked
+    right: it required whitespace after `.sh` (missing the repo's own quoted,
+    path-qualified form); it listed snapshot-refs.sh, whose subcommand sits
+    where the pattern wants the variable, matching 0 of 12 call sites; and it
+    accepted both target names everywhere, which green-lights $FROZEN_DIR
+    inside a review skill that never defines it.
+    """
+    sys.path.insert(0, str(SCRIPTS))
+    import lint
+
+    forms = {
+        "table shorthand": 'verify-target.sh "$DIR" "$REVIEW_HEAD"',
+        "quoted, path-qualified": '"$DEV_LEAD/scripts/verify-target.sh" "$DIR" "$REVIEW_HEAD"',
+        "braced var": 'verify-target.sh "${DIR}" "$REVIEW_HEAD"',
+    }
+    for name, text in forms.items():
+        found = lint.HELPER_CALL_RE.findall(text)
+        check(f"helper-args: sees the {name} form",
+              found == [("verify-target.sh", "DIR")], f"{name}: {found!r}")
+
+    # freeze-target.sh legitimately takes the SOURCE repo, not the frozen dir
+    check("helper-args: freeze-target.sh is matched but exempted at the call site",
+          lint.HELPER_CALL_RE.findall('freeze-target.sh "$REPO" "$SHA"')
+          == [("freeze-target.sh", "REPO")])
+
+    # snapshot-refs.sh save|check <dir> <outfile> — the subcommand sits where
+    # the pattern wants the variable, and its <dir> is an implement $WORKTREE,
+    # not a frozen review target. Claiming coverage of it was the defect.
+    check("helper-args: snapshot-refs.sh is out of scope, not silently unmatched",
+          lint.HELPER_CALL_RE.findall(
+              '"$DEV_LEAD/scripts/snapshot-refs.sh" save "$WORKTREE" "$OUT"') == [],
+          "snapshot-refs.sh must not be in HELPER_CALL_RE at all")
+    check("helper-args: and it is absent from the pattern by construction",
+          "snapshot-refs" not in lint.HELPER_CALL_RE.pattern)
+
+    # the role decides the name — an allowlist accepting both would pass all
+    # four of these, and the middle two are the defect it was meant to catch
+    check("helper-args: the lead skill's own name is $FROZEN_DIR",
+          lint.LEAD_DIR_VAR == "FROZEN_DIR" and lint.LEG_DIR_VAR == "REVIEW_TARGET_DIR")
+    check("helper-args: the lead-skill path is compared as a string, not a Path",
+          lint.LEAD_SKILL == "skills/dev-lead/SKILL.md"
+          and str(lint.rel(lint.ROOT / lint.LEAD_SKILL)) == lint.LEAD_SKILL,
+          "rel() returns a PosixPath; PosixPath == str is always False")
+
+
 def test_lint_paths():
     """check_paths()'s predicate, in BOTH directions.
 
@@ -677,6 +828,9 @@ def main():
 
     print("lint.py check_paths")
     test_lint_paths()
+
+    print("lint.py check_helper_args")
+    test_lint_helper_args()
 
     print("lint.py check_mermaid")
     test_lint_mermaid()

@@ -90,6 +90,13 @@ is measured and documented in
 git diff --stat "$BASE" HEAD    # file list must match the change under review
 ```
 
+- **Materializing evidence the frozen tree does not contain** — another
+  revision's copy, a merge-base baseline — has cross-family rules on where it
+  goes and what guarantees it carries:
+  [`docs/materializing-evidence.md`](../../docs/materializing-evidence.md).
+  Never write scratch files into the frozen target; a leg that genuinely cannot
+  keep them elsewhere declares those exact paths to `verify-target.sh` instead.
+
 ## Writing the prompt
 
 The flag makes it read-only; **only the prompt makes it adversarial**. A

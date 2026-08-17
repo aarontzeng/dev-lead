@@ -94,8 +94,71 @@ default agent with this config. A denied call comes back to the model as a
 message, so an over-curious reviewer reports MACHINE-DENIED and keeps
 reviewing instead of dying.
 
-The config file itself will appear as untracked in the target — expected;
-remove it after the run (and restore any original you set aside above).
+The config file itself appears as untracked in the target, and this leg cannot
+move it out — it must sit at the project root to bind. **Declare it** to the
+certification instead of excusing it:
+
+```bash
+set -o pipefail          # without it the digest below survives a MISSING file:
+                         # sha256sum reports the bad operand on stderr, the
+                         # second sha256sum still exits 0 and hashes whatever
+                         # arrived, and the same omission after the run
+                         # reproduces the same digest — certifying a run that
+                         # never had the claims file. Measured.
+for f in opencode.json REVIEW-CLAIMS.md; do
+  [ -f "$REVIEW_TARGET_DIR/$f" ] || { echo "scaffold missing: $f"; exit 1; }
+done
+
+# Immutable FOR THE DURATION, not merely equal at the endpoints — the third of
+# the four properties in the materializing-evidence reference, which this flow
+# violated by relying on the digest alone. A before/after digest cannot see the
+# edit → read → restore sequence, and this
+# leg's own allow-list documents the write: `git diff --output=<path>`. Measured
+# that a-w blocks it at the source: "fatal: could not open 'REVIEW-CLAIMS.md'
+# for writing: Permission denied".
+chmod a-w "$REVIEW_TARGET_DIR"/opencode.json "$REVIEW_TARGET_DIR"/REVIEW-CLAIMS.md
+
+SCAFFOLD_SHA=$(sha256sum "$REVIEW_TARGET_DIR"/{opencode.json,REVIEW-CLAIMS.md} | sha256sum)
+```
+
+`a-w` on the files stops a rewrite through the allow-listed `git … --output=`.
+Unlinking and recreating them would need write on the *directory* rather than
+on the files, and no allow-listed command can do it: `bash` is `deny` except
+five git reads, and none of those five unlinks a file. The two layers are what
+make the digest meaningful — keep both, and `chmod u+w` before restoring.
+
+Then pass those two paths as trailing arguments to the `verify-target.sh`
+bracket the section above already requires — `… "$REVIEW_HEAD" opencode.json
+REVIEW-CLAIMS.md` — and compare `SCAFFOLD_SHA` after the run.
+
+Declaring a path permits **that entry and no other**, and fails if it has
+vanished — but it permits an entry, **not its content**: `?? opencode.json`
+reads the same after a rewrite, and this leg's allow-list reaches
+`git diff --output=<path>` (see above). So keep the `SCAFFOLD_SHA` comparison
+in the lead as well; the two answer different questions. Remove the claims file
+and restore any original config after the run.
+
+**A declaration only works when the config is untracked.** If the target's own
+repo tracks `opencode.json`, the `mv`-and-write above produces ` M
+opencode.json`, and `verify-target.sh` rejects a declared tracked path by
+design — a modified tracked file is a mutation of the reviewed tree, never
+scaffolding, and loosening that would reopen exactly the hole the rule closes.
+Bracket **outside** the scaffold window instead, which is strictly stronger
+than a declaration would have been:
+
+| step | tracked `opencode.json` | untracked |
+|---|---|---|
+| after freeze, before writing the config | `verify-target.sh "$REVIEW_TARGET_DIR" "$REVIEW_HEAD"` — no declarations, must be fully clean | same |
+| write scaffold, record `SCAFFOLD_SHA`, run the leg | — | — |
+| after the run | compare `SCAFFOLD_SHA` — meaningful only because the files were `a-w` for the whole window; a digest alone samples two endpoints and cannot see edit → read → restore | same |
+| then restore | `chmod u+w` both, then `mv "$RUN_DIR/opencode.json.orig"` back and `rm REVIEW-CLAIMS.md` | `chmod u+w` both, then `rm opencode.json REVIEW-CLAIMS.md` |
+| after restoring | `verify-target.sh "$REVIEW_TARGET_DIR" "$REVIEW_HEAD"` — no declarations, must be fully clean | same |
+
+The closing bracket proving clean is what proves the restore was byte-exact:
+a `mv`-back that produced anything other than the committed content would
+still show ` M opencode.json`. Order matters — compare `SCAFFOLD_SHA` **before**
+restoring, or the restore erases the evidence of a rewrite and cleanup's
+success gets reported as the run's.
 
 ## Run it
 
