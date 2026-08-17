@@ -126,6 +126,50 @@ def test_verify(tmp, frozen, sha):
     r4 = run(verify, otherrepo, sha)
     check("verify: checks the DIR it was given, not the cwd", r4.returncode != 0)
 
+    # ---- declared scaffolding: permits an ENTRY, never loosens anything else
+    scaffold = Path(frozen) / "opencode.json"
+    scaffold.write_text('{"permission":{"edit":"deny"}}\n')
+
+    r6 = run(verify, frozen, sha)
+    check("verify: an undeclared scaffold file still fails", r6.returncode != 0, r6.stderr)
+
+    r7 = run(verify, frozen, sha, "opencode.json")
+    check("verify: declaring the path certifies the target", r7.returncode == 0, r7.stderr)
+    check("verify: says the permission was by entry, not content",
+          "not verified by CONTENT" in r7.stderr, r7.stderr)
+
+    # a declared path does not excuse a SECOND stray file
+    stray = Path(frozen) / "stray.txt"
+    stray.write_text("not declared\n")
+    r8 = run(verify, frozen, sha, "opencode.json")
+    check("verify: declaring one path does not permit another", r8.returncode != 0)
+    check("verify: names the undeclared file", "stray.txt" in r8.stderr, r8.stderr)
+    check("verify: does not name the declared one as the problem",
+          "opencode.json" not in r8.stderr.split("declared scaffolding")[-1], r8.stderr)
+    stray.unlink()
+
+    # declaring a path that is NOT there is a failure too: the setup you
+    # certified is not the setup that ran.
+    r9 = run(verify, frozen, sha, "opencode.json", "REVIEW-CLAIMS.md")
+    check("verify: a declared-but-absent path fails", r9.returncode != 0)
+    check("verify: names the absent path", "REVIEW-CLAIMS.md" in r9.stderr, r9.stderr)
+
+    # the SHA guard is not weakened by declaring paths
+    r10 = run(verify, frozen, other, "opencode.json")
+    check("verify: declared paths do not excuse a moved HEAD", r10.returncode != 0)
+    check("verify: still names the drift", "HEAD moved" in r10.stderr, r10.stderr)
+
+    # a tracked file modified in place is never scaffolding — declaring its
+    # path must not hide a real mutation of the reviewed tree.
+    (Path(frozen) / "f0.txt").write_text("mutated\n")
+    r11 = run(verify, frozen, sha, "opencode.json", "f0.txt")
+    check("verify: declaring a TRACKED path still hides nothing else", r11.returncode == 0, r11.stderr)
+    (Path(frozen) / "f0.txt").write_text("content 0\n")
+    scaffold.unlink()
+
+    r12 = run(verify, frozen, sha)
+    check("verify: clean again after scaffolding is removed", r12.returncode == 0, r12.stderr)
+
 
 # -------------------------------------------------------------- snapshot ----
 def test_snapshot(tmp):

@@ -17,11 +17,18 @@ that does not vary.
 Two separate questions. The first has one answer for every family; the second
 does not.
 
-**Never the frozen target.** `verify-target.sh` takes exactly two arguments
-(`<dir> <expected-sha>`) and refuses to certify a directory with any
-`git status --porcelain=v1` output. It has no whitelist. A lead whose personal
-global gitignore happens to match the filenames will not see this and will ship
-a procedure that fails for everyone else.
+**Never the frozen target**, unless the leg genuinely cannot put it elsewhere.
+`verify-target.sh` refuses to certify a directory with any
+`git status --porcelain=v1` output; a leg that must keep scaffolding inside the
+target declares those exact paths as trailing arguments, which permits them and
+nothing else.
+
+Do not rely on a filename "not showing up": the check runs with
+`core.excludesFile=/dev/null`, so the operator's **personal** global gitignore
+cannot decide what counts as clean. That is not hypothetical — it is why this
+page exists. A procedure that dropped `REVIEW-*.md` files into frozen targets
+certified fine on the machine that wrote it and would have failed everywhere
+else.
 
 **Delivery is family-specific — do not assume `--add-dir`.**
 
@@ -37,11 +44,19 @@ a procedure that fails for everyone else.
 `opencode` auto-rejects anything outside the project root
 (`permission=external_directory`, fatal headless: measured, died in seven
 seconds having read nothing) and has no `--add-dir`. Its evidence therefore has
-to live *inside* the project, which is exactly the frozen-target conflict this
-page opens with. **Cross-revision evidence for an opencode leg is blocked until
-`verify-target.sh` learns an expected-paths argument** — embed small material in
-the prompt instead, and do not hand-roll a substitute certification (see that
-skill for why a status-entry comparison does not detect a modified scaffold).
+to live *inside* the project. **Declare those paths to the certification**
+rather than excusing them:
+
+```bash
+verify-target.sh "$REVIEW_TARGET_DIR" "$REVIEW_HEAD" opencode.json REVIEW-CLAIMS.md
+```
+
+A declared path is permitted **by entry, not by content** — `?? opencode.json`
+reads the same after a rewrite — and it must still be present, so scaffolding
+that vanished mid-run fails too. Pair it with a lead-held digest when the
+content matters. Never hand-roll a substitute by comparing porcelain lines
+yourself: that is what this feature replaced, and the hand-rolled version could
+not see a modified scaffold at all.
 
 **Keep the run's own output directory writable.** Every family redirects its log
 into `$RUN_DIR` (`$RUN_DIR/review.log`, `review.out`, `review.json`), and the

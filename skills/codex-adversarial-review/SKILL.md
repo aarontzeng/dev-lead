@@ -134,8 +134,8 @@ trusting the review output.
   revision's copy, a merge-base baseline — has cross-family rules on where it
   goes and what guarantees it carries:
   [`docs/materializing-evidence.md`](../../docs/materializing-evidence.md).
-  Never write scratch files into the frozen target: `verify-target.sh` takes no
-  whitelist and refuses to certify a dirty directory.
+  Never write scratch files into the frozen target; a leg that genuinely cannot
+  keep them elsewhere declares those exact paths to `verify-target.sh` instead.
 
 ## Write a useful focus prompt
 
