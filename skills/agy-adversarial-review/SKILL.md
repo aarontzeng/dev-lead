@@ -208,9 +208,11 @@ model:
   EVIDENCE_SHA=$(sha256sum "${EVIDENCE[@]}" | sha256sum)   # lead-held, never on disk
   chmod -R a-w "$RUN_DIR"                                  # prompt.md written before this
 
-  agy -p "$(cat "$RUN_DIR/prompt.md")" --model <gemini-tier> --mode plan --sandbox \
-      --add-dir "$REVIEW_TARGET_DIR" --add-dir "$RUN_DIR" --effort high --print-timeout 15m0s
-  status=$?                                                # the review's verdict, not the cleanup's
+  # `if`, not a bare call + `$?` — a caller's `set -e` would exit before the
+  # capture and leave $RUN_DIR unwritable (agy-runtime.md, retry section).
+  if agy -p "$(cat "$RUN_DIR/prompt.md")" --model <gemini-tier> --mode plan --sandbox \
+         --add-dir "$REVIEW_TARGET_DIR" --add-dir "$RUN_DIR" --effort high --print-timeout 15m0s
+  then status=0; else status=$?; fi
 
   chmod -R u+w "$RUN_DIR"
   [ "$(sha256sum "${EVIDENCE[@]}" | sha256sum)" = "$EVIDENCE_SHA" ] \
@@ -223,11 +225,16 @@ model:
   cannot fail on the input it screens is decoration; a check that samples
   only the endpoints says nothing about the interval; and cleanup that
   runs after a failure will report the cleanup's success as the run's.**
-  Six review rounds went into this one paragraph, each fix correct about
-  the defect in front of it and wrong one level down — and the last round
-  found the premise itself too broad. Ask where the record lives, what
-  input would make the check fire, over what window it holds, and whose
-  exit status you are actually returning.
+  Seven review rounds went into this one paragraph, each fix correct about
+  the defect in front of it and wrong one level down. Two of the last
+  three were caught by `references/agy-runtime.md` already saying the
+  answer — the allow-list prerequisite, and capturing exit status through
+  an `if`. **Read the runtime file before writing an example here**; this
+  skill's own opening says to, and a snippet that contradicts it is a bug
+  no matter how carefully the surrounding prose is argued. Ask where the
+  record lives, what input would make the check fire, over what window it
+  holds, whose exit status you are returning — and whether the runtime
+  file already answered the question.
 - **Ask what the tests do not enumerate**, in those words (see
   [`docs/methodology.md`](../../docs/methodology.md) — measured as the
   highest-yield sentence in the prompt across every family).
