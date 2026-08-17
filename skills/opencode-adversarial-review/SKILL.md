@@ -99,8 +99,33 @@ move it out — it must sit at the project root to bind. **Declare it** to the
 certification instead of excusing it:
 
 ```bash
+set -o pipefail          # without it the digest below survives a MISSING file:
+                         # sha256sum reports the bad operand on stderr, the
+                         # second sha256sum still exits 0 and hashes whatever
+                         # arrived, and the same omission after the run
+                         # reproduces the same digest — certifying a run that
+                         # never had the claims file. Measured.
+for f in opencode.json REVIEW-CLAIMS.md; do
+  [ -f "$REVIEW_TARGET_DIR/$f" ] || { echo "scaffold missing: $f"; exit 1; }
+done
+
+# Immutable FOR THE DURATION, not merely equal at the endpoints — the third of
+# the four properties in the materializing-evidence reference, which this flow
+# violated by relying on the digest alone. A before/after digest cannot see the
+# edit → read → restore sequence, and this
+# leg's own allow-list documents the write: `git diff --output=<path>`. Measured
+# that a-w blocks it at the source: "fatal: could not open 'REVIEW-CLAIMS.md'
+# for writing: Permission denied".
+chmod a-w "$REVIEW_TARGET_DIR"/opencode.json "$REVIEW_TARGET_DIR"/REVIEW-CLAIMS.md
+
 SCAFFOLD_SHA=$(sha256sum "$REVIEW_TARGET_DIR"/{opencode.json,REVIEW-CLAIMS.md} | sha256sum)
 ```
+
+`a-w` on the files stops a rewrite through the allow-listed `git … --output=`.
+Unlinking and recreating them would need write on the *directory* rather than
+on the files, and no allow-listed command can do it: `bash` is `deny` except
+five git reads, and none of those five unlinks a file. The two layers are what
+make the digest meaningful — keep both, and `chmod u+w` before restoring.
 
 Then pass those two paths as trailing arguments to the `verify-target.sh`
 bracket the section above already requires — `… "$REVIEW_HEAD" opencode.json
@@ -125,8 +150,8 @@ than a declaration would have been:
 |---|---|---|
 | after freeze, before writing the config | `verify-target.sh "$REVIEW_TARGET_DIR" "$REVIEW_HEAD"` — no declarations, must be fully clean | same |
 | write scaffold, record `SCAFFOLD_SHA`, run the leg | — | — |
-| after the run | compare `SCAFFOLD_SHA` — this is what covers the window | same |
-| then restore | `mv "$RUN_DIR/opencode.json.orig"` back; `rm REVIEW-CLAIMS.md` | `rm opencode.json REVIEW-CLAIMS.md` |
+| after the run | compare `SCAFFOLD_SHA` — meaningful only because the files were `a-w` for the whole window; a digest alone samples two endpoints and cannot see edit → read → restore | same |
+| then restore | `chmod u+w` both, then `mv "$RUN_DIR/opencode.json.orig"` back and `rm REVIEW-CLAIMS.md` | `chmod u+w` both, then `rm opencode.json REVIEW-CLAIMS.md` |
 | after restoring | `verify-target.sh "$REVIEW_TARGET_DIR" "$REVIEW_HEAD"` — no declarations, must be fully clean | same |
 
 The closing bracket proving clean is what proves the restore was byte-exact:
