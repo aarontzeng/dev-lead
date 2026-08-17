@@ -157,97 +157,77 @@ model:
   (globally — there is no per-role scoping), a disobedient reviewer can
   actually execute it, while every *other* build command dies silently with
   zero output. Both outcomes are wrong; the prompt line stays mandatory.
-- **Never write a brief that tells this leg to RUN anything — not even
-  `git show`.** Under `--sandbox`, shell is denied; headless has nowhere to
-  prompt for the `unsandboxed` permission, so the call is auto-denied and
-  the run ends with **zero bytes** — the same shape as a silent death, on a
-  leg that was working fine. Measured: a brief whose first instruction was
-  "實際用 git 指令比對，不要用推測" returned nothing at all, with
-  `a tool required the "unsandboxed" permission that headless mode cannot
-  prompt for`. That is the lead's authoring bug, not a leg failure.
+- **A brief may only name commands on this machine's allow-list, and a
+  pipeline is only as permitted as its least-permitted stage.** The
+  runtime file's one-time `permissions.allow` setup is a prerequisite, not
+  a suggestion: with it the delegate runs `git show/log/diff/status/
+  branch/rev-parse`; without it even read-only `git log` dies with zero
+  output. Verify it before blaming a leg.
 
-  So this leg's brief may only say **"read these files."** When the review
-  needs material the working tree does not contain — another revision's
-  section, a sibling change's version of a file, a merge-base copy — the
-  lead materializes it into `$RUN_DIR` and grants it with a second
-  `--add-dir` (the flag is repeatable). **Never into the frozen target**:
-  the suite ships no ignore rule for scratch files, so an untracked one
-  there makes `verify-target.sh` refuse to certify the directory, and its
-  own message tells you to discard the run. A lead whose personal global
-  gitignore happens to cover the name will not see this and will ship a
-  procedure that fails for everyone else.
+  What bites after that setup is the *pipeline*. Measured: a brief asking
+  for `git show … | sed -n '/^## A/,/^## B/p'` returned zero bytes on a
+  machine whose allow-list did contain `unsandboxed(git show)` — because
+  it did not contain `sed`. Headless has nowhere to prompt, so the run is
+  auto-denied and dies silently, indistinguishable from a dead leg. The
+  denial names the missing permission (`grep -i "permission check failed
+  for unsandboxed"` in the log); read it before concluding anything.
 
-  **Materialize whole files, not extracted sections, unless the file is
-  genuinely too large for the delegate's budget.** A section extracted by
-  delimiter matching cannot be verified by delimiter matching: a fenced
-  example inside the section containing a line that looks like the closing
-  heading stops the extraction early, and a naive "did it end at the right
-  heading" check then passes, because the last line really is that
-  heading. Markdown contract pages are full of fenced blocks; this is not
-  hypothetical. Handing over the whole file removes the entire class. When
-  a range is unavoidable, resolve its line numbers first, read them
-  yourself, and pass explicit `sed -n 'A,Bp'` bounds rather than patterns.
+  So: keep briefs to allow-listed commands, and when the material needs a
+  tool that is not on the list — `sed`, `awk`, a formatter — **materialize
+  it yourself instead of widening the allow-list for one run.** Do that in
+  `$RUN_DIR` and grant it with a second `--add-dir` (the flag is
+  repeatable). **Never in the frozen target**: the suite ships no ignore
+  rule for scratch files, so an untracked one there makes
+  `verify-target.sh` refuse to certify the directory. A lead whose
+  personal global gitignore happens to cover the name will not see this
+  and will ship a procedure that fails for everyone else.
 
-  Four properties the materialization step must have. The snippet is one
-  way to get them, not the only one — check the properties, not the syntax:
+  Four properties the materialization must have — check these, not the
+  syntax of the example:
 
-  1. **Extraction verified, not assumed.** A wrong rev or path must stop
-     the run — `set -o pipefail`, or `git show`'s failure disappears into
-     `sed`'s success — and so must an empty result.
-  2. **Explicit inventory.** List what you materialized; do not select by
-     glob or extension. A `*.md` digest silently ignores a `handler.py`
-     you also placed there.
-  3. **Immutable for the duration, not merely equal at the endpoints.**
-     Make `$RUN_DIR` unwritable before launching. A before/after digest
-     alone proves only the final state: a delegate that edits evidence,
-     reads what it wrote, and restores the original still passes.
-  4. **Digest held by the lead and re-checked after the run.** `$RUN_DIR`
-     was delegate-readable, so a manifest stored there could be
-     regenerated beside what it certifies. Re-check alongside the
-     `verify-target.sh` bracket, which only inspects `$REVIEW_TARGET_DIR`.
+  1. **Whole files by default.** A section extracted by delimiter matching
+     cannot be verified by delimiter matching: a fenced example containing
+     a line that looks like the closing heading truncates the extraction,
+     and an "did it end at the right heading" check then passes. Markdown
+     contract pages are mostly fenced blocks. If a range is unavoidable,
+     resolve and read its line numbers, then pass explicit `A,Bp` bounds.
+  2. **Explicit inventory**, not a glob — a `*.md` digest silently ignores
+     a `handler.py` you also placed there.
+  3. **Immutable for the duration**, not merely equal at the endpoints:
+     make `$RUN_DIR` unwritable before launch. Edit → read → restore
+     passes a before/after digest.
+  4. **Digest held by the lead**, never written into a granted directory,
+     and re-checked after the run alongside the `verify-target.sh`
+     bracket — which only inspects `$REVIEW_TARGET_DIR`.
 
   ```bash
   set -o pipefail
-  EVIDENCE=("$RUN_DIR/parent-file.md")                 # explicit inventory
-
+  EVIDENCE=("$RUN_DIR/parent-file.md")
   git -C "$REPO" show "$OTHER_REV":path/to/file.md > "${EVIDENCE[0]}"
-  [ -s "${EVIDENCE[0]}" ] || { echo "no evidence materialized: wrong rev or path" >&2; exit 1; }
-
-  EVIDENCE_SHA=$(sha256sum "${EVIDENCE[@]}" | sha256sum)   # lead-held, never written to disk
-  chmod -R a-w "$RUN_DIR"                                  # immutable while the delegate runs
+  [ -s "${EVIDENCE[0]}" ] || { echo "no evidence: wrong rev or path" >&2; exit 1; }
+  EVIDENCE_SHA=$(sha256sum "${EVIDENCE[@]}" | sha256sum)   # lead-held, never on disk
+  chmod -R a-w "$RUN_DIR"                                  # prompt.md written before this
 
   agy -p "$(cat "$RUN_DIR/prompt.md")" --model <gemini-tier> --mode plan --sandbox \
       --add-dir "$REVIEW_TARGET_DIR" --add-dir "$RUN_DIR" --effort high --print-timeout 15m0s
+  status=$?                                                # the review's verdict, not the cleanup's
 
   chmod -R u+w "$RUN_DIR"
   [ "$(sha256sum "${EVIDENCE[@]}" | sha256sum)" = "$EVIDENCE_SHA" ] \
     || { echo "evidence changed during the run — discard this review" >&2; exit 1; }
+  [ "$status" -eq 0 ] || { echo "agy exited $status — the review did not complete" >&2; exit "$status"; }
   ```
 
-  (Write `prompt.md` before the `chmod`, or keep it outside `$RUN_DIR`.)
-
-  **The rule these four share, worth carrying to any future guard in this
-  suite: a check stored where the thing it checks can be modified is
-  decoration; a guard that cannot fail on the input it screens is
-  decoration; and a check that only samples the endpoints says nothing
-  about the interval between them.** Five review rounds went into
-  rediscovering that on this one paragraph, each fix correct about the
-  defect in front of it and wrong one level down. Ask where the record
-  lives, what input would make the check fire, and over what window it
-  holds — before trusting what it says.
-
-  **Do not write these files into the frozen target.** The suite ships no
-  ignore rule for them, so an untracked scratch file there shows up in
-  `git status --porcelain` and `verify-target.sh` refuses to certify the
-  directory — its own message tells you to discard the run's conclusions.
-  A lead whose personal global gitignore happens to cover the name will
-  not see this and will ship a procedure that fails for everyone else.
-  Keeping the material in `$RUN_DIR` leaves the frozen target byte-clean
-  and still readable by the delegate.
-
-  Then tell the delegate to compare the working-tree file against the
-  named `$RUN_DIR` copies. Re-running with a materialized brief turned the
-  same zero-byte leg into a full byte-level comparison.
+  **The rule these share, worth carrying to any guard in this suite: a
+  check stored where its subject can modify it is decoration; a guard that
+  cannot fail on the input it screens is decoration; a check that samples
+  only the endpoints says nothing about the interval; and cleanup that
+  runs after a failure will report the cleanup's success as the run's.**
+  Six review rounds went into this one paragraph, each fix correct about
+  the defect in front of it and wrong one level down — and the last round
+  found the premise itself too broad. Ask where the record lives, what
+  input would make the check fire, over what window it holds, and whose
+  exit status you are actually returning.
 - **Ask what the tests do not enumerate**, in those words (see
   [`docs/methodology.md`](../../docs/methodology.md) — measured as the
   highest-yield sentence in the prompt across every family).
