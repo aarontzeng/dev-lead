@@ -159,12 +159,19 @@ def test_verify(tmp, frozen, sha):
     check("verify: declared paths do not excuse a moved HEAD", r10.returncode != 0)
     check("verify: still names the drift", "HEAD moved" in r10.stderr, r10.stderr)
 
-    # a tracked file modified in place is never scaffolding — declaring its
-    # path must not hide a real mutation of the reviewed tree.
+    # A tracked file modified in place is never scaffolding. Declaring its path
+    # must NOT excuse it — this assertion was inverted in the first version of
+    # this test, which passed while proving the opposite of its own comment.
     (Path(frozen) / "f0.txt").write_text("mutated\n")
     r11 = run(verify, frozen, sha, "opencode.json", "f0.txt")
-    check("verify: declaring a TRACKED path still hides nothing else", r11.returncode == 0, r11.stderr)
+    check("verify: a declared TRACKED path does not excuse a mutation", r11.returncode != 0)
+    check("verify: names the mutated tracked file", "f0.txt" in r11.stderr, r11.stderr)
     (Path(frozen) / "f0.txt").write_text("content 0\n")
+
+    # a declared path that is tracked-and-clean is simply absent from porcelain,
+    # so it trips the declared-but-absent guard rather than silently passing
+    r11b = run(verify, frozen, sha, "opencode.json", "f0.txt")
+    check("verify: a clean tracked path cannot be declared as scaffolding", r11b.returncode != 0)
     scaffold.unlink()
 
     r12 = run(verify, frozen, sha)

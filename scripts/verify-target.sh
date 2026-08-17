@@ -14,8 +14,10 @@
 # Optional trailing arguments declare scaffolding a leg cannot place anywhere
 # else — opencode's `opencode.json` must sit at the project root to bind at
 # all, so that leg cannot keep its config outside the target. Declaring a path
-# permits that ONE path and requires it to still be there; anything else, and
-# any declared path that has vanished, still fails.
+# permits that ONE path, only while it is UNTRACKED ("??"), and requires it to
+# still be there. A tracked file that was modified, deleted or renamed fails
+# even when its path is declared: that is a mutation of the reviewed tree, not
+# scaffolding.
 #
 # It permits an ENTRY, not its CONTENT. `?? opencode.json` reads the same
 # whether or not the reviewer rewrote the file, and some legs allow-list
@@ -57,18 +59,28 @@ if [ $# -eq 0 ]; then
   exit 0
 fi
 
-# Declared-scaffolding mode. Porcelain v1 is "XY <path>": the status code is
-# the first two columns, the path starts at column 4. Renames ("R  a -> b")
-# are never expected scaffolding, so such an entry simply will not match.
+# Declared-scaffolding mode. Porcelain v1 is "XY <path>": status code in the
+# first two columns, path from column 4.
+#
+# A declaration may only excuse an UNTRACKED entry ("??"). Scaffolding is a
+# file the leg adds; a tracked path that is modified, deleted or renamed is a
+# mutation of the reviewed tree, and no declaration may hide it — that is the
+# one thing this script exists to catch. Measured: an earlier version compared
+# paths only, so declaring `f0.txt` certified a target whose tracked f0.txt had
+# been rewritten, and the test covering it asserted success while its own
+# comment said the mutation must not be hidden.
 unexpected=""
 seen=""
 while IFS= read -r line; do
   [ -n "$line" ] || continue
+  code=${line:0:2}
   path=${line:3}
   match=""
-  for want in "$@"; do
-    if [ "$path" = "$want" ]; then match=1; seen="$seen $want"; break; fi
-  done
+  if [ "$code" = "??" ]; then
+    for want in "$@"; do
+      if [ "$path" = "$want" ]; then match=1; seen="$seen $want"; break; fi
+    done
+  fi
   [ -n "$match" ] || unexpected="$unexpected$line"$'\n'
 done <<< "$dirty"
 
@@ -87,4 +99,4 @@ if [ -n "$missing" ]; then
 fi
 
 echo "verify-target: OK ($dir frozen at $expected; declared scaffolding present: $*)"
-echo "verify-target: NOTE -- declared paths were permitted by ENTRY, not verified by CONTENT" >&2
+echo "verify-target: NOTE -- declared paths were permitted as UNTRACKED ENTRIES, not verified by CONTENT" >&2
