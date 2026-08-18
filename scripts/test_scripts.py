@@ -731,10 +731,11 @@ def test_claim_audit(tmp):
           "runs nearby is not an answer" in out or "not an answer" in out, out)
     check("claim-audit: prints a machine-readable hit count",
           "claim-audit: hits=" in out, out)
-    # Named for what it asserts. The previous name said question 2 "reports"
-    # the unlintable shape, which this cannot show: a missing label proves only
-    # that nothing matched. What carries that sentence is question 2 printing
-    # unconditionally, so assert that here rather than implying it.
+    # Named for what it asserts, and nothing more. An earlier name claimed this
+    # showed question 2 "reporting" the shape; a missing label shows only that
+    # nothing matched. Question 2 no longer exists at all — the sentence it was
+    # meant for is now the cross-family leg's to catch, and this line records
+    # only that no pattern reaches it.
     check("claim-audit: does NOT match the unlintable shape",
           "doc.md:5" not in out, out)
 
