@@ -720,8 +720,17 @@ def test_claim_audit(tmp):
           "code.py:1" in out, out)
     check("claim-audit: does NOT flag a non-comment code line",
           "code.py:2" not in out, out)
-    check("claim-audit: prints both anchoring questions regardless of class",
-          "which test goes red" in out and "proxy for it" in out, out)
+    check("claim-audit: asks the anchoring question regardless of class",
+          "which test goes red" in out, out)
+    # question 2 was REMOVED: a three-family panel agreed no prompt defeats
+    # proxy-for-property rationalisation, because the model asked is the one
+    # that made the substitution. Asserted so it cannot creep back unnoticed.
+    check("claim-audit: does NOT ask the property-vs-proxy question",
+          "proxy for it" not in out, out)
+    check("claim-audit: says a nearby test is not an answer",
+          "runs nearby is not an answer" in out or "not an answer" in out, out)
+    check("claim-audit: prints a machine-readable hit count",
+          "claim-audit: hits=" in out, out)
     # Named for what it asserts. The previous name said question 2 "reports"
     # the unlintable shape, which this cannot show: a missing label proves only
     # that nothing matched. What carries that sentence is question 2 printing
@@ -736,8 +745,14 @@ def test_claim_audit(tmp):
     git(clean, "add", "-A")
     git(clean, "commit", "-qm", "neutral prose")
     r2 = run("python3", audit, clean, f"{cbase}...HEAD")
+    # a silent run must NOT read as "anchored" -- that false confidence is the
+    # governance risk the review panel named, so the wording is asserted
     check("claim-audit: silent when nothing risky was added",
-          r2.returncode == 0 and "no absolute or sameness" in r2.stdout, r2.stdout)
+          r2.returncode == 0 and "nothing matched" in r2.stdout, r2.stdout)
+    check("claim-audit: a silent run denies that it means 'anchored'",
+          "NOT 'the prose is anchored'" in r2.stdout, r2.stdout)
+    check("claim-audit: a silent run still prints hits=0",
+          "claim-audit: hits=0" in r2.stdout, r2.stdout)
 
     r3 = run("python3", audit, repo)
     check("claim-audit: wrong arity exits 2, distinct from a clean run",

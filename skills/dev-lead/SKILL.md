@@ -214,10 +214,19 @@ user can set it at invocation. Each round:
    round whose three false sentences all survived). A lint rule *over* prose is
    executable and can be mutation-proofed; the prose it judges is not. Run
    `python3 "$DEV_LEAD/scripts/claim-audit.py" "$WORKTREE" "$BASE...HEAD"` and
-   answer both of its questions per hit. It is a worklist, not a gate — it exits
-   0 either way, and a legitimate absolute costs seconds to dismiss. Two shapes
-   no filter can flag, so ask them yourself: a **right conclusion resting on a
-   wrong mechanism** (a doc said two rows "return the same shape, so this is not
+   answer its question per hit: **if this sentence were false, which test goes
+   red?** Naming a test that runs nearby is not an answer — the assertion has to
+   fail on THIS claim being false.
+
+   **It is an attention cue, not a control.** It verifies nothing and exits 0
+   either way; a silent run means "nothing matched the noun list", NOT "the prose
+   is anchored", and it is never evidence that claims were checked. Record the
+   `hits=<n>` line it prints, run it again after the prose pass, and record that
+   number too — if the count never drops, this step is not earning its place.
+
+   Two shapes no filter can flag, and no prompt can force either — a review leg
+   from another family is what catches them, so raise them there rather than
+   here: a **right conclusion resting on a wrong mechanism** (a doc said two rows "return the same shape, so this is not
    an existence oracle" — both rows really did share those fields, but a third
    field differed; the conclusion was right and the stated reason was not, and a
    wrong mechanism gets reused as a premise by whoever reads it next), and a
