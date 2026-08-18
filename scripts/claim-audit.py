@@ -22,7 +22,15 @@ sentences are not in anything that executes. 20 mutants died the same day while
 all three false sentences survived.
 
 Measured yield on the four commits it was tuned against: 9, 4, 19 and 11 flagged
-sentences. It caught two of the three known-false sentences, and surfaced all
+sentences -- with the ORIGINAL noun list, which was drawn from those same four
+commits by one author. Review called that sample overfitted and named misses it
+predicted ("all workers", "every packet", "guaranteed zero allocations"); all
+three did miss. The list was widened, and the volume cost re-measured across the
+eight most recent commits rather than argued: 3/19/0/2/1/1/1/1 became
+3/20/0/2/1/1/1/1. One added hit, so the recall came effectively free -- but the
+bound is still a list, and a noun absent from it is still a silent miss.
+
+It caught two of the three known-false sentences, and surfaced all
 three copies of one of them (doc, code comment, commit body) -- which then feeds
 the "grep for its copies" rule in the same step. It did NOT catch the third
 ("feasibility ... is not the obstacle"), and no keyword filter can: that failure
@@ -34,8 +42,11 @@ were dated citations of past incidents (correctly dismissed) and two were real
 errors in that very commit: an over-strong "no mutant can" and a miscounted
 "all four copies". Both were found by answering question 1, not by the match.
 
-So this script is NOT a verdict, unlike verify-target.sh -- it always exits 0
-when it ran. It only makes the risky sentences impossible to skim past. Judging
+So this script is NOT a verdict, unlike verify-target.sh -- it exits 0 whenever
+it ran, hits or no hits, and 2 ONLY when it could not run: wrong arity, no git
+on PATH, or a git command that failed. That split is what the exit code means;
+undecodable bytes in a diff are replaced rather than raised, so they no longer
+escape it. It only makes the risky sentences impossible to skim past. Judging
 them is the lead's job, using the two questions it prints. False positives are
 expected and cheap: a legitimate absolute ("never push") costs a few seconds to
 dismiss. A missed one costs a review round, or ships.
@@ -60,17 +71,34 @@ import sys
 # whole point is that a flagged sentence cannot be skimmed past.
 #
 # Narrowing it to an absolute QUANTIFYING OVER CODE PATHS cut those to 9, 4 and
-# 19 while still catching the real defect ("undetectable by design" -- a
-# real-transport test detected it; "Called for EVERY read" -- two paths bypassed
-# it). The absolute and the thing it quantifies must appear together.
+# 19. It keeps "Called for EVERY read" (two paths bypassed it). It does NOT keep
+# "undetectable by design" -- "design" is not a code path, so only the rejected
+# bare filter ever matched that one; the review leg caught it instead. The
+# absolute and the thing it quantifies must appear together.
+#
+# The noun list is the recall bound, and it is a list, so anything absent is a
+# silent miss: "all WORKERS", "every PACKET", "guaranteed zero ALLOCATIONS" all
+# sailed through the first version, which had been drawn from one author's four
+# commits. Widened below; see the measured cost in this module's docstring.
+_L = r"(?<![A-Za-z0-9_])"                # ASCII word start ...
+_R = r"(?![A-Za-z0-9_])"                 # ... and end. "\b" counts CJK as a word
+                                         # character, so "Every請求" had no
+                                         # boundary after "Every" and never matched.
+_GAP = r"[^.;!?。；！？]"                 # must not span a sentence end, either script
 ABSOLUTE = re.compile(
-    r"\b(every|all|any|no|never|always|undetectable|impossible|guaranteed)\b"
-    r"[^.;]{0,40}?\b(read|reads|write|writes|call|calls|caller|callers|path|paths|"
-    r"case|cases|row|rows|request|requests|branch|branches|mutant|mutants)\b"
-    r"|(一律|永遠|完全|絕不|不可能)[^。;]{0,20}?(讀取|寫入|呼叫|路徑|情況|請求)", re.I)
+    _L + r"(every|all|any|no|never|always|undetectable|impossible|guaranteed)" + _R
+    + _GAP + r"{0,40}?" + _L
+    + r"(read|reads|write|writes|call|calls|caller|callers|path|paths|"
+      r"case|cases|row|rows|request|requests|branch|branches|mutant|mutants|"
+      r"worker|workers|packet|packets|allocation|allocations|observer|observers|"
+      r"handler|handlers|endpoint|endpoints|node|nodes|thread|threads|"
+      r"field|fields|record|records|entry|entries|message|messages|"
+      r"query|queries|response|responses|input|inputs|client|clients)" + _R
+    + r"|(一律|永遠|完全|絕不|不可能)" + _GAP + r"{0,20}?(讀取|寫入|呼叫|路徑|情況|請求)",
+    re.I)
 SAMENESS = re.compile(
-    r"\b(same|identical|indistinguishable|equivalent|no different|unchanged)\b"
-    r"|相同|一樣|無法分辨|等價", re.I)
+    _L + r"(same|identical|indistinguishable|equivalent|no different|unchanged)" + _R
+    + r"|相同|一樣|無法分辨|等價", re.I)
 
 PROSE_SUFFIX = (".md", ".markdown", ".txt", ".rst", ".adoc")
 # Comment openers, deliberately shallow: this decides what to LOOK at, and
@@ -79,24 +107,69 @@ COMMENT = re.compile(r"^\s*(#|//|/\*|\*|--|;|\"\"\"|''')")
 
 
 def git(dir_: str, *args: str) -> str:
-    r = subprocess.run(["git", "-C", dir_, *args], capture_output=True, text=True)
+    # errors="replace" so one invalid UTF-8 byte in a diff or a commit message
+    # degrades that character instead of raising out of the exit-code contract.
+    try:
+        r = subprocess.run(["git", "-C", dir_, *args],
+                           capture_output=True, text=True, errors="replace")
+    except OSError as e:                 # no git on PATH, dir_ not usable
+        sys.stderr.write(f"claim-audit: cannot run git: {e}\n")
+        sys.exit(2)
     if r.returncode != 0:
         sys.stderr.write(f"claim-audit: git {' '.join(args)} failed: {r.stderr.strip()}\n")
         sys.exit(2)                      # 2 = could not run, distinct from 0 = ran
     return r.stdout
 
 
-def added_prose(dir_: str, rng: str) -> list[tuple[str, int, str]]:
-    """(path, line, text) for prose lines this range added."""
+def resolve_range(dir_: str, rng: str) -> tuple[str, str | None]:
+    """Endpoints the diff and the log provably share.
+
+    "git diff A...B" scans merge-base(A,B)..B, but "git log A...B" lists BOTH
+    sides. On a range whose ends are not ancestors, prose added on A was never
+    read while A's commit messages were -- so a claim could be reported at a
+    line the diff never showed, or missed entirely. Resolving the endpoints once
+    removes the disagreement: the diff gets "base tip", the log "base..tip".
+    """
+    if "..." in rng:
+        a, b = rng.split("...", 1)
+        a, b = a or "HEAD", b or "HEAD"
+        return git(dir_, "merge-base", a, b).strip(), b
+    if ".." in rng:
+        a, b = rng.split("..", 1)
+        return a or "HEAD", b or "HEAD"
+    return rng, None                     # single rev: diff the worktree, no commits
+
+
+def added_prose(dir_: str, base: str, tip: str | None) -> list[tuple[str, int, str]]:
+    """(path, line, text) for prose lines this range added.
+
+    Headers are recognised only BEFORE the first @@ of a file. Inside a hunk a
+    line opening "+++" is content (a "+" marker on text that itself starts
+    "++"), and "+++ b/x.md" is a path only in a header. Deciding by position
+    rather than by prefix is what stops a prose line beginning "+++" from being
+    silently dropped -- taking every later line number in that hunk with it --
+    and stops a content line reading "++ b/fake.md" from being adopted as the
+    current path.
+    """
     out: list[tuple[str, int, str]] = []
-    path, lineno = None, 0
-    for raw in git(dir_, "diff", "--no-color", "--unified=0", rng).splitlines():
-        if raw.startswith("+++ b/"):
-            path, lineno = raw[6:], 0
+    path, lineno, in_hunk = None, 0, False
+    # Prefixes forced: under diff.noprefix=true git emits "+++ docs/x.md", which
+    # matches no "+++ b/" and loses every path, while a real "b/docs/x.md" would
+    # be reported as "docs/x.md".
+    args = ["diff", "--no-color", "--no-ext-diff", "--unified=0",
+            "--src-prefix=a/", "--dst-prefix=b/", base]
+    if tip is not None:
+        args.append(tip)
+    for raw in git(dir_, *args).splitlines():
+        if raw.startswith("diff --git "):
+            path, lineno, in_hunk = None, 0, False
         elif raw.startswith("@@"):
             m = re.search(r"\+(\d+)", raw)
-            lineno = int(m.group(1)) if m else 0
-        elif raw.startswith("+") and not raw.startswith("+++") and path:
+            lineno, in_hunk = (int(m.group(1)) if m else 0), True
+        elif not in_hunk:
+            if raw.startswith("+++ b/"):
+                path = raw[6:]
+        elif raw.startswith("+") and path:
             body = raw[1:]
             if path.endswith(PROSE_SUFFIX) or COMMENT.match(body):
                 out.append((path, lineno, body.strip()))
@@ -104,9 +177,11 @@ def added_prose(dir_: str, rng: str) -> list[tuple[str, int, str]]:
     return out
 
 
-def commit_messages(dir_: str, rng: str) -> list[tuple[str, int, str]]:
+def commit_messages(dir_: str, base: str, tip: str | None) -> list[tuple[str, int, str]]:
     out: list[tuple[str, int, str]] = []
-    for sha in git(dir_, "log", "--format=%H", rng).split():
+    if tip is None:                      # worktree diff: the range holds no commits
+        return out
+    for sha in git(dir_, "log", "--format=%H", f"{base}..{tip}").split():
         for i, line in enumerate(git(dir_, "log", "-1", "--format=%B", sha).splitlines(), 1):
             if line.strip():
                 out.append((f"commit {sha[:9]}", i, line.strip()))
@@ -118,8 +193,9 @@ def main() -> int:
         sys.stderr.write("Usage: claim-audit.py <dir> <range>\n")
         return 2
     dir_, rng = sys.argv[1], sys.argv[2]
+    base, tip = resolve_range(dir_, rng)
     hits = []
-    for path, lineno, text in added_prose(dir_, rng) + commit_messages(dir_, rng):
+    for path, lineno, text in added_prose(dir_, base, tip) + commit_messages(dir_, base, tip):
         kinds = []
         if ABSOLUTE.search(text):
             kinds.append("absolute")

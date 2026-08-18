@@ -161,8 +161,11 @@ Nothing a delegate self-reports is evidence. The lead:
    rejected false positive and a wrongly dismissed real bug otherwise leave an
    identical run log.
 6. Anchors the round's **prose**, not just its code. Mutation-proofing works for
-   step 4 because a test executes; a sentence does not, so nothing in the suite
-   can make a false comment or doc line fail. Measured: a round that killed 20
+   step 4 because a test executes; a sentence does not, so no mutant of the code
+   under test can make a false comment or doc line fail. The exception is worth
+   chasing rather than noting: a prose claim *about behaviour* becomes testable
+   the moment you assert the behaviour it describes — which is what question 1
+   is really asking for. Measured: a round that killed 20
    mutants shipped three false sentences, and all three were caught by the review
    leg instead — a Graph-layer mechanism paying for a Loop-layer gap, which is
    the expensive way round. `scripts/claim-audit.py` surfaces the two phrasings

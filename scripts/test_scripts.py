@@ -7,6 +7,7 @@ class of bug these scripts exist to remove (a bracket that checks the wrong
 directory still exits 0, and reads as a passing safety check).
 """
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -710,14 +711,23 @@ def test_claim_audit(tmp):
           "doc.md:2" in out, out)
     check("claim-audit: does NOT flag a bare absolute with no code-path noun",
           "doc.md:3" not in out, out)
+    # line 4 carries 'cannot' AND 'caller'. Without this assertion, restoring
+    # 'cannot' to the alternatives would flag it and the suite would still pass
+    # — which made this test's own docstring false about what it protects.
+    check("claim-audit: does NOT flag 'cannot' even beside a code-path noun",
+          "doc.md:4" not in out, out)
     check("claim-audit: flags a comment line in a code file",
           "code.py:1" in out, out)
     check("claim-audit: does NOT flag a non-comment code line",
           "code.py:2" not in out, out)
     check("claim-audit: prints both anchoring questions regardless of class",
           "which test goes red" in out and "proxy for it" in out, out)
-    check("claim-audit: reports the unlintable shape via question 2, not a match",
-          "doc.md:5" not in out, out)
+    # Named for what it asserts. The previous name said question 2 "reports"
+    # the unlintable shape, which this cannot show: a missing label proves only
+    # that nothing matched. What carries that sentence is question 2 printing
+    # unconditionally, so assert that here rather than implying it.
+    check("claim-audit: does NOT match the unlintable shape, and asks question 2 anyway",
+          "doc.md:5" not in out and "proxy for it" in out, out)
 
     clean = tmp / "clean"
     make_repo(clean, commits=1)
@@ -732,6 +742,135 @@ def test_claim_audit(tmp):
     r3 = run("python3", audit, repo)
     check("claim-audit: wrong arity exits 2, distinct from a clean run",
           r3.returncode == 2, f"rc={r3.returncode}")
+
+
+def test_claim_audit_parsing(tmp):
+    """claim-audit.py: the diff parse, the range, and the exit-code contract.
+
+    Every case here is a way the script reported a wrong line, a wrong path, or
+    nothing at all — while exiting 0, which reads as a clean run. They were
+    found by cross-model review of the commit that introduced the script, and
+    each assertion below is the repro that review named.
+    """
+    audit = SCRIPTS / "claim-audit.py"
+
+    # A hunk body is content, never a header. "+++ emphasis" reaches the diff as
+    # "++++ emphasis" and was skipped WITHOUT advancing the counter, while
+    # "++ b/fake.md" reached it as "+++ b/fake.md" and was adopted as the path —
+    # together they filed the real claim under fake.md:0.
+    repo = tmp / "hunk"
+    make_repo(repo, commits=1)
+    base = git(repo, "rev-parse", "HEAD").stdout.strip()
+    (repo / "doc.md").write_text(
+        "+++ emphasis, not a diff header\n"
+        "++ b/fake.md\n"
+        "Called for every read in the adapter.\n"
+    )
+    git(repo, "add", "-A")
+    git(repo, "commit", "-qm", "prose that looks like a diff")
+    out = run("python3", audit, repo, f"{base}...HEAD").stdout
+    check("claim-audit: a '+++' prose line does not shift later line numbers",
+          "doc.md:3" in out, out)
+    check("claim-audit: a '++ b/path' content line is not read as a header",
+          "fake.md" not in out, out)
+
+    # diff.noprefix=true makes git emit "+++ doc.md", which matched no "+++ b/"
+    # and lost every path — silently, since a hit-free run is a normal outcome.
+    npx = tmp / "noprefix"
+    make_repo(npx, commits=1)
+    nbase = git(npx, "rev-parse", "HEAD").stdout.strip()
+    git(npx, "config", "diff.noprefix", "true")
+    (npx / "doc.md").write_text("Called for every read in the adapter.\n")
+    git(npx, "add", "-A")
+    git(npx, "commit", "-qm", "prose under noprefix")
+    out = run("python3", audit, npx, f"{nbase}...HEAD").stdout
+    check("claim-audit: reports paths under diff.noprefix=true", "doc.md:1" in out, out)
+
+    # the mirror image: a real path under b/ must not be stripped to its tail
+    bx = tmp / "bpath"
+    make_repo(bx, commits=1)
+    bbase = git(bx, "rev-parse", "HEAD").stdout.strip()
+    (bx / "b").mkdir()
+    (bx / "b" / "doc.md").write_text("Called for every read in the adapter.\n")
+    git(bx, "add", "-A")
+    git(bx, "commit", "-qm", "prose under a b/ directory")
+    out = run("python3", audit, bx, f"{bbase}...HEAD").stdout
+    check("claim-audit: a real 'b/' path is not stripped to its tail",
+          "b/doc.md:1" in out, out)
+
+    # "git diff A...B" reads merge-base..B, but "git log A...B" reads BOTH
+    # sides: the other branch's commit messages were audited although its prose
+    # never was, so a claim could be reported from a commit the diff never saw.
+    div = tmp / "diverged"
+    make_repo(div, commits=1)
+    trunk = git(div, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
+    git(div, "checkout", "-q", "-b", "side")
+    (div / "side.md").write_text("Called for every write on the side branch.\n")
+    git(div, "add", "-A")
+    git(div, "commit", "-qm", "side: every request is retried here")
+    git(div, "checkout", "-q", trunk)
+    (div / "main.md").write_text("Called for every read on the trunk.\n")
+    git(div, "add", "-A")
+    git(div, "commit", "-qm", "trunk prose")
+    out = run("python3", audit, div, f"side...{trunk}").stdout
+    check("claim-audit: audits the trunk side of a diverged range",
+          "main.md:1" in out, out)
+    check("claim-audit: does not audit the other side's prose", "side.md" not in out, out)
+    check("claim-audit: does not audit the other side's commit message",
+          "every request is retried" not in out, out)
+
+    # text=True raised UnicodeDecodeError before the return code was read, so an
+    # undecodable byte exited 1 — neither "ran" (0) nor "could not run" (2).
+    bad = tmp / "badbytes"
+    make_repo(bad, commits=1)
+    ubase = git(bad, "rev-parse", "HEAD").stdout.strip()
+    (bad / "doc.md").write_bytes(b"Called for every read \xff in the adapter.\n")
+    git(bad, "add", "-A")
+    git(bad, "commit", "-qm", "undecodable prose")
+    r = run("python3", audit, bad, f"{ubase}...HEAD")
+    check("claim-audit: undecodable bytes still exit 0, not 1",
+          r.returncode == 0, f"rc={r.returncode} {r.stderr}")
+
+    r = run(sys.executable, audit, bad, f"{ubase}...HEAD",
+            env=dict(os.environ, PATH="/nonexistent"))
+    check("claim-audit: no git on PATH exits 2, not 1",
+          r.returncode == 2, f"rc={r.returncode} {r.stderr}")
+
+    # The noun list is the recall bound. These three were named by review as
+    # predicted misses of a list tuned on one author's four commits.
+    wide = tmp / "wide"
+    make_repo(wide, commits=1)
+    wbase = git(wide, "rev-parse", "HEAD").stdout.strip()
+    (wide / "doc.md").write_text(
+        "All workers execute without locks.\n"
+        "Every packet is verified before dispatch.\n"
+        "Guaranteed zero allocations in the hot loop.\n"
+        "Every請求 request is signed.\n"
+        # '!' and '！' specifically: '.' and ';' were already excluded, so a
+        # fixture built on those cannot tell the widened gap from the old one.
+        "Never! The read is in another sentence.\n"
+        "完全正確！讀取會被略過\n"
+        # the pair the module comment rests on: the same absolute word, once
+        # over a code path and once not. Without line 8 asserted, that comment
+        # is the unpinned kind of sentence this whole script exists to surface.
+        "Undetectable by external observers.\n"
+        "Undetectable by design.\n"
+    )
+    git(wide, "add", "-A")
+    git(wide, "commit", "-qm", "wider nouns")
+    out = run("python3", audit, wide, f"{wbase}...HEAD").stdout
+    for n, what in ((1, "workers"), (2, "packets"), (3, "allocations")):
+        check(f"claim-audit: flags an absolute quantifying over {what}",
+              f"doc.md:{n}" in out, out)
+    check("claim-audit: an ASCII absolute abutting CJK still matches",
+          "doc.md:4" in out, out)
+    check("claim-audit: a match does not span '!'", "doc.md:5" not in out, out)
+    check("claim-audit: a match does not span a full-width '！'",
+          "doc.md:6" not in out, out)
+    check("claim-audit: flags an absolute quantifying over observers",
+          "doc.md:7" in out, out)
+    check("claim-audit: does NOT flag 'undetectable by design', as the comment says",
+          "doc.md:8" not in out, out)
 
 
 # ------------------------------------------------------------ lint version ----
@@ -914,6 +1053,10 @@ def main():
     print("claim-audit.py")
     with tempfile.TemporaryDirectory() as td:
         test_claim_audit(Path(td))
+
+    print("claim-audit.py parsing, range and exit codes")
+    with tempfile.TemporaryDirectory() as td:
+        test_claim_audit_parsing(Path(td))
 
     if FAILURES:
         print(f"\nFAIL — {len(FAILURES)} test(s) failed")
