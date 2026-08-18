@@ -185,9 +185,17 @@ Nothing a delegate self-reports is evidence. The lead:
    oracle.
 
    Because that leaves it unable to prove its own worth by argument, it prints
-   `hits=<n>`. Record that number before and after the prose pass. If it never
-   drops across a run of rounds, the step has never caused an edit and should be
-   deleted on that evidence — the same standard §4 applies to everything else.
+   `hits=<n>`. Record it before the prose pass and again after — the second run
+   against the bare `$BASE`, since corrections are uncommitted at that point and
+   a two-endpoint range cannot see them.
+
+   The number alone is not the verdict. A hit has two legitimate resolutions —
+   downgrade the sentence, or pin its premise with a test — and only the first
+   moves the count; a pinned claim stands and keeps matching. Counting an
+   unchanged total as "no value" would score one of the two prescribed successes
+   as zero. So the round records whether any hit produced *either* outcome, and
+   the step is deleted only if neither ever happens — the same standard §4
+   applies to everything else.
 
 ## 7. Review targets are frozen and spans are pinned
 

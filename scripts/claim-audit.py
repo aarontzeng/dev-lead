@@ -91,11 +91,17 @@ False positives are expected and cheap: a legitimate absolute ("never push")
 costs a few seconds to dismiss. A missed one costs a review round, or ships.
 The honest risk in that trade is that "a few seconds each" across a 29-hit
 commit IS rubber-stamping, which is why the run prints a machine-readable
-`hits=<n>`: record it before and after the prose pass, and if the count never
-drops over a run of rounds, this script has never caused an edit and should be
-deleted on that evidence rather than defended by argument. Its own case is
-currently n=1 -- one false comment caught against its own working tree -- and
-calibration-journal.md says n=1 proves nothing.
+`hits=<n>`. Record it before the prose pass and again after, the second time
+against a BARE revision -- corrections are uncommitted at that point, and a
+two-endpoint range compares two commits and cannot see them.
+
+The count alone does not settle it. A hit has two legitimate resolutions:
+downgrade the sentence, or pin its premise with a test. Only the first moves the
+number -- a pinned claim stands and keeps matching -- so reading an unchanged
+total as "caused no edit" scores one of the two prescribed successes as zero.
+The round records whether either happened; the script is deleted only if neither
+ever does. Its own case is currently n=1 -- one false comment caught against its
+own working tree -- and calibration-journal.md says n=1 proves nothing.
 
 Python rather than bash because it parses diff hunk headers to report real line
 numbers; the bash version of that is fragile and hard to test.

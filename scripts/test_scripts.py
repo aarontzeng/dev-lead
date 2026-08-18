@@ -996,6 +996,28 @@ def test_claim_audit_parsing(tmp):
     check("claim-audit: a bare URL is not read as a trailing comment",
           "m.py:3" not in out, out)
 
+    # The before/after measurement the skill step prescribes only works if the
+    # SECOND run is worktree-aware: the round commits its checkpoint BEFORE the
+    # audit, so a correction is an uncommitted edit. A two-endpoint range
+    # compares two commits and cannot see it, and the count would not move even
+    # after a real downgrade — which made the documented instruction wrong.
+    meas = tmp / "measure"
+    make_repo(meas, commits=1)
+    mbase = git(meas, "rev-parse", "HEAD").stdout.strip()
+    (meas / "d.md").write_text("Called for every read in the adapter.\n")
+    git(meas, "add", "-A")
+    git(meas, "commit", "-qm", "checkpoint, made before the audit")
+    before = run("python3", audit, meas, f"{mbase}...HEAD").stdout
+    check("claim-audit: the first run counts the hit", "hits=1" in before, before)
+    # the lead downgrades the sentence and does NOT commit — the round's state
+    (meas / "d.md").write_text("Called for the two reads measured in the adapter.\n")
+    ranged = run("python3", audit, meas, f"{mbase}...HEAD").stdout
+    check("claim-audit: a two-endpoint range cannot see the uncommitted downgrade",
+          "hits=1" in ranged, ranged)
+    worktree = run("python3", audit, meas, mbase).stdout
+    check("claim-audit: the bare revision sees it, so the count actually moves",
+          "hits=0" in worktree, worktree)
+
     # Seventh connector pass.
     sev = tmp / "seventh"
     make_repo(sev, commits=1)

@@ -220,9 +220,20 @@ user can set it at invocation. Each round:
 
    **It is an attention cue, not a control.** It verifies nothing and exits 0
    either way; a silent run means "nothing matched the noun list", NOT "the prose
-   is anchored", and it is never evidence that claims were checked. Record the
-   `hits=<n>` line it prints, run it again after the prose pass, and record that
-   number too — if the count never drops, this step is not earning its place.
+   is anchored", and it is never evidence that claims were checked.
+
+   Record the `hits=<n>` line it prints. After the prose pass, run it AGAIN as
+   `python3 "$DEV_LEAD/scripts/claim-audit.py" "$WORKTREE" "$BASE"` — the bare
+   revision, NOT `$BASE...HEAD`. The round's checkpoint commit is made before
+   this step, so corrections are still working-tree edits; a two-endpoint range
+   compares two commits and cannot see them, and the count would not move even
+   after a real downgrade. The bare form diffs the worktree.
+
+   A drop means a sentence was downgraded. **An unchanged count is not evidence
+   of no value** — this step offers two outcomes, and pinning the premise with a
+   test leaves the claim standing and still matching. So record one line per
+   round: did any hit lead to a downgrade or to a new test? That, not the number
+   alone, is what says whether the step earns its place.
 
    Two shapes no filter can flag, and no prompt can force either — a review leg
    from another family is what catches them, so raise them there rather than
