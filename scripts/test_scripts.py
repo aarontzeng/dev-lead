@@ -981,6 +981,24 @@ def test_claim_audit_parsing(tmp):
     check("claim-audit: a bare URL is not read as a trailing comment",
           "m.py:3" not in out, out)
 
+    # Fourth connector pass: the entry must carry the claim. A long sentence
+    # whose absolute lands past the cut was shown as neutral lead-in prose, so
+    # the hit read as a false positive and neither question could be answered.
+    lng = tmp / "longline"
+    make_repo(lng, commits=1)
+    lbase = git(lng, "rev-parse", "HEAD").stdout.strip()
+    pad = ("This paragraph is ordinary introductory prose that carries no claim "
+           "whatsoever and simply runs on for a while. ")
+    (lng / "long.md").write_text(pad + "requests always succeed.\n")
+    (lng / "short.md").write_text("Called for every read in the adapter.\n")
+    git(lng, "add", "-A")
+    git(lng, "commit", "-qm", "a long claim-bearing line")
+    out = run("python3", audit, lng, f"{lbase}...HEAD").stdout
+    check("claim-audit: a long line's entry still shows the matched claim",
+          "always succeed" in out, out)
+    check("claim-audit: a short line is shown whole, unwindowed",
+          "Called for every read in the adapter." in out and "…Called" not in out, out)
+
     # Third connector pass. Reverse word order, and a context half that
     # classifies on its own but is not reportable on its own.
     rev = tmp / "reverse"

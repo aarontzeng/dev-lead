@@ -301,6 +301,26 @@ def commit_messages(dir_: str, base: str, tip: str | None) -> list[tuple[str, in
     return out
 
 
+def excerpt(text: str, width: int = 120) -> str:
+    """A window containing the CLAIM, not the first `width` characters.
+
+    A long sentence whose absolute lands past the cut was displayed with the
+    matched phrase chopped off, so the entry showed neutral introductory prose
+    and read as a false positive. Neither question can be answered about a
+    claim the reader cannot see, and joined wrapped lines are the longest
+    entries there are.
+    """
+    if len(text) <= width:
+        return text
+    starts = [m.start() for m in (ABSOLUTE.search(text), SAMENESS.search(text)) if m]
+    at = min(starts) if starts else 0
+    if at + 40 <= width:                          # already inside the window
+        return text[:width] + "…"
+    lead = max(0, at - 30)
+    tail = "…" if lead + width < len(text) else ""
+    return "…" + text[lead:lead + width] + tail
+
+
 def classify(text: str) -> list[str]:
     kinds = []
     if ABSOLUTE.search(text):
@@ -370,7 +390,7 @@ def main() -> int:
     print("     -> capacity is not feasibility; a passing suite is not coverage.\n")
     width = max(len(f"{p}:{n}") for p, n, _, _ in hits)
     for path, lineno, kind, text in hits:
-        print(f"  {f'{path}:{lineno}':<{width}}  [{kind}]  {text[:120]}")
+        print(f"  {f'{path}:{lineno}':<{width}}  [{kind}]  {excerpt(text)}")
     print(f"\nclaim-audit: {len(hits)} to resolve. This is a worklist, not a "
           f"failure -- exit 0 either way.")
     return 0
