@@ -214,10 +214,49 @@ user can set it at invocation. Each round:
    round whose three false sentences all survived). A lint rule *over* prose is
    executable and can be mutation-proofed; the prose it judges is not. Run
    `python3 "$DEV_LEAD/scripts/claim-audit.py" "$WORKTREE" "$BASE...HEAD"` and
-   answer both of its questions per hit. It is a worklist, not a gate — it exits
-   0 either way, and a legitimate absolute costs seconds to dismiss. Two shapes
-   no filter can flag, so ask them yourself: a **right conclusion resting on a
-   wrong mechanism** (a doc said two rows "return the same shape, so this is not
+   answer its question per hit: **if this sentence were false, which test goes
+   red?** Naming a test that runs nearby is not an answer — the assertion has to
+   fail on THIS claim being false.
+
+   **It is an attention cue, not a control.** It verifies nothing and exits 0
+   either way; a silent run means "nothing matched the noun list", NOT "the prose
+   is anchored", and it is never evidence that claims were checked.
+
+   **Commit what the audit changed, before the target is frozen.** A downgrade
+   or a new test is a working-tree edit at this point, and the next phase freezes
+   and reviews an exact `HEAD` commit while the merge gate fast-forwards that
+   committed branch. Anything left uncommitted here is reviewed by nobody and
+   merged nowhere — a successful audit silently losing its own fix. So: resolve
+   the hits, re-run the suite, amend or extend the checkpoint commit, and only
+   then freeze.
+
+   **A test this step adds is a new regression test, and step 2's
+   mutation-proofing already ran before it existed.** Re-running the suite is
+   not that check: it shows the test passes, not that it would fail if the
+   claim were false. So mutation-proof any test the audit produced, after
+   committing it and before freezing. This is not bookkeeping — the question
+   being answered is *which test goes red?*, and a vacuous test is the same
+   wrong answer as naming one that runs nearby, just written down instead of
+   asserted.
+
+   For the measurement, run the BARE revision at **both** checkpoints:
+   `python3 "$DEV_LEAD/scripts/claim-audit.py" "$WORKTREE" "$BASE"`, once before
+   the prose pass and once after. Do not compare it against the `$BASE...HEAD`
+   audit run — that form audits prose **and commit messages**, while the bare
+   form audits prose only (no commits in a worktree range), so the count falls
+   by the excluded class alone. Measured: a range with one commit-message claim
+   and no prose edit whatsoever reports `hits=1` ranged and `hits=0` bare. Two
+   different input classes are not a before and an after.
+
+   A drop then means a sentence was downgraded. **An unchanged count is not
+   evidence of no value** — this step offers two outcomes, and pinning the
+   premise with a test leaves the claim standing and still matching. So record
+   one line per round: did any hit lead to a downgrade or to a new test? That,
+   not the number alone, is what says whether the step earns its place.
+
+   Two shapes no filter can flag, and no prompt can force either — a review leg
+   from another family is what catches them, so raise them there rather than
+   here: a **right conclusion resting on a wrong mechanism** (a doc said two rows "return the same shape, so this is not
    an existence oracle" — both rows really did share those fields, but a third
    field differed; the conclusion was right and the stated reason was not, and a
    wrong mechanism gets reused as a premise by whoever reads it next), and a

@@ -167,11 +167,39 @@ Nothing a delegate self-reports is evidence. The lead:
    the moment you assert the behaviour it describes — which is what question 1
    is really asking for. Measured: a round that killed 20
    mutants shipped three false sentences, and all three were caught by the review
-   leg instead — a Graph-layer mechanism paying for a Loop-layer gap, which is
-   the expensive way round. `scripts/claim-audit.py` surfaces the two phrasings
-   that shipped false; the two shapes no filter reaches are asked as questions
-   instead — **if this were false, which test goes red?** and **did I measure the
-   property, or a proxy for it?**
+   leg instead.
+
+   `scripts/claim-audit.py` surfaces the phrasings that have shipped false and
+   asks one question per hit — **if this were false, which test goes red?**
+   Naming a test that merely runs nearby is not an answer; the assertion has to
+   fail on the claim being false.
+
+   **It is an attention cue, not a control, and the distinction is load-bearing.**
+   It verifies nothing, exits 0 either way, and a silent run means "no added line
+   matched the noun list" — *not* "the prose is anchored". It must never be cited
+   as evidence that claims were checked, and must never justify less scrutiny in
+   the review leg. An earlier draft of this section called it a Loop-layer
+   mechanism closing a Loop-layer gap; a three-family review panel called that a
+   category error, and it was right — an un-gated prompt whose output only a
+   reader can judge is Graph-layer work, and reclassifying it does not make it an
+   oracle.
+
+   Because that leaves it unable to prove its own worth by argument, it prints
+   `hits=<n>`. Record it before the prose pass and again after, using the BARE
+   revision both times: corrections are uncommitted at that point and a
+   two-endpoint range cannot see them, while the two forms audit different input
+   classes — ranged covers prose and commit messages, bare covers prose only, so
+   comparing one against the other shows a fall caused by the excluded class
+   rather than by any edit. Whatever the audit changed is committed before the
+   target is frozen, or it is reviewed by nobody and merged nowhere.
+
+   The number alone is not the verdict. A hit has two legitimate resolutions —
+   downgrade the sentence, or pin its premise with a test — and only the first
+   moves the count; a pinned claim stands and keeps matching. Counting an
+   unchanged total as "no value" would score one of the two prescribed successes
+   as zero. So the round records whether any hit produced *either* outcome, and
+   the step is deleted only if neither ever happens — the same standard §4
+   applies to everything else.
 
 ## 7. Review targets are frozen and spans are pinned
 

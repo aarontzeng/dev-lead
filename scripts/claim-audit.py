@@ -50,13 +50,16 @@ It caught two of the three known-false sentences, and surfaced all
 three copies of one of them (doc, code comment, commit body) -- which then feeds
 the "grep for its copies" rule in the same step. It did NOT catch the third
 ("feasibility ... is not the obstacle"), and no keyword filter can: that failure
-is an inference, not a phrasing. Which is why question 2 is asked alongside
-question 1 on every hit, whichever pattern class produced it.
+is an inference, not a phrasing.
 
-Known hole, and it is the unlintable shape's own case: a run with NO hits prints
-neither question, so the sentence question 2 exists for gets nothing on a clean
-range. Closing it means printing the questions unconditionally and accepting the
-noise on every silent run; that trade has not been made.
+A second question -- "did I measure the property, or a proxy for it?" -- used to
+print alongside the first. It was REMOVED. A three-family panel (Gemini, GPT,
+NVIDIA) agreed unanimously that no prompt formulation defeats proxy-for-property
+rationalisation, because the model being asked is the one that already made the
+substitution; asking it to self-audit reproduces the blind spot. Recognising a
+proxy needs a reader who was not there when it was chosen, so that belongs to
+the cross-family review leg -- which is where all three original instances were
+in fact caught. A question that cannot be failed is not a check.
 
 Second known hole, in what it LOOKS at: in a code file a line counts as prose
 only if it opens a comment or trails one. A line inside a docstring or a /* */
@@ -76,10 +79,33 @@ So this script is NOT a verdict, unlike verify-target.sh -- it exits 0 whenever
 it ran, hits or no hits, and 2 ONLY when it could not run: wrong arity, no git
 on PATH, or a git command that failed. That split is what the exit code means;
 undecodable bytes in a diff are replaced rather than raised, so they no longer
-escape it. It only makes the risky sentences impossible to skim past. Judging
-them is the lead's job, using the two questions it prints. False positives are
-expected and cheap: a legitimate absolute ("never push") costs a few seconds to
-dismiss. A missed one costs a review round, or ships.
+escape it.
+
+What it is, stated so nothing downstream can overstate it: an ATTENTION CUE, not
+a control. It verifies nothing. A silent run means "no added line matched the
+noun list" -- NOT "the prose is anchored", and it must never be cited as
+evidence that claims were checked, nor used to justify less scrutiny anywhere
+downstream. Judging a flagged sentence is the lead's job.
+
+False positives are expected and cheap: a legitimate absolute ("never push")
+costs a few seconds to dismiss. A missed one costs a review round, or ships.
+The honest risk in that trade is that "a few seconds each" across a 29-hit
+commit IS rubber-stamping, which is why the run prints a machine-readable
+`hits=<n>`. Record it before the prose pass and again after, using the BARE
+revision BOTH times. Corrections are uncommitted at that point, so a
+two-endpoint range compares two commits and cannot see them -- and the two forms
+do not audit the same thing: a ranged run reads prose AND commit messages, a
+bare run reads prose only, because a worktree range holds no commits. Comparing
+one form against the other reports a fall produced by the excluded class and by
+no edit at all.
+
+The count alone does not settle it. A hit has two legitimate resolutions:
+downgrade the sentence, or pin its premise with a test. Only the first moves the
+number -- a pinned claim stands and keeps matching -- so reading an unchanged
+total as "caused no edit" scores one of the two prescribed successes as zero.
+The round records whether either happened; the script is deleted only if neither
+ever does. Its own case is currently n=1 -- one false comment caught against its
+own working tree -- and calibration-journal.md says n=1 proves nothing.
 
 Python rather than bash because it parses diff hunk headers to report real line
 numbers; the bash version of that is fragile and hard to test.
@@ -413,21 +439,24 @@ def main() -> int:
         i += 1
 
     if not hits:
-        print("claim-audit: no absolute or sameness claims added in this range.")
+        print("claim-audit: nothing matched. That is NOT 'the prose is anchored' "
+              "-- it means no added line matched the noun list.")
+        print("claim-audit: hits=0")
         return 0
 
     print(f"claim-audit: {len(hits)} added sentence(s) carry a shape that shipped "
-          f"false before. Answer BOTH questions for each, then proceed:\n")
-    print("  1. If this sentence were false, which test goes red?")
+          f"false before. For each one, answer:\n")
+    print("  If this sentence were false, which test goes red?")
     print("     -> cannot name one: pin the premise with a test, or downgrade the")
     print("        sentence to what was observed. Do not leave it asserting.")
-    print("  2. Did I measure the property, or a proxy for it?")
-    print("     -> capacity is not feasibility; a passing suite is not coverage.\n")
+    print("     -> naming a test that runs nearby is not an answer. The assertion")
+    print("        has to fail on THIS claim being false.\n")
     width = max(len(f"{p}:{n}") for p, n, _, _ in hits)
     for path, lineno, kind, text in hits:
         print(f"  {f'{path}:{lineno}':<{width}}  [{kind}]  {excerpt(text)}")
-    print(f"\nclaim-audit: {len(hits)} to resolve. This is a worklist, not a "
-          f"failure -- exit 0 either way.")
+    print(f"\nclaim-audit: an attention cue, not a control -- it verifies nothing "
+          f"and exits 0 either way.")
+    print(f"claim-audit: hits={len(hits)}")
     return 0
 
 

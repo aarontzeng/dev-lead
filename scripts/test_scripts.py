@@ -720,12 +720,22 @@ def test_claim_audit(tmp):
           "code.py:1" in out, out)
     check("claim-audit: does NOT flag a non-comment code line",
           "code.py:2" not in out, out)
-    check("claim-audit: prints both anchoring questions regardless of class",
-          "which test goes red" in out and "proxy for it" in out, out)
-    # Named for what it asserts. The previous name said question 2 "reports"
-    # the unlintable shape, which this cannot show: a missing label proves only
-    # that nothing matched. What carries that sentence is question 2 printing
-    # unconditionally, so assert that here rather than implying it.
+    check("claim-audit: asks the anchoring question regardless of class",
+          "which test goes red" in out, out)
+    # question 2 was REMOVED: a three-family panel agreed no prompt defeats
+    # proxy-for-property rationalisation, because the model asked is the one
+    # that made the substitution. Asserted so it cannot creep back unnoticed.
+    check("claim-audit: does NOT ask the property-vs-proxy question",
+          "proxy for it" not in out, out)
+    check("claim-audit: says a nearby test is not an answer",
+          "runs nearby is not an answer" in out or "not an answer" in out, out)
+    check("claim-audit: prints a machine-readable hit count",
+          "claim-audit: hits=" in out, out)
+    # Named for what it asserts, and nothing more. An earlier name claimed this
+    # showed question 2 "reporting" the shape; a missing label shows only that
+    # nothing matched. Question 2 no longer exists at all — the sentence it was
+    # meant for is now the cross-family leg's to catch, and this line records
+    # only that no pattern reaches it.
     check("claim-audit: does NOT match the unlintable shape",
           "doc.md:5" not in out, out)
 
@@ -736,8 +746,14 @@ def test_claim_audit(tmp):
     git(clean, "add", "-A")
     git(clean, "commit", "-qm", "neutral prose")
     r2 = run("python3", audit, clean, f"{cbase}...HEAD")
+    # a silent run must NOT read as "anchored" -- that false confidence is the
+    # governance risk the review panel named, so the wording is asserted
     check("claim-audit: silent when nothing risky was added",
-          r2.returncode == 0 and "no absolute or sameness" in r2.stdout, r2.stdout)
+          r2.returncode == 0 and "nothing matched" in r2.stdout, r2.stdout)
+    check("claim-audit: a silent run denies that it means 'anchored'",
+          "NOT 'the prose is anchored'" in r2.stdout, r2.stdout)
+    check("claim-audit: a silent run still prints hits=0",
+          "claim-audit: hits=0" in r2.stdout, r2.stdout)
 
     r3 = run("python3", audit, repo)
     check("claim-audit: wrong arity exits 2, distinct from a clean run",
@@ -980,6 +996,44 @@ def test_claim_audit_parsing(tmp):
           "guard.md" not in out, out)
     check("claim-audit: a bare URL is not read as a trailing comment",
           "m.py:3" not in out, out)
+
+    # The before/after measurement the skill step prescribes only works if the
+    # SECOND run is worktree-aware: the round commits its checkpoint BEFORE the
+    # audit, so a correction is an uncommitted edit. A two-endpoint range
+    # compares two commits and cannot see it, and the count would not move even
+    # after a real downgrade — which made the documented instruction wrong.
+    meas = tmp / "measure"
+    make_repo(meas, commits=1)
+    mbase = git(meas, "rev-parse", "HEAD").stdout.strip()
+    (meas / "d.md").write_text("Called for every read in the adapter.\n")
+    git(meas, "add", "-A")
+    git(meas, "commit", "-qm", "checkpoint, made before the audit")
+    before = run("python3", audit, meas, f"{mbase}...HEAD").stdout
+    check("claim-audit: the first run counts the hit", "hits=1" in before, before)
+    # the lead downgrades the sentence and does NOT commit — the round's state
+    (meas / "d.md").write_text("Called for the two reads measured in the adapter.\n")
+    ranged = run("python3", audit, meas, f"{mbase}...HEAD").stdout
+    check("claim-audit: a two-endpoint range cannot see the uncommitted downgrade",
+          "hits=1" in ranged, ranged)
+    worktree = run("python3", audit, meas, mbase).stdout
+    check("claim-audit: the bare revision sees it, so the count actually moves",
+          "hits=0" in worktree, worktree)
+
+    # The two range forms do not audit the same input classes, so they are not a
+    # before and an after: ranged reads prose AND commit messages, bare reads
+    # prose only. Comparing them reports a fall caused by the excluded class.
+    cls = tmp / "classes"
+    make_repo(cls, commits=1)
+    cbase3 = git(cls, "rev-parse", "HEAD").stdout.strip()
+    (cls / "plain.md").write_text("nothing risky in this prose\n")
+    git(cls, "add", "-A")
+    git(cls, "commit", "-qm", "checkpoint: every read is now cached")
+    ranged2 = run("python3", audit, cls, f"{cbase3}...HEAD").stdout
+    bare2 = run("python3", audit, cls, cbase3).stdout
+    check("claim-audit: a ranged run counts a commit-message claim",
+          "hits=1" in ranged2, ranged2)
+    check("claim-audit: a bare run counts prose only, so the same state reads 0",
+          "hits=0" in bare2, bare2)
 
     # Seventh connector pass.
     sev = tmp / "seventh"
