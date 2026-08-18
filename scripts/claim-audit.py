@@ -91,9 +91,13 @@ False positives are expected and cheap: a legitimate absolute ("never push")
 costs a few seconds to dismiss. A missed one costs a review round, or ships.
 The honest risk in that trade is that "a few seconds each" across a 29-hit
 commit IS rubber-stamping, which is why the run prints a machine-readable
-`hits=<n>`. Record it before the prose pass and again after, the second time
-against a BARE revision -- corrections are uncommitted at that point, and a
-two-endpoint range compares two commits and cannot see them.
+`hits=<n>`. Record it before the prose pass and again after, using the BARE
+revision BOTH times. Corrections are uncommitted at that point, so a
+two-endpoint range compares two commits and cannot see them -- and the two forms
+do not audit the same thing: a ranged run reads prose AND commit messages, a
+bare run reads prose only, because a worktree range holds no commits. Comparing
+one form against the other reports a fall produced by the excluded class and by
+no edit at all.
 
 The count alone does not settle it. A hit has two legitimate resolutions:
 downgrade the sentence, or pin its premise with a test. Only the first moves the

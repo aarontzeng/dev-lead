@@ -1018,6 +1018,22 @@ def test_claim_audit_parsing(tmp):
     check("claim-audit: the bare revision sees it, so the count actually moves",
           "hits=0" in worktree, worktree)
 
+    # The two range forms do not audit the same input classes, so they are not a
+    # before and an after: ranged reads prose AND commit messages, bare reads
+    # prose only. Comparing them reports a fall caused by the excluded class.
+    cls = tmp / "classes"
+    make_repo(cls, commits=1)
+    cbase3 = git(cls, "rev-parse", "HEAD").stdout.strip()
+    (cls / "plain.md").write_text("nothing risky in this prose\n")
+    git(cls, "add", "-A")
+    git(cls, "commit", "-qm", "checkpoint: every read is now cached")
+    ranged2 = run("python3", audit, cls, f"{cbase3}...HEAD").stdout
+    bare2 = run("python3", audit, cls, cbase3).stdout
+    check("claim-audit: a ranged run counts a commit-message claim",
+          "hits=1" in ranged2, ranged2)
+    check("claim-audit: a bare run counts prose only, so the same state reads 0",
+          "hits=0" in bare2, bare2)
+
     # Seventh connector pass.
     sev = tmp / "seventh"
     make_repo(sev, commits=1)

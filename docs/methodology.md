@@ -185,9 +185,13 @@ Nothing a delegate self-reports is evidence. The lead:
    oracle.
 
    Because that leaves it unable to prove its own worth by argument, it prints
-   `hits=<n>`. Record it before the prose pass and again after — the second run
-   against the bare `$BASE`, since corrections are uncommitted at that point and
-   a two-endpoint range cannot see them.
+   `hits=<n>`. Record it before the prose pass and again after, using the BARE
+   revision both times: corrections are uncommitted at that point and a
+   two-endpoint range cannot see them, while the two forms audit different input
+   classes — ranged covers prose and commit messages, bare covers prose only, so
+   comparing one against the other shows a fall caused by the excluded class
+   rather than by any edit. Whatever the audit changed is committed before the
+   target is frozen, or it is reviewed by nobody and merged nowhere.
 
    The number alone is not the verdict. A hit has two legitimate resolutions —
    downgrade the sentence, or pin its premise with a test — and only the first

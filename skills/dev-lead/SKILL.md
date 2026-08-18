@@ -222,18 +222,28 @@ user can set it at invocation. Each round:
    either way; a silent run means "nothing matched the noun list", NOT "the prose
    is anchored", and it is never evidence that claims were checked.
 
-   Record the `hits=<n>` line it prints. After the prose pass, run it AGAIN as
-   `python3 "$DEV_LEAD/scripts/claim-audit.py" "$WORKTREE" "$BASE"` — the bare
-   revision, NOT `$BASE...HEAD`. The round's checkpoint commit is made before
-   this step, so corrections are still working-tree edits; a two-endpoint range
-   compares two commits and cannot see them, and the count would not move even
-   after a real downgrade. The bare form diffs the worktree.
+   **Commit what the audit changed, before the target is frozen.** A downgrade
+   or a new test is a working-tree edit at this point, and the next phase freezes
+   and reviews an exact `HEAD` commit while the merge gate fast-forwards that
+   committed branch. Anything left uncommitted here is reviewed by nobody and
+   merged nowhere — a successful audit silently losing its own fix. So: resolve
+   the hits, re-run the suite, amend or extend the checkpoint commit, and only
+   then freeze.
 
-   A drop means a sentence was downgraded. **An unchanged count is not evidence
-   of no value** — this step offers two outcomes, and pinning the premise with a
-   test leaves the claim standing and still matching. So record one line per
-   round: did any hit lead to a downgrade or to a new test? That, not the number
-   alone, is what says whether the step earns its place.
+   For the measurement, run the BARE revision at **both** checkpoints:
+   `python3 "$DEV_LEAD/scripts/claim-audit.py" "$WORKTREE" "$BASE"`, once before
+   the prose pass and once after. Do not compare it against the `$BASE...HEAD`
+   audit run — that form audits prose **and commit messages**, while the bare
+   form audits prose only (no commits in a worktree range), so the count falls
+   by the excluded class alone. Measured: a range with one commit-message claim
+   and no prose edit whatsoever reports `hits=1` ranged and `hits=0` bare. Two
+   different input classes are not a before and an after.
+
+   A drop then means a sentence was downgraded. **An unchanged count is not
+   evidence of no value** — this step offers two outcomes, and pinning the
+   premise with a test leaves the claim standing and still matching. So record
+   one line per round: did any hit lead to a downgrade or to a new test? That,
+   not the number alone, is what says whether the step earns its place.
 
    Two shapes no filter can flag, and no prompt can force either — a review leg
    from another family is what catches them, so raise them there rather than
