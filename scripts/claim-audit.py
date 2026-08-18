@@ -27,15 +27,23 @@ commits by one author. Review called that sample overfitted and named misses it
 predicted ("all workers", "every packet", "guaranteed zero allocations"); all
 three did miss. The list was widened, and the volume cost re-measured across the
 eight most recent commits rather than argued: 3/19/0/2/1/1/1/1 became
-3/20/0/2/1/1/1/1. One added hit, so the recall came effectively free -- but the
-bound is still a list, and a noun absent from it is still a silent miss.
+3/20/0/2/1/1/1/1 -- one added hit on THOSE eight. That is a measurement, not a
+guarantee: eight commits from one repository cannot show that the wider list
+holds its volume on prose written differently, and there is no volume regression
+test. The bound is still a list, and a noun absent from it is still a silent
+miss.
 
 It caught two of the three known-false sentences, and surfaced all
 three copies of one of them (doc, code comment, commit body) -- which then feeds
 the "grep for its copies" rule in the same step. It did NOT catch the third
 ("feasibility ... is not the obstacle"), and no keyword filter can: that failure
-is an inference, not a phrasing. Which is why question 2 below prints whether or
-not a pattern fired.
+is an inference, not a phrasing. Which is why question 2 is asked alongside
+question 1 on every hit, whichever pattern class produced it.
+
+Known hole, and it is the unlintable shape's own case: a run with NO hits prints
+neither question, so the sentence question 2 exists for gets nothing on a clean
+range. Closing it means printing the questions unconditionally and accepting the
+noise on every silent run; that trade has not been made.
 
 Run against its own introducing commit it flagged five sentences, of which three
 were dated citations of past incidents (correctly dismissed) and two were real
@@ -56,6 +64,12 @@ numbers; the bash version of that is fragile and hard to test.
 
 Usage: claim-audit.py <dir> <range>
        claim-audit.py "$WORKTREE" "$BASE...HEAD"
+
+A two- or three-dot range is resolved through merge-base, and its commit
+messages are audited along with its prose. A BARE REVISION means "the working
+tree against that revision" and audits prose only -- there are no commits in
+that span, so no commit message is read. (It used to run `git log <rev>`, which
+scanned the entire history behind it.)
 """
 from __future__ import annotations
 
@@ -85,17 +99,25 @@ _R = r"(?![A-Za-z0-9_])"                 # ... and end. "\b" counts CJK as a wor
                                          # character, so "Every請求" had no
                                          # boundary after "Every" and never matched.
 _GAP = r"[^.;!?。；！？]"                 # must not span a sentence end, either script
-ABSOLUTE = re.compile(
-    _L + r"(every|all|any|no|never|always|undetectable|impossible|guaranteed)" + _R
-    + _GAP + r"{0,40}?" + _L
-    + r"(read|reads|write|writes|call|calls|caller|callers|path|paths|"
-      r"case|cases|row|rows|request|requests|branch|branches|mutant|mutants|"
-      r"worker|workers|packet|packets|allocation|allocations|observer|observers|"
-      r"handler|handlers|endpoint|endpoints|node|nodes|thread|threads|"
-      r"field|fields|record|records|entry|entries|message|messages|"
-      r"query|queries|response|responses|input|inputs|client|clients)" + _R
-    + r"|(一律|永遠|完全|絕不|不可能)" + _GAP + r"{0,20}?(讀取|寫入|呼叫|路徑|情況|請求)",
-    re.I)
+_ABS_EN = r"(every|all|any|no|never|always|undetectable|impossible|guaranteed)"
+_ABS_ZH = r"(一律|永遠|完全|絕不|不可能)"
+_NOUN_EN = (r"(read|reads|write|writes|call|calls|caller|callers|path|paths|"
+            r"case|cases|row|rows|request|requests|branch|branches|mutant|mutants|"
+            r"worker|workers|packet|packets|allocation|allocations|observer|observers|"
+            r"handler|handlers|endpoint|endpoints|node|nodes|thread|threads|"
+            r"field|fields|record|records|entry|entries|message|messages|"
+            r"query|queries|response|responses|input|inputs|client|clients)")
+_NOUN_ZH = r"(讀取|寫入|呼叫|路徑|情況|請求)"
+# All four script combinations, because this codebase mixes them mid-sentence.
+# "Every請求" is the one that needs its own branch: an ASCII boundary cannot be
+# required before a CJK noun, since the character before it is the absolute's
+# own last letter.
+ABSOLUTE = re.compile("|".join((
+    _L + _ABS_EN + _R + _GAP + r"{0,40}?" + _L + _NOUN_EN + _R,
+    _L + _ABS_EN + _R + _GAP + r"{0,40}?" + _NOUN_ZH,
+    _ABS_ZH + _GAP + r"{0,20}?" + _NOUN_ZH,
+    _ABS_ZH + _GAP + r"{0,20}?" + _L + _NOUN_EN + _R,
+)), re.I)
 SAMENESS = re.compile(
     _L + r"(same|identical|indistinguishable|equivalent|no different|unchanged)" + _R
     + r"|相同|一樣|無法分辨|等價", re.I)
@@ -130,13 +152,20 @@ def resolve_range(dir_: str, rng: str) -> tuple[str, str | None]:
     line the diff never showed, or missed entirely. Resolving the endpoints once
     removes the disagreement: the diff gets "base tip", the log "base..tip".
     """
-    if "..." in rng:
-        a, b = rng.split("...", 1)
-        a, b = a or "HEAD", b or "HEAD"
+    sep = "..." if "..." in rng else (".." if ".." in rng else None)
+    if sep:
+        a_raw, b_raw = rng.split(sep, 1)
+        if not a_raw and not b_raw:      # a bare ".." -- git rejects it too
+            sys.stderr.write(f"claim-audit: {rng!r} names no endpoints\n")
+            sys.exit(2)
+        a, b = a_raw or "HEAD", b_raw or "HEAD"
+        # BOTH forms resolve through merge-base. For "A..B" that deviates from
+        # git, where diff would compare the tips directly -- but this tool asks
+        # "what prose did this range ADD", and against a diverged A the tip
+        # comparison answers a different question: a sentence A DELETED shows up
+        # as added by B. merge-base..B is the honest span, and for the ancestor
+        # case the two are identical anyway.
         return git(dir_, "merge-base", a, b).strip(), b
-    if ".." in rng:
-        a, b = rng.split("..", 1)
-        return a or "HEAD", b or "HEAD"
     return rng, None                     # single rev: diff the worktree, no commits
 
 
@@ -174,6 +203,13 @@ def added_prose(dir_: str, base: str, tip: str | None) -> list[tuple[str, int, s
             if path.endswith(PROSE_SUFFIX) or COMMENT.match(body):
                 out.append((path, lineno, body.strip()))
             lineno += 1
+        elif raw.startswith(" "):
+            # --unified=0 asks for no context, but diff.interHunkContext can
+            # still merge neighbouring hunks and carry the lines between them.
+            # A context line occupies a line in the NEW file, so not counting it
+            # shifted every later claim in that hunk -- the same wrong-line
+            # failure the header fix above was for.
+            lineno += 1
     return out
 
 
@@ -189,6 +225,14 @@ def commit_messages(dir_: str, base: str, tip: str | None) -> list[tuple[str, in
 
 
 def main() -> int:
+    # The flagged sentence is the output, and it can carry any byte git gave us.
+    # Under a strict stdout encoding (PYTHONIOENCODING=ascii:strict, some CI
+    # containers) printing it raised UnicodeEncodeError and exited 1 -- which
+    # would break the exit contract in the same way the decode side did.
+    try:
+        sys.stdout.reconfigure(errors="replace")
+    except (AttributeError, ValueError):  # not a reconfigurable stream
+        pass
     if len(sys.argv) != 3:
         sys.stderr.write("Usage: claim-audit.py <dir> <range>\n")
         return 2

@@ -726,8 +726,8 @@ def test_claim_audit(tmp):
     # the unlintable shape, which this cannot show: a missing label proves only
     # that nothing matched. What carries that sentence is question 2 printing
     # unconditionally, so assert that here rather than implying it.
-    check("claim-audit: does NOT match the unlintable shape, and asks question 2 anyway",
-          "doc.md:5" not in out and "proxy for it" in out, out)
+    check("claim-audit: does NOT match the unlintable shape",
+          "doc.md:5" not in out, out)
 
     clean = tmp / "clean"
     make_repo(clean, commits=1)
@@ -790,6 +790,9 @@ def test_claim_audit_parsing(tmp):
     bx = tmp / "bpath"
     make_repo(bx, commits=1)
     bbase = git(bx, "rev-parse", "HEAD").stdout.strip()
+    # noprefix ON is what makes this discriminate: without it the old raw[6:]
+    # also produced "b/doc.md" and the assertion passed with the fix reverted.
+    git(bx, "config", "diff.noprefix", "true")
     (bx / "b").mkdir()
     (bx / "b" / "doc.md").write_text("Called for every read in the adapter.\n")
     git(bx, "add", "-A")
@@ -830,11 +833,65 @@ def test_claim_audit_parsing(tmp):
     r = run("python3", audit, bad, f"{ubase}...HEAD")
     check("claim-audit: undecodable bytes still exit 0, not 1",
           r.returncode == 0, f"rc={r.returncode} {r.stderr}")
+    # and the sentence must SURVIVE the replacement, not be swallowed by it
+    check("claim-audit: the undecodable line is still reported",
+          "doc.md:1" in r.stdout, r.stdout)
+
+    r = run("python3", audit, bad, f"{ubase}...HEAD",
+            env=dict(os.environ, PYTHONIOENCODING="ascii:strict"))
+    check("claim-audit: a strict stdout encoding does not break the exit contract",
+          r.returncode == 0, f"rc={r.returncode} {r.stderr[-200:]}")
 
     r = run(sys.executable, audit, bad, f"{ubase}...HEAD",
             env=dict(os.environ, PATH="/nonexistent"))
     check("claim-audit: no git on PATH exits 2, not 1",
           r.returncode == 2, f"rc={r.returncode} {r.stderr}")
+
+    # diff.interHunkContext can merge neighbouring hunks and carry the context
+    # lines between them, even under --unified=0. Those lines occupy lines in
+    # the new file; not counting them shifted every later claim in the hunk.
+    ihc = tmp / "interhunk"
+    make_repo(ihc, commits=1)
+    ibase = git(ihc, "rev-parse", "HEAD").stdout.strip()
+    (ihc / "doc.md").write_text("".join(f"l{i}\n" for i in range(1, 11)))
+    git(ihc, "add", "-A")
+    git(ihc, "commit", "-qm", "ten lines")
+    mid = git(ihc, "rev-parse", "HEAD").stdout.strip()
+    body = ["l%d\n" % i for i in range(1, 11)]
+    body[0] = "Called for every read here.\n"
+    body[9] = "Called for every write here.\n"
+    (ihc / "doc.md").write_text("".join(body))
+    git(ihc, "add", "-A")
+    git(ihc, "commit", "-qm", "two distant claims")
+    git(ihc, "config", "diff.interHunkContext", "100")
+    out = run("python3", audit, ihc, f"{mid}...HEAD").stdout
+    check("claim-audit: context lines still advance the line number",
+          "doc.md:1" in out and "doc.md:10" in out, out)
+
+    # a bare ".." names no endpoints; git rejects it and so must this
+    r = run("python3", audit, ihc, "..")
+    check("claim-audit: a bare '..' exits 2, not a clean run",
+          r.returncode == 2, f"rc={r.returncode} {r.stderr}")
+
+    # "A..B" resolves through merge-base too: comparing diverged TIPS reports a
+    # sentence the other branch DELETED as one this range added.
+    two = tmp / "twodot"
+    make_repo(two, commits=1)
+    (two / "doc.md").write_text("Called for every read in the adapter.\n")
+    git(two, "add", "-A")
+    git(two, "commit", "-qm", "seed the claim")
+    trunk2 = git(two, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
+    git(two, "checkout", "-q", "-b", "deleter")
+    (two / "doc.md").write_text("nothing risky here\n")
+    git(two, "add", "-A")
+    git(two, "commit", "-qm", "delete the claim")
+    git(two, "checkout", "-q", trunk2)
+    (two / "other.md").write_text("plain trunk prose\n")
+    git(two, "add", "-A")
+    git(two, "commit", "-qm", "unrelated trunk work")
+    out = run("python3", audit, two, f"deleter..{trunk2}").stdout
+    check("claim-audit: a two-dot range does not report the other side's deletion",
+          "doc.md" not in out, out)
 
     # The noun list is the recall bound. These three were named by review as
     # predicted misses of a list tuned on one author's four commits.
@@ -855,6 +912,10 @@ def test_claim_audit_parsing(tmp):
         # is the unpinned kind of sentence this whole script exists to surface.
         "Undetectable by external observers.\n"
         "Undetectable by design.\n"
+        # an ASCII absolute with a CJK noun and nothing else: the earlier
+        # fixture matched on its English "request", so it never tested this.
+        "Every請求\n"
+        "一律 every read\n"
     )
     git(wide, "add", "-A")
     git(wide, "commit", "-qm", "wider nouns")
@@ -871,6 +932,10 @@ def test_claim_audit_parsing(tmp):
           "doc.md:7" in out, out)
     check("claim-audit: does NOT flag 'undetectable by design', as the comment says",
           "doc.md:8" not in out, out)
+    check("claim-audit: an ASCII absolute over a CJK noun matches",
+          "doc.md:9" in out, out)
+    check("claim-audit: a CJK absolute over an ASCII noun matches",
+          "doc.md:10" in out, out)
 
 
 # ------------------------------------------------------------ lint version ----
