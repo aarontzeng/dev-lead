@@ -312,9 +312,15 @@ def excerpt(text: str, width: int = 120) -> str:
     """
     if len(text) <= width:
         return text
-    starts = [m.start() for m in (ABSOLUTE.search(text), SAMENESS.search(text)) if m]
-    at = min(starts) if starts else 0
-    if at + 40 <= width:                          # already inside the window
+    spans = [(m.start(), m.end())
+             for m in (ABSOLUTE.search(text), SAMENESS.search(text)) if m]
+    if not spans:
+        return text[:width] + "…"
+    # ABSOLUTE allows 40 characters BETWEEN its two terms, so a match starting
+    # comfortably inside the window can still END outside it. A guessed offset
+    # from start() cut the noun off the claim; ask where the match actually ends.
+    at, end = min(spans)
+    if end <= width:
         return text[:width] + "…"
     lead = max(0, at - 30)
     tail = "…" if lead + width < len(text) else ""
@@ -349,19 +355,14 @@ def main() -> int:
     while i < len(items):
         path, lineno, text, added = items[i]
         kinds = classify(text)
-        if kinds and added:
-            hits.append((path, lineno, "+".join(kinds), text))
-            i += 1
-            continue
-        # A hard wrap splits a claim across two lines, and neither half carries
-        # it: "... Every" / "request is processed ...". Both this repository's
-        # docs and its commit messages are wrapped, so matching physical lines
-        # alone reported those ranges clean. Only ADJACENT lines are joined, and
-        # only when neither matched alone, so nothing is reported twice; a blank
-        # line breaks the run, and _GAP still refuses to cross a sentence end.
-        # Reached even when THIS line already classifies, as long as it is not
-        # reportable by itself: an unchanged half whose sentence the range
-        # edited on the OTHER line is surfaced only by the join.
+        # The join is tried BEFORE accepting a physical-line hit. A hard wrap
+        # splits a claim across two lines and the halves can carry DIFFERENT
+        # classes -- "Every response from this route" / "is identical for
+        # authenticated clients." -- so reporting the added half by itself shows
+        # a claim stripped of its predicate and never notices the second class
+        # at all. Only ADJACENT lines join, a blank line breaks the run, at
+        # least one half must be new, and SENTENCE_END holds this to genuine
+        # wraps so a complete standing sentence is still reported on its own.
         if i + 1 < len(items):
             p2, l2, t2, a2 = items[i + 1]
             k2 = classify(t2)
@@ -375,6 +376,8 @@ def main() -> int:
                     hits.append((path, lineno, "+".join(kj) + "/wrapped", joined))
                     i += 2
                     continue
+        if kinds and added:
+            hits.append((path, lineno, "+".join(kinds), text))
         i += 1
 
     if not hits:

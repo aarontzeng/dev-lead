@@ -981,6 +981,40 @@ def test_claim_audit_parsing(tmp):
     check("claim-audit: a bare URL is not read as a trailing comment",
           "m.py:3" not in out, out)
 
+    # Fifth connector pass. Both against the two fixes above.
+    half = tmp / "halves"
+    make_repo(half, commits=1)
+    (half / "p.md").write_text(
+        "One response from this route\nis identical for authenticated clients.\n")
+    git(half, "add", "-A")
+    git(half, "commit", "-qm", "wrapped predicate base")
+    hbase = git(half, "rev-parse", "HEAD").stdout.strip()
+    # only the FIRST half changes, and it classifies on its own — the predicate
+    # carrying the second class lives on the unchanged line below it
+    (half / "p.md").write_text(
+        "Every response from this route\nis identical for authenticated clients.\n")
+    git(half, "add", "-A")
+    git(half, "commit", "-qm", "assert an absolute over an existing predicate")
+    out = run("python3", audit, half, f"{hbase}...HEAD").stdout
+    check("claim-audit: an added half is joined to its predicate, not reported bare",
+          "is identical for authenticated clients." in out, out)
+    check("claim-audit: the join picks up the class only the other half carries",
+          "absolute+sameness" in out, out)
+
+    # a match can START inside the window and END outside it, because ABSOLUTE
+    # allows 40 characters between its two terms
+    wide2 = tmp / "widematch"
+    make_repo(wide2, commits=1)
+    w2base = git(wide2, "rev-parse", "HEAD").stdout.strip()
+    (wide2 / "w.md").write_text(
+        "word " * 15 + "Every " + "y" * 33
+        + " request is fine, and there is more trailing text here past the width\n")
+    git(wide2, "add", "-A")
+    git(wide2, "commit", "-qm", "a match that ends past the cut")
+    out = run("python3", audit, wide2, f"{w2base}...HEAD").stdout
+    check("claim-audit: a match ending past the cut is not chopped mid-claim",
+          "request" in out, out)
+
     # Fourth connector pass: the entry must carry the claim. A long sentence
     # whose absolute lands past the cut was shown as neutral lead-in prose, so
     # the hit read as a false positive and neither question could be answered.
