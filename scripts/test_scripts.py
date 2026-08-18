@@ -928,6 +928,59 @@ def test_claim_audit_parsing(tmp):
     check("claim-audit: a docstring BODY line is still missed (known gap)",
           "mod.py:2" not in out, out)
 
+    # Second review pass on the fixes above. Both were reported as still
+    # producing a clean audit, and both did.
+    ctx = tmp / "ctxjoin"
+    make_repo(ctx, commits=1)
+    (ctx / "w.md").write_text(
+        "The adapter is documented. Every\nitem is logged by the handler.\n")
+    # A file NOT touched at all never reaches the diff, so it cannot exercise
+    # the context guards. These two do: each has unchanged claim-bearing lines
+    # that -U1 pulls in as context beside a real edit.
+    (ctx / "ctxclaim.md").write_text(
+        "Called for every read in the adapter.\nplain second line\n")
+    (ctx / "guard.md").write_text(
+        "plain first line\nNothing changes here. Every\n"
+        "row is validated by the loader.\nplain last line\n")
+    (ctx / "m.py").write_text("run()\n")
+    git(ctx, "add", "-A")
+    git(ctx, "commit", "-qm", "wrapped base")
+    cbase2 = git(ctx, "rev-parse", "HEAD").stdout.strip()
+    # only the SECOND line of the wrapped sentence changes; "Every" is context
+    (ctx / "w.md").write_text(
+        "The adapter is documented. Every\nrequest is processed by the handler.\n")
+    # compact trailing markers, valid in Python and JS respectively
+    (ctx / "m.py").write_text(
+        "run() #every request is accepted\n"
+        "run();// every request is accepted\n"
+        "url = 'https://x/every/read'\n"
+    )
+    # edit only line 2, so line 1's standing claim arrives as context
+    (ctx / "ctxclaim.md").write_text(
+        "Called for every read in the adapter.\nplain second line, edited\n")
+    # edit lines 1 and 4, so the unchanged wrapped claim on 2-3 arrives as two
+    # ADJACENT context lines — the shape that would join if the guard were gone
+    (ctx / "guard.md").write_text(
+        "plain first line, edited\nNothing changes here. Every\n"
+        "row is validated by the loader.\nplain last line, edited\n")
+    git(ctx, "add", "-A")
+    git(ctx, "commit", "-qm", "edit one wrapped line, add compact comments")
+    out = run("python3", audit, ctx, f"{cbase2}...HEAD").stdout
+    check("claim-audit: joins a wrapped claim through an UNCHANGED context line",
+          "w.md:1" in out and "wrapped" in out, out)
+    check("claim-audit: flags '#' with no space after it",
+          "m.py:1" in out, out)
+    check("claim-audit: flags '//' with no space before it",
+          "m.py:2" in out, out)
+    # precision guards: context is joinable, never reportable on its own, and a
+    # URL's "//" is not a comment opener
+    check("claim-audit: a standing claim on a context line is not reported",
+          "ctxclaim.md" not in out, out)
+    check("claim-audit: two context lines are not joined into a new claim",
+          "guard.md" not in out, out)
+    check("claim-audit: a bare URL is not read as a trailing comment",
+          "m.py:3" not in out, out)
+
     # The noun list is the recall bound. These three were named by review as
     # predicted misses of a list tuned on one author's four commits.
     wide = tmp / "wide"

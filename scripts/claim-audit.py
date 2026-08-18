@@ -47,9 +47,10 @@ noise on every silent run; that trade has not been made.
 
 Second known hole, in what it LOOKS at: in a code file a line counts as prose
 only if it opens a comment or trails one. A line inside a docstring or a /* */
-block whose opener is on an earlier line is not seen, because a -U0 diff shows
-added lines without the surrounding file, and deciding that a line sits inside a
-comment needs the file. So this script cannot read its own module docstring --
+block whose opener is on an earlier line is not seen. The diff carries one line
+of context, which is enough to rejoin a wrapped sentence but not to find an
+opener further up, and deciding that a line sits inside a comment needs the
+file. So this script cannot read its own module docstring --
 including this paragraph. `test_claim_audit_parsing` asserts that gap, so it
 cannot close silently while this note goes stale.
 
@@ -136,7 +137,16 @@ PROSE_SUFFIX = (".md", ".markdown", ".txt", ".rst", ".adoc")
 COMMENT = re.compile(r"^\s*(#|//|/\*|\*|--|;|\"\"\"|''')")
 # By that same rule, a comment TRAILING code is prose too. Requiring the opener
 # at line start meant `run()  # every request is accepted` was never looked at.
-TRAILING_COMMENT = re.compile(r"\s(#|//)\s")
+# Neither side may require whitespace: `run() #every ...` and `run();// every
+# ...` are both valid and both were missed. `//` is excluded after a colon so a
+# bare URL is not read as a comment.
+TRAILING_COMMENT = re.compile(r"\S\s*(#|(?<!:)//)")
+
+
+def is_prose(path: str, body: str) -> bool:
+    """Whether this line is something a claim could live in."""
+    return bool(path.endswith(PROSE_SUFFIX) or COMMENT.match(body)
+                or TRAILING_COMMENT.search(body))
 
 
 def unquote_path(p: str) -> str:
@@ -215,12 +225,18 @@ def added_prose(dir_: str, base: str, tip: str | None) -> list[tuple[str, int, s
     and stops a content line reading "++ b/fake.md" from being adopted as the
     current path.
     """
-    out: list[tuple[str, int, str]] = []
+    out: list[tuple[str, int, str, bool]] = []
     path, lineno, in_hunk = None, 0, False
     # Prefixes forced: under diff.noprefix=true git emits "+++ docs/x.md", which
     # matches no "+++ b/" and loses every path, while a real "b/docs/x.md" would
     # be reported as "docs/x.md".
-    args = ["diff", "--no-color", "--no-ext-diff", "--unified=0",
+    #
+    # One line of context, not zero: when a wrapped sentence has only its SECOND
+    # line edited, -U0 hands over that line alone and the "Every" it belongs to
+    # stays invisible, so the claim cannot be reassembled. Context lines come
+    # back marked added=False -- they are joinable, never reportable on their
+    # own, since this range did not write them.
+    args = ["diff", "--no-color", "--no-ext-diff", "--unified=1",
             "--src-prefix=a/", "--dst-prefix=b/", base]
     if tip is not None:
         args.append(tip)
@@ -236,9 +252,13 @@ def added_prose(dir_: str, base: str, tip: str | None) -> list[tuple[str, int, s
                 path = p[2:] if p.startswith("b/") else None   # /dev/null -> None
         elif raw.startswith("+") and path:
             body = raw[1:]
-            if (path.endswith(PROSE_SUFFIX) or COMMENT.match(body)
-                    or TRAILING_COMMENT.search(body)):
-                out.append((path, lineno, body.strip()))
+            if is_prose(path, body):
+                out.append((path, lineno, body.strip(), True))
+            lineno += 1
+        elif raw.startswith(" ") and path:
+            body = raw[1:]
+            if is_prose(path, body):
+                out.append((path, lineno, body.strip(), False))
             lineno += 1
         elif raw.startswith(" "):
             # --unified=0 asks for no context, but diff.interHunkContext can
@@ -250,14 +270,14 @@ def added_prose(dir_: str, base: str, tip: str | None) -> list[tuple[str, int, s
     return out
 
 
-def commit_messages(dir_: str, base: str, tip: str | None) -> list[tuple[str, int, str]]:
-    out: list[tuple[str, int, str]] = []
+def commit_messages(dir_: str, base: str, tip: str | None) -> list[tuple[str, int, str, bool]]:
+    out: list[tuple[str, int, str, bool]] = []
     if tip is None:                      # worktree diff: the range holds no commits
         return out
     for sha in git(dir_, "log", "--format=%H", f"{base}..{tip}").split():
         for i, line in enumerate(git(dir_, "log", "-1", "--format=%B", sha).splitlines(), 1):
             if line.strip():
-                out.append((f"commit {sha[:9]}", i, line.strip()))
+                out.append((f"commit {sha[:9]}", i, line.strip(), True))
     return out
 
 
@@ -287,10 +307,13 @@ def main() -> int:
     items = added_prose(dir_, base, tip) + commit_messages(dir_, base, tip)
     hits, i = [], 0
     while i < len(items):
-        path, lineno, text = items[i]
+        path, lineno, text, added = items[i]
         kinds = classify(text)
         if kinds:
-            hits.append((path, lineno, "+".join(kinds), text))
+            # an UNCHANGED line may already have carried the claim; this range
+            # did not write it, so it is context for a join and nothing more
+            if added:
+                hits.append((path, lineno, "+".join(kinds), text))
             i += 1
             continue
         # A hard wrap splits a claim across two lines, and neither half carries
@@ -300,8 +323,9 @@ def main() -> int:
         # only when neither matched alone, so nothing is reported twice; a blank
         # line breaks the run, and _GAP still refuses to cross a sentence end.
         if i + 1 < len(items):
-            p2, l2, t2 = items[i + 1]
-            if p2 == path and l2 == lineno + 1 and not classify(t2):
+            p2, l2, t2, a2 = items[i + 1]
+            if (p2 == path and l2 == lineno + 1 and not classify(t2)
+                    and (added or a2)):          # at least one half is NEW
                 joined = f"{text} {t2}"
                 kinds = classify(joined)
                 if kinds:
