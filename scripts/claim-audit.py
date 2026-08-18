@@ -27,11 +27,24 @@ commits by one author. Review called that sample overfitted and named misses it
 predicted ("all workers", "every packet", "guaranteed zero allocations"); all
 three did miss. The list was widened, and the volume cost re-measured across the
 eight most recent commits rather than argued: 3/19/0/2/1/1/1/1 became
-3/20/0/2/1/1/1/1 -- one added hit on THOSE eight. That is a measurement, not a
-guarantee: eight commits from one repository cannot show that the wider list
-holds its volume on prose written differently, and there is no volume regression
-test. The bound is still a list, and a noun absent from it is still a silent
-miss.
+3/20/0/2/1/1/1/1 -- one added hit.
+
+Review then found the larger gap: only ABSOLUTE-then-noun was matched, so
+"Requests always succeed" and "Reads are never retried" -- the ordinary way to
+write the claim -- were missed entirely. Both orders now match, and that is the
+expensive change: across the eight most recent commits the total went 54 -> 67,
+and the worst single commit 21 -> 29. All eight newly flagged sentences on that
+commit were read before accepting the trade, and each is a real absolute about
+behaviour ("permits an ENTRY, never loosens anything else", "would permit every
+child", "the file would always agree with"). So the added volume is recall, not
+noise -- but 29 on one commit is close to the volume the original narrowing
+existed to avoid, and if a round ever rubber-stamps this list, that number is
+where to look first.
+
+None of this is a guarantee: eight commits from one repository cannot show the
+pattern holds its volume on prose written differently, and there is no volume
+regression test. The bound is still a list, and a noun absent from it is still a
+silent miss.
 
 It caught two of the three known-false sentences, and surfaced all
 three copies of one of them (doc, code comment, commit body) -- which then feeds
@@ -117,19 +130,26 @@ _NOUN_EN = (r"(read|reads|write|writes|call|calls|caller|callers|path|paths|"
             r"field|fields|record|records|entry|entries|message|messages|"
             r"query|queries|response|responses|input|inputs|client|clients)")
 _NOUN_ZH = r"(讀取|寫入|呼叫|路徑|情況|請求)"
-# All four script combinations, because this codebase mixes them mid-sentence.
-# "Every請求" is the one that needs its own branch: an ASCII boundary cannot be
-# required before a CJK noun, since the character before it is the absolute's
-# own last letter.
-ABSOLUTE = re.compile("|".join((
-    _L + _ABS_EN + _R + _GAP + r"{0,40}?" + _L + _NOUN_EN + _R,
-    _L + _ABS_EN + _R + _GAP + r"{0,40}?" + _NOUN_ZH,
-    _ABS_ZH + _GAP + r"{0,20}?" + _NOUN_ZH,
-    _ABS_ZH + _GAP + r"{0,20}?" + _L + _NOUN_EN + _R,
-)), re.I)
+# Both script combinations AND both word orders. "Every請求" needs its CJK noun
+# written without an ASCII boundary, since the character before it is the
+# absolute's own last letter. The reverse order is not thoroughness for its own
+# sake: "Requests always succeed" and "Reads are never retried" are the ordinary
+# way to write these claims, and matching only absolute-then-noun missed every
+# one of them.
+_ABS = (_L + _ABS_EN + _R, _ABS_ZH)
+_NOUN = (_L + _NOUN_EN + _R, _NOUN_ZH)
+ABSOLUTE = re.compile("|".join(
+    [a + _GAP + r"{0,40}?" + n for a in _ABS for n in _NOUN]
+    + [n + _GAP + r"{0,40}?" + a for a in _ABS for n in _NOUN]
+), re.I)
 SAMENESS = re.compile(
     _L + r"(same|identical|indistinguishable|equivalent|no different|unchanged)" + _R
     + r"|相同|一樣|無法分辨|等價", re.I)
+
+# A hard wrap splits a sentence mid-flight, so the first half does NOT end in
+# terminal punctuation. That is what separates "rejoin this wrapped sentence"
+# from "these are two sentences, and the first one was already here".
+SENTENCE_END = re.compile(r"[.;!?。；！？][\"')\]]*\s*$")
 
 PROSE_SUFFIX = (".md", ".markdown", ".txt", ".rst", ".adoc")
 # Comment openers, deliberately shallow: this decides what to LOOK at, and
@@ -309,11 +329,8 @@ def main() -> int:
     while i < len(items):
         path, lineno, text, added = items[i]
         kinds = classify(text)
-        if kinds:
-            # an UNCHANGED line may already have carried the claim; this range
-            # did not write it, so it is context for a join and nothing more
-            if added:
-                hits.append((path, lineno, "+".join(kinds), text))
+        if kinds and added:
+            hits.append((path, lineno, "+".join(kinds), text))
             i += 1
             continue
         # A hard wrap splits a claim across two lines, and neither half carries
@@ -322,14 +339,20 @@ def main() -> int:
         # alone reported those ranges clean. Only ADJACENT lines are joined, and
         # only when neither matched alone, so nothing is reported twice; a blank
         # line breaks the run, and _GAP still refuses to cross a sentence end.
+        # Reached even when THIS line already classifies, as long as it is not
+        # reportable by itself: an unchanged half whose sentence the range
+        # edited on the OTHER line is surfaced only by the join.
         if i + 1 < len(items):
             p2, l2, t2, a2 = items[i + 1]
-            if (p2 == path and l2 == lineno + 1 and not classify(t2)
-                    and (added or a2)):          # at least one half is NEW
+            k2 = classify(t2)
+            if (p2 == path and l2 == lineno + 1
+                    and (added or a2)            # at least one half is NEW
+                    and not (k2 and a2)          # that half reports itself next
+                    and not SENTENCE_END.search(text)):   # a wrap, not two sentences
                 joined = f"{text} {t2}"
-                kinds = classify(joined)
-                if kinds:
-                    hits.append((path, lineno, "+".join(kinds) + "/wrapped", joined))
+                kj = classify(joined)
+                if kj:
+                    hits.append((path, lineno, "+".join(kj) + "/wrapped", joined))
                     i += 2
                     continue
         i += 1

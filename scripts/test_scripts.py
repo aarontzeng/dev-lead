@@ -981,6 +981,33 @@ def test_claim_audit_parsing(tmp):
     check("claim-audit: a bare URL is not read as a trailing comment",
           "m.py:3" not in out, out)
 
+    # Third connector pass. Reverse word order, and a context half that
+    # classifies on its own but is not reportable on its own.
+    rev = tmp / "reverse"
+    make_repo(rev, commits=1)
+    (rev / "s.md").write_text("The responses are identical\nfor ordinary clients.\n")
+    (rev / "standing.md").write_text(
+        "Called for every read in the adapter.\nplain second line\n")
+    git(rev, "add", "-A")
+    git(rev, "commit", "-qm", "wrapped sameness base")
+    rbase = git(rev, "rev-parse", "HEAD").stdout.strip()
+    (rev / "s.md").write_text("The responses are identical\nfor authenticated clients.\n")
+    (rev / "standing.md").write_text(
+        "Called for every read in the adapter.\nplain second line, edited\n")
+    (rev / "rev.md").write_text("Requests always succeed.\nReads are never retried.\n")
+    git(rev, "add", "-A")
+    git(rev, "commit", "-qm", "reverse order and an edited second half")
+    out = run("python3", audit, rev, f"{rbase}...HEAD").stdout
+    check("claim-audit: flags a noun-then-absolute claim ('Requests always')",
+          "rev.md:1" in out, out)
+    check("claim-audit: flags 'Reads are never retried'", "rev.md:2" in out, out)
+    check("claim-audit: joins when the CONTEXT half is the one that classifies",
+          "s.md:1" in out and "wrapped" in out, out)
+    # the guard that keeps that from attributing a standing claim to this range:
+    # line 1 ENDS a sentence, so it was not split by a wrap and is not rejoined
+    check("claim-audit: a complete standing sentence is not joined to an edit",
+          "standing.md" not in out, out)
+
     # The noun list is the recall bound. These three were named by review as
     # predicted misses of a list tuned on one author's four commits.
     wide = tmp / "wide"
