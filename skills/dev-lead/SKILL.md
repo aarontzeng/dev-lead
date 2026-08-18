@@ -230,6 +230,15 @@ user can set it at invocation. Each round:
    the hits, re-run the suite, amend or extend the checkpoint commit, and only
    then freeze.
 
+   **A test this step adds is a new regression test, and step 2's
+   mutation-proofing already ran before it existed.** Re-running the suite is
+   not that check: it shows the test passes, not that it would fail if the
+   claim were false. So mutation-proof any test the audit produced, after
+   committing it and before freezing. This is not bookkeeping — the question
+   being answered is *which test goes red?*, and a vacuous test is the same
+   wrong answer as naming one that runs nearby, just written down instead of
+   asserted.
+
    For the measurement, run the BARE revision at **both** checkpoints:
    `python3 "$DEV_LEAD/scripts/claim-audit.py" "$WORKTREE" "$BASE"`, once before
    the prose pass and once after. Do not compare it against the `$BASE...HEAD`
