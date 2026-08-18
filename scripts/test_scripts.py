@@ -981,6 +981,46 @@ def test_claim_audit_parsing(tmp):
     check("claim-audit: a bare URL is not read as a trailing comment",
           "m.py:3" not in out, out)
 
+    # Seventh connector pass.
+    sev = tmp / "seventh"
+    make_repo(sev, commits=1)
+    (sev / "ins.md").write_text("Called for every read in the adapter.\n")
+    git(sev, "add", "-A")
+    git(sev, "commit", "-qm", "seventh base")
+    ybase = git(sev, "rev-parse", "HEAD").stdout.strip()
+    # inserting a neutral line ABOVE a standing claim must not report that claim
+    # at the inserted line — the range added no assertion
+    (sev / "ins.md").write_text(
+        "A neutral heading\nCalled for every read in the adapter.\n")
+    # a claim hard-wrapped across THREE lines: no adjacent PAIR holds both terms
+    (sev / "three.md").write_text("Every\nauthenticated API\nrequest is handled.\n")
+    # uppercase suffixes are valid spellings of the same prose formats
+    (sev / "READ.MD").write_text("Called for every write in the adapter.\n")
+    (sev / "guide.RST").write_text("Reads are never retried.\n")
+    git(sev, "add", "-A")
+    git(sev, "commit", "-qm", "seventh change")
+    out = run("python3", audit, sev, f"{ybase}...HEAD").stdout
+    check("claim-audit: inserting above a standing claim does not report it",
+          "ins.md" not in out, out)
+    check("claim-audit: reassembles a claim wrapped over three lines",
+          "three.md:1" in out, out)
+    check("claim-audit: an uppercase .MD suffix is prose", "READ.MD:1" in out, out)
+    check("claim-audit: an uppercase .RST suffix is prose", "guide.RST:1" in out, out)
+
+    # a line that asserts TWICE, the second time past the window: search() found
+    # only the first match of each class, so the second was tagged but invisible
+    twice = tmp / "twice"
+    make_repo(twice, commits=1)
+    zbase = git(twice, "rev-parse", "HEAD").stdout.strip()
+    (twice / "t.md").write_text(
+        "Every request is accepted. " + "padding word " * 8
+        + " Reads are never retried.\n")
+    git(twice, "add", "-A")
+    git(twice, "commit", "-qm", "asserted twice")
+    out = run("python3", audit, twice, f"{zbase}...HEAD").stdout
+    check("claim-audit: a second assertion on the same line stays visible",
+          "Every request" in out and "never retried" in out, out)
+
     # Sixth connector pass.
     six = tmp / "sixth"
     make_repo(six, commits=1)

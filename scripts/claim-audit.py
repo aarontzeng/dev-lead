@@ -167,7 +167,7 @@ TRAILING_COMMENT = re.compile(r"\S\s*(#|(?<!:)//|--(?=\s)|/\*)")
 
 def is_prose(path: str, body: str) -> bool:
     """Whether this line is something a claim could live in."""
-    return bool(path.endswith(PROSE_SUFFIX) or COMMENT.match(body)
+    return bool(path.lower().endswith(PROSE_SUFFIX) or COMMENT.match(body)
                 or TRAILING_COMMENT.search(body))
 
 
@@ -314,29 +314,34 @@ def excerpt(text: str, width: int = 120) -> str:
     """
     if len(text) <= width:
         return text
-    spans = [(m.start(), m.end())
-             for m in (ABSOLUTE.search(text), SAMENESS.search(text)) if m]
+    # finditer, not search: a line can assert twice, and showing only the first
+    # leaves the second tagged but invisible.
+    spans = sorted(m.span() for pat in (ABSOLUTE, SAMENESS) for m in pat.finditer(text))
     if not spans:
         return text[:width] + "…"
-    # Cover EVERY span, not the first one. ABSOLUTE allows 40 characters between
-    # its two terms, so a match starting inside the window can still end outside
-    # it; and when both classes fire, an entry tagged [absolute+sameness] that
-    # shows only the sameness names a claim the reader cannot see.
-    lo, hi = min(s for s, _ in spans), max(e for _, e in spans)
-    if hi <= width:
+    # Every span must stay visible: an entry tagged [absolute+sameness] that
+    # shows only the sameness names a claim the reader cannot see. ABSOLUTE also
+    # allows 40 characters between its two terms, so a match starting inside the
+    # window can still end outside it.
+    if spans[-1][1] <= width:
         return text[:width] + "…"
-
-    def window(a: int, b: int) -> str:
-        start = max(0, a - 20)
-        stop = min(len(text), max(b + 20, start + width))
-        return (("…" if start else "") + text[start:stop]
-                + ("…" if stop < len(text) else ""))
-
-    if hi - lo <= width:
-        return window(lo, hi)
-    # too far apart to share one window: show each claim's neighbourhood
-    left, right = window(lo, lo + 1), window(hi - 1, hi)
-    return left.rstrip("…") + "…" + right.lstrip("…")
+    groups: list[list[tuple[int, int]]] = [[spans[0]]]
+    for span in spans[1:]:
+        if span[1] - groups[-1][0][0] <= width:
+            groups[-1].append(span)
+        else:
+            groups.append([span])          # too far to share a window
+    parts, prev_end = [], 0
+    for group in groups:
+        lo = max(0, group[0][0] - 20)
+        hi = min(len(text), max(e for _, e in group) + 20)
+        if lo > prev_end:
+            parts.append("…")
+        parts.append(text[lo:hi])
+        prev_end = hi
+    if prev_end < len(text):
+        parts.append("…")
+    return "".join(parts)
 
 
 def classify(text: str) -> list[str]:
@@ -367,32 +372,42 @@ def main() -> int:
     while i < len(items):
         path, lineno, text, added = items[i]
         kinds = classify(text)
-        # The join is tried BEFORE accepting a physical-line hit. A hard wrap
-        # splits a claim across two lines and the halves can carry DIFFERENT
-        # classes -- "Every response from this route" / "is identical for
-        # authenticated clients." -- so reporting the added half by itself shows
-        # a claim stripped of its predicate and never notices the second class
-        # at all. Only ADJACENT lines join, a blank line breaks the run, at
-        # least one half must be new, and SENTENCE_END holds this to genuine
-        # wraps so a complete standing sentence is still reported on its own.
-        if i + 1 < len(items):
-            p2, l2, t2, a2 = items[i + 1]
-            k2 = classify(t2)
-            if (p2 == path and l2 == lineno + 1
-                    and (added or a2)            # at least one half is NEW
-                    # A next half that classifies AND is new reports itself,
-                    # so joining would double-count -- UNLESS this half carries
-                    # a class it cannot report (it is context), in which case
-                    # refusing to join drops that class and its subject
-                    # entirely.
-                    and (not (k2 and a2) or (kinds and not added))
-                    and not SENTENCE_END.search(text)):   # a wrap, not two sentences
-                joined = f"{text} {t2}"
-                kj = classify(joined)
-                if kj:
-                    hits.append((path, lineno, "+".join(kj) + "/wrapped", joined))
-                    i += 2
-                    continue
+        # The join runs BEFORE a physical-line hit is accepted, because the
+        # halves of a wrapped sentence can carry different classes and reporting
+        # one half shows a claim without its predicate. Two lines are tried,
+        # then three: a 40-character gap can legitimately straddle two wraps.
+        hit = None
+        for span in (2, 3):
+            if i + span > len(items):
+                break
+            grp = items[i:i + span]
+            if any(g[0] != path for g in grp):
+                break                        # a different file
+            if any(grp[j + 1][1] != grp[j][1] + 1 for j in range(span - 1)):
+                break                        # a blank line broke the run
+            if any(SENTENCE_END.search(g[2]) for g in grp[:-1]):
+                break                        # a wrap does not end a sentence
+            if not any(g[3] for g in grp):
+                continue                     # this range wrote none of it
+            tail_kinds, tail_added = classify(grp[-1][2]), grp[-1][3]
+            if tail_kinds and tail_added and not (kinds and not added):
+                continue                     # that half reports itself
+            # Inserting a line ABOVE a standing claim must not report that
+            # claim at the inserted line. The test is on the whole remainder,
+            # not just the last line: the pre-existing sentence may itself be
+            # wrapped across several unchanged lines.
+            if (not kinds and not any(g[3] for g in grp[1:])
+                    and classify(" ".join(g[2] for g in grp[1:]))):
+                continue
+            joined = " ".join(g[2] for g in grp)
+            kj = classify(joined)
+            if kj:
+                hit = (path, lineno, "+".join(kj) + "/wrapped", joined)
+                i += span
+                break
+        if hit:
+            hits.append(hit)
+            continue
         if kinds and added:
             hits.append((path, lineno, "+".join(kinds), text))
         i += 1
