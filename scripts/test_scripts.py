@@ -893,6 +893,41 @@ def test_claim_audit_parsing(tmp):
     check("claim-audit: a two-dot range does not report the other side's deletion",
           "doc.md" not in out, out)
 
+    # Three shapes the GitHub review leg found, each of which produced NO hit
+    # at all — the silent-miss failure, not a wrong line.
+    shapes = tmp / "shapes"
+    make_repo(shapes, commits=1)
+    sbase = git(shapes, "rev-parse", "HEAD").stdout.strip()
+    # git C-quotes a non-ASCII path by default, so "+++ b/" matched nothing and
+    # the whole file was skipped
+    (shapes / "文檔.md").write_text("Called for every read in the adapter.\n")
+    # a hard wrap splits the claim; neither physical line carries it
+    (shapes / "wrapped.md").write_text(
+        "The adapter is documented. Every\nrequest is processed by the handler.\n")
+    # a comment that trails code, and a docstring body that opens with prose
+    (shapes / "mod.py").write_text(
+        '"""Overview\n'
+        "Called for every write in the adapter.\n"
+        '"""\n'
+        "run()  # every request is accepted\n"
+    )
+    git(shapes, "add", "-A")
+    git(shapes, "commit", "-qm", "three shapes")
+    out = run("python3", audit, shapes, f"{sbase}...HEAD").stdout
+    check("claim-audit: a C-quoted non-ASCII path is decoded, not skipped",
+          "文檔.md:1" in out, out)
+    check("claim-audit: a claim split by a hard wrap is still caught",
+          "wrapped.md:1" in out and "wrapped" in out, out)
+    check("claim-audit: a wrapped hit is not also reported as its second line",
+          "wrapped.md:2" not in out, out)
+    check("claim-audit: a comment trailing code is prose too",
+          "mod.py:4" in out, out)
+    # KNOWN GAP, asserted so it cannot drift silently: deciding that a line sits
+    # inside a docstring needs the file, not the diff. If this ever starts
+    # passing, the limitation note in claim-audit.py's docstring is stale.
+    check("claim-audit: a docstring BODY line is still missed (known gap)",
+          "mod.py:2" not in out, out)
+
     # The noun list is the recall bound. These three were named by review as
     # predicted misses of a list tuned on one author's four commits.
     wide = tmp / "wide"

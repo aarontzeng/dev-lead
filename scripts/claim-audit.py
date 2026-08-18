@@ -45,6 +45,14 @@ neither question, so the sentence question 2 exists for gets nothing on a clean
 range. Closing it means printing the questions unconditionally and accepting the
 noise on every silent run; that trade has not been made.
 
+Second known hole, in what it LOOKS at: in a code file a line counts as prose
+only if it opens a comment or trails one. A line inside a docstring or a /* */
+block whose opener is on an earlier line is not seen, because a -U0 diff shows
+added lines without the surrounding file, and deciding that a line sits inside a
+comment needs the file. So this script cannot read its own module docstring --
+including this paragraph. `test_claim_audit_parsing` asserts that gap, so it
+cannot close silently while this note goes stale.
+
 Run against its own introducing commit it flagged five sentences, of which three
 were dated citations of past incidents (correctly dismissed) and two were real
 errors in that very commit: an over-strong "no mutant can" and a miscounted
@@ -126,6 +134,33 @@ PROSE_SUFFIX = (".md", ".markdown", ".txt", ".rst", ".adoc")
 # Comment openers, deliberately shallow: this decides what to LOOK at, and
 # over-including code is harmless while under-including prose is the failure.
 COMMENT = re.compile(r"^\s*(#|//|/\*|\*|--|;|\"\"\"|''')")
+# By that same rule, a comment TRAILING code is prose too. Requiring the opener
+# at line start meant `run()  # every request is accepted` was never looked at.
+TRAILING_COMMENT = re.compile(r"\s(#|//)\s")
+
+
+def unquote_path(p: str) -> str:
+    """Decode the C-quoted path form git uses for non-ASCII and specials.
+
+    With core.quotePath at its default, `文檔.md` arrives as
+    `"b/\\346\\226\\207\\346\\252\\224.md"`. Requiring a literal `b/` prefix
+    made that header match nothing, so the file was skipped in full and the
+    range still reported clean -- the silent-miss shape, on a repository whose
+    filenames are routinely CJK.
+    """
+    if not (len(p) > 1 and p.startswith('"') and p.endswith('"')):
+        return p
+    body, out, i = p[1:-1], bytearray(), 0
+    simple = {"n": b"\n", "t": b"\t", "r": b"\r", "a": b"\a", "b": b"\b",
+              "f": b"\f", "v": b"\v", '"': b'"', "\\": b"\\"}
+    while i < len(body):
+        if body[i] != "\\":
+            out.extend(body[i].encode()); i += 1
+        elif body[i + 1] in "01234567":
+            out.append(int(body[i + 1:i + 4], 8)); i += 4
+        else:
+            out.extend(simple.get(body[i + 1], body[i + 1].encode())); i += 2
+    return out.decode("utf-8", "replace")
 
 
 def git(dir_: str, *args: str) -> str:
@@ -196,11 +231,13 @@ def added_prose(dir_: str, base: str, tip: str | None) -> list[tuple[str, int, s
             m = re.search(r"\+(\d+)", raw)
             lineno, in_hunk = (int(m.group(1)) if m else 0), True
         elif not in_hunk:
-            if raw.startswith("+++ b/"):
-                path = raw[6:]
+            if raw.startswith("+++ "):
+                p = unquote_path(raw[4:])
+                path = p[2:] if p.startswith("b/") else None   # /dev/null -> None
         elif raw.startswith("+") and path:
             body = raw[1:]
-            if path.endswith(PROSE_SUFFIX) or COMMENT.match(body):
+            if (path.endswith(PROSE_SUFFIX) or COMMENT.match(body)
+                    or TRAILING_COMMENT.search(body)):
                 out.append((path, lineno, body.strip()))
             lineno += 1
         elif raw.startswith(" "):
@@ -224,6 +261,15 @@ def commit_messages(dir_: str, base: str, tip: str | None) -> list[tuple[str, in
     return out
 
 
+def classify(text: str) -> list[str]:
+    kinds = []
+    if ABSOLUTE.search(text):
+        kinds.append("absolute")
+    if SAMENESS.search(text):
+        kinds.append("sameness")
+    return kinds
+
+
 def main() -> int:
     # The flagged sentence is the output, and it can carry any byte git gave us.
     # Under a strict stdout encoding (PYTHONIOENCODING=ascii:strict, some CI
@@ -238,15 +284,31 @@ def main() -> int:
         return 2
     dir_, rng = sys.argv[1], sys.argv[2]
     base, tip = resolve_range(dir_, rng)
-    hits = []
-    for path, lineno, text in added_prose(dir_, base, tip) + commit_messages(dir_, base, tip):
-        kinds = []
-        if ABSOLUTE.search(text):
-            kinds.append("absolute")
-        if SAMENESS.search(text):
-            kinds.append("sameness")
+    items = added_prose(dir_, base, tip) + commit_messages(dir_, base, tip)
+    hits, i = [], 0
+    while i < len(items):
+        path, lineno, text = items[i]
+        kinds = classify(text)
         if kinds:
             hits.append((path, lineno, "+".join(kinds), text))
+            i += 1
+            continue
+        # A hard wrap splits a claim across two lines, and neither half carries
+        # it: "... Every" / "request is processed ...". Both this repository's
+        # docs and its commit messages are wrapped, so matching physical lines
+        # alone reported those ranges clean. Only ADJACENT lines are joined, and
+        # only when neither matched alone, so nothing is reported twice; a blank
+        # line breaks the run, and _GAP still refuses to cross a sentence end.
+        if i + 1 < len(items):
+            p2, l2, t2 = items[i + 1]
+            if p2 == path and l2 == lineno + 1 and not classify(t2):
+                joined = f"{text} {t2}"
+                kinds = classify(joined)
+                if kinds:
+                    hits.append((path, lineno, "+".join(kinds) + "/wrapped", joined))
+                    i += 2
+                    continue
+        i += 1
 
     if not hits:
         print("claim-audit: no absolute or sameness claims added in this range.")
