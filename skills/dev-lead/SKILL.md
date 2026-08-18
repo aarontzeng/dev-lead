@@ -207,6 +207,24 @@ user can set it at invocation. Each round:
    a distinctive phrase from the sentence you are about to change, fix every
    hit in the same edit, and say in the commit how many there were.
 
+   **Writing a NEW statement? Name what would make it false.** The grep rule
+   above catches a sentence that went stale; it cannot catch one that was false
+   on arrival, and mutating the code under test does not reach it either — that
+   sentence is not in anything the suite executes (measured: 20 mutants died in a
+   round whose three false sentences all survived). A lint rule *over* prose is
+   executable and can be mutation-proofed; the prose it judges is not. Run
+   `python3 "$DEV_LEAD/scripts/claim-audit.py" "$WORKTREE" "$BASE...HEAD"` and
+   answer both of its questions per hit. It is a worklist, not a gate — it exits
+   0 either way, and a legitimate absolute costs seconds to dismiss. Two shapes
+   no filter can flag, so ask them yourself: a **right conclusion resting on a
+   wrong mechanism** (a doc said two rows "return the same shape, so this is not
+   an existence oracle" — both rows really did share those fields, but a third
+   field differed; the conclusion was right and the stated reason was not, and a
+   wrong mechanism gets reused as a premise by whoever reads it next), and a
+   **proxy written up as the property** (64 cores and 112 GiB free were measured
+   and true, and became "feasibility is not the obstacle" — the attempt hard-reset
+   the host; capacity is not feasibility).
+
    Mutation mechanics live in
    **[`references/mutation-runbook.md`](references/mutation-runbook.md)** —
    read it before this step. Every clause in it was paid for with a live

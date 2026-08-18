@@ -160,6 +160,15 @@ Nothing a delegate self-reports is evidence. The lead:
    **rejections to the same evidence standard as findings** — a correctly
    rejected false positive and a wrongly dismissed real bug otherwise leave an
    identical run log.
+6. Anchors the round's **prose**, not just its code. Mutation-proofing works for
+   step 4 because a test executes; a sentence does not, so nothing in the suite
+   can make a false comment or doc line fail. Measured: a round that killed 20
+   mutants shipped three false sentences, and all three were caught by the review
+   leg instead — a Graph-layer mechanism paying for a Loop-layer gap, which is
+   the expensive way round. `scripts/claim-audit.py` surfaces the two phrasings
+   that shipped false; the two shapes no filter reaches are asked as questions
+   instead — **if this were false, which test goes red?** and **did I measure the
+   property, or a proxy for it?**
 
 ## 7. Review targets are frozen and spans are pinned
 

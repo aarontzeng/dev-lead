@@ -671,6 +671,69 @@ def test_lint_delegate_audit_trails():
           any("does not match" in e for e in got), f"got {got}")
 
 
+# ------------------------------------------------------------- claim audit ----
+def test_claim_audit(tmp):
+    """claim-audit.py: what it must flag, what it must NOT, and its contract.
+
+    The must-NOT half is the load-bearing one. A bare absolute-word filter was
+    rejected on volume (16/13/38 hits on real commits), because an output nobody
+    reads defeats the point. If a plain "never"/"cannot" sentence starts matching
+    again, this test fails and that regression is visible.
+    """
+    audit = SCRIPTS / "claim-audit.py"
+    repo = tmp / "claims"
+    make_repo(repo, commits=1)
+    base = git(repo, "rev-parse", "HEAD").stdout.strip()
+
+    (repo / "doc.md").write_text(
+        "Both cases return the same shape, so this is safe.\n"        # sameness
+        "Called for every read in the adapter.\n"                     # absolute+path
+        "Never push to a remote.\n"                                   # absolute, NO path noun
+        "The cap cannot be raised by a caller.\n"                     # 'cannot' + 'caller'
+        "Feasibility is not the obstacle.\n"                          # unlintable by design
+    )
+    (repo / "code.py").write_text(
+        "# every request carries the key\n"                           # comment, flagged
+        "x = 'every request carries the key'\n"                       # code line, not prose
+    )
+    git(repo, "add", "-A")
+    git(repo, "commit", "-qm", "add prose")
+
+    r = run("python3", audit, repo, f"{base}...HEAD")
+    out = r.stdout
+
+    check("claim-audit: exits 0 even with hits (worklist, not a gate)",
+          r.returncode == 0, f"rc={r.returncode}")
+    check("claim-audit: flags a sameness claim",
+          "doc.md:1" in out and "sameness" in out, out)
+    check("claim-audit: flags an absolute quantifying over code paths",
+          "doc.md:2" in out, out)
+    check("claim-audit: does NOT flag a bare absolute with no code-path noun",
+          "doc.md:3" not in out, out)
+    check("claim-audit: flags a comment line in a code file",
+          "code.py:1" in out, out)
+    check("claim-audit: does NOT flag a non-comment code line",
+          "code.py:2" not in out, out)
+    check("claim-audit: prints both anchoring questions regardless of class",
+          "which test goes red" in out and "proxy for it" in out, out)
+    check("claim-audit: reports the unlintable shape via question 2, not a match",
+          "doc.md:5" not in out, out)
+
+    clean = tmp / "clean"
+    make_repo(clean, commits=1)
+    cbase = git(clean, "rev-parse", "HEAD").stdout.strip()
+    (clean / "plain.md").write_text("This adapter reads the job endpoint.\n")
+    git(clean, "add", "-A")
+    git(clean, "commit", "-qm", "neutral prose")
+    r2 = run("python3", audit, clean, f"{cbase}...HEAD")
+    check("claim-audit: silent when nothing risky was added",
+          r2.returncode == 0 and "no absolute or sameness" in r2.stdout, r2.stdout)
+
+    r3 = run("python3", audit, repo)
+    check("claim-audit: wrong arity exits 2, distinct from a clean run",
+          r3.returncode == 2, f"rc={r3.returncode}")
+
+
 # ------------------------------------------------------------ lint version ----
 def test_lint_version(tmp):
     """check_version(): both rules, and the two things that make them honest.
@@ -847,6 +910,10 @@ def main():
     print("lint.py check_version")
     with tempfile.TemporaryDirectory() as td:
         test_lint_version(Path(td))
+
+    print("claim-audit.py")
+    with tempfile.TemporaryDirectory() as td:
+        test_claim_audit(Path(td))
 
     if FAILURES:
         print(f"\nFAIL — {len(FAILURES)} test(s) failed")
