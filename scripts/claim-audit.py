@@ -159,8 +159,10 @@ COMMENT = re.compile(r"^\s*(#|//|/\*|\*|--|;|\"\"\"|''')")
 # at line start meant `run()  # every request is accepted` was never looked at.
 # Neither side may require whitespace: `run() #every ...` and `run();// every
 # ...` are both valid and both were missed. `//` is excluded after a colon so a
-# bare URL is not read as a comment.
-TRAILING_COMMENT = re.compile(r"\S\s*(#|(?<!:)//)")
+# bare URL is not read as a comment, and `--` must be followed by space so a
+# long option (`git diff --no-color`) is not read as one either. The markers
+# track COMMENT's: putting code in front of a comment must not hide its prose.
+TRAILING_COMMENT = re.compile(r"\S\s*(#|(?<!:)//|--(?=\s)|/\*)")
 
 
 def is_prose(path: str, body: str) -> bool:
@@ -316,15 +318,25 @@ def excerpt(text: str, width: int = 120) -> str:
              for m in (ABSOLUTE.search(text), SAMENESS.search(text)) if m]
     if not spans:
         return text[:width] + "…"
-    # ABSOLUTE allows 40 characters BETWEEN its two terms, so a match starting
-    # comfortably inside the window can still END outside it. A guessed offset
-    # from start() cut the noun off the claim; ask where the match actually ends.
-    at, end = min(spans)
-    if end <= width:
+    # Cover EVERY span, not the first one. ABSOLUTE allows 40 characters between
+    # its two terms, so a match starting inside the window can still end outside
+    # it; and when both classes fire, an entry tagged [absolute+sameness] that
+    # shows only the sameness names a claim the reader cannot see.
+    lo, hi = min(s for s, _ in spans), max(e for _, e in spans)
+    if hi <= width:
         return text[:width] + "…"
-    lead = max(0, at - 30)
-    tail = "…" if lead + width < len(text) else ""
-    return "…" + text[lead:lead + width] + tail
+
+    def window(a: int, b: int) -> str:
+        start = max(0, a - 20)
+        stop = min(len(text), max(b + 20, start + width))
+        return (("…" if start else "") + text[start:stop]
+                + ("…" if stop < len(text) else ""))
+
+    if hi - lo <= width:
+        return window(lo, hi)
+    # too far apart to share one window: show each claim's neighbourhood
+    left, right = window(lo, lo + 1), window(hi - 1, hi)
+    return left.rstrip("…") + "…" + right.lstrip("…")
 
 
 def classify(text: str) -> list[str]:
@@ -368,7 +380,12 @@ def main() -> int:
             k2 = classify(t2)
             if (p2 == path and l2 == lineno + 1
                     and (added or a2)            # at least one half is NEW
-                    and not (k2 and a2)          # that half reports itself next
+                    # A next half that classifies AND is new reports itself,
+                    # so joining would double-count -- UNLESS this half carries
+                    # a class it cannot report (it is context), in which case
+                    # refusing to join drops that class and its subject
+                    # entirely.
+                    and (not (k2 and a2) or (kinds and not added))
                     and not SENTENCE_END.search(text)):   # a wrap, not two sentences
                 joined = f"{text} {t2}"
                 kj = classify(joined)

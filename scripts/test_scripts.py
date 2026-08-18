@@ -981,6 +981,56 @@ def test_claim_audit_parsing(tmp):
     check("claim-audit: a bare URL is not read as a trailing comment",
           "m.py:3" not in out, out)
 
+    # Sixth connector pass.
+    six = tmp / "sixth"
+    make_repo(six, commits=1)
+    (six / "p.md").write_text("The responses are identical\nfor ordinary clients.\n")
+    (six / "q.sql").write_text("SELECT 1;\n")
+    (six / "s.sh").write_text("echo hi\n")
+    # a self-standing claim with an unrelated line above it: joining these would
+    # report the claim at the WRONG line. This broke when the join guard was
+    # first relaxed for the case below, and nothing had pinned it.
+    (six / "sep.md").write_text("an opening line with no claim\nplaceholder\n")
+    git(six, "add", "-A")
+    git(six, "commit", "-qm", "sixth base")
+    xbase = git(six, "rev-parse", "HEAD").stdout.strip()
+    # unchanged first half carries sameness; the EDITED second half independently
+    # carries an absolute, so the second half reports itself and the sameness
+    # plus its subject vanish unless the pair is joined
+    (six / "p.md").write_text(
+        "The responses are identical\nfor every authenticated client.\n")
+    (six / "q.sql").write_text("SELECT 1; -- every row is returned\n")
+    # a LONG OPTION is not a comment opener; without that guard this line would
+    # be read as prose and flagged, which is how "--" earns its keep quietly
+    (six / "s.sh").write_text("run --all paths now\n")
+    (six / "sep.md").write_text(
+        "an opening line with no claim\nCalled for every read in the adapter.\n")
+    git(six, "add", "-A")
+    git(six, "commit", "-qm", "sixth change")
+    out = run("python3", audit, six, f"{xbase}...HEAD").stdout
+    check("claim-audit: joins when the CONTEXT half carries the other class",
+          "p.md:1" in out and "absolute+sameness" in out, out)
+    check("claim-audit: a trailing '--' comment is prose (SQL, Lua)",
+          "q.sql:1" in out, out)
+    check("claim-audit: a long option is not read as a trailing comment",
+          "s.sh" not in out, out)
+    check("claim-audit: a self-standing claim is not dragged onto the line above",
+          "sep.md:2" in out and "sep.md:1" not in out, out)
+
+    # a long line where BOTH classes fire and they are far apart: an entry
+    # tagged with two classes must not show only one of them
+    two = tmp / "twoclass"
+    make_repo(two, commits=1)
+    tbase = git(two, "rev-parse", "HEAD").stdout.strip()
+    (two / "t.md").write_text(
+        "The responses are identical. " + "padding word " * 8
+        + " Every request is accepted.\n")
+    git(two, "add", "-A")
+    git(two, "commit", "-qm", "two classes, far apart")
+    out = run("python3", audit, two, f"{tbase}...HEAD").stdout
+    check("claim-audit: an entry tagged with both classes shows both",
+          "identical" in out and "Every request" in out, out)
+
     # Fifth connector pass. Both against the two fixes above.
     half = tmp / "halves"
     make_repo(half, commits=1)
