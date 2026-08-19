@@ -234,10 +234,17 @@ cd "$REVIEW_TARGET_DIR" && \
 
   Mind the self-match — a guard whose own command line contains the pattern
   always finds itself, so read the PIDs rather than counting them. Then rerun
-  the same prompt on a different free model. That is the fork: if the other
-  model returns a report, whatever went wrong was specific to the first one
-  and switching is the fix; if nothing returns, you are in the provider-wide
-  congestion case below, where switching does not help.
+  the same prompt on a different free model — **as a recovery attempt, not as
+  a diagnostic.** Two runs separated in time confound the model with
+  everything else that moves between them: provider state, quota, routing,
+  and the model's own nondeterminism. So a second model returning a report
+  buys you a report; it does not establish that the first failure was
+  model-specific, and a second model failing too does not establish
+  provider-wide congestion. If you actually need the cause — usually you do
+  not, you need a review — the cheap next step is to re-run the *original*
+  model once the switch succeeds: a failure that reproduces on A after B
+  worked is worth believing, one that does not was transient and is not worth
+  more of your afternoon.
 
   Getting this order wrong has a cost beyond the wasted rerun: a permission
   wall gets rediagnosed as a dead provider pool, or the empty run gets written
