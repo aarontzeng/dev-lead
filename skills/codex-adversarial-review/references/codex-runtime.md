@@ -148,6 +148,17 @@ codex exec --sandbox workspace-write --cd "$WORKTREE" -m <model> \
   "$(cat "$RUN_DIR/task.md")" > "$RUN_DIR/impl.out" 2>&1
 ```
 
+Troubleshooting, for a shape this suite does not prescribe: `--cd` must name
+a directory inside a git repository. The prescribed flow never trips this,
+because [`materializing-evidence.md`](../../../docs/materializing-evidence.md)
+puts codex in the frozen worktree and passes extra evidence through the focus
+text. Point `--cd` at a bare evidence directory instead — assembled with
+`git show`, outside any repo — and codex refuses to start with
+`Not inside a trusted directory and --skip-git-repo-check was not specified.`
+(observed 2026-08-19, codex 0.148.0). That line is the entire output, so a
+lead polling for a report finds a 115-byte file and reaches for the model.
+Add `--skip-git-repo-check` if you deliberately review a plain directory.
+
 Verify the exact flags against your installed version with
 `codex exec --help` first — unlike the companion (where probing flags runs a
 billed job; see above), **the raw CLI has a real `--help`**, so probing is
