@@ -55,9 +55,9 @@ RUN_DIR=$(mktemp -d "${TMPDIR:-/tmp}/claude-review.XXXXXX")
 
 cd "$REVIEW_TARGET_DIR" && \
   [ "$(git rev-parse HEAD)" = "$REVIEW_HEAD" ] && \
-  claude -p "$(cat "$RUN_DIR/prompt.md")" --permission-mode plan --model <tier> \
+  claude -p --permission-mode plan --model <tier> \
     --strict-mcp-config --mcp-config '{"mcpServers":{}}' \
-    > "$RUN_DIR/review.out" 2>&1
+    < "$RUN_DIR/prompt.md" > "$RUN_DIR/review.out" 2>&1
 ```
 
 - **`--permission-mode plan`** makes it read-only; the runtime file's

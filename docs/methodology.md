@@ -92,6 +92,21 @@ instruction-level survives novel commands, machine-level survives a model that
 misreads its instructions. Use both; state destructive-adjacent rules in the
 task prompt anyway, at zero cost.
 
+**A brief cannot widen the boundary, and one that tries kills the leg.** The
+allow-listed slice above is narrow, differs per family, and is set by the
+runtime — so asking for anything outside it does not produce a weaker report,
+it produces no report: the leg dies on the first denied command with a single
+line of output. Measured 2026-08-19: two legs of one four-leg round were lost
+that way, both to a *shared* prompt header that said "you MAY compile and run
+small throwaway programs". One died on `ssh` under a plan-mode permission
+check, one on `npx` with no network. Both looked exactly like model failures
+until the logs were read. The header was the bug: it granted, in prose, a
+capability only one of the four runtimes had. Keep the shared header free of
+anything family-specific, and put capability statements in the per-leg brief
+where they can be checked against that family's runtime note. When a question
+genuinely needs measuring, building the measurement yourself and handing the
+leg the tool plus its output is usually cheaper than granting anyone anything.
+
 Where a machine boundary has a deliberate hole (e.g. allowing a test runner
 that executes repo-supplied code), *say so honestly* in the skill, state what
 residual risk it creates, and make that risk observable — snapshot
@@ -105,6 +120,28 @@ byte-identical output.** A review without an evidence gate cannot be
 distinguished from a review that never happened — a measured incident: a
 format-compliant all-HOLDS verdict returned in three minutes, having cited
 nothing.
+
+The same ambiguity reaches the lead one level up, in how a leg's *clearances*
+get counted. A positive finding carries its own check: go look, and the looking
+settles it. A negative carries nothing on its face, so it is worth exactly what
+its method is worth — and the gate below is what tells the two apart.
+Measured 2026-08-19, one four-leg round, both kinds in the same round:
+
+- **Evidenced.** A leg asked whether a change was stale ran
+  `git log BASE..origin/master` and `git diff --name-only` on both sides,
+  reported the two file sets as disjoint, and concluded NOT STALE. Checkable,
+  checked, counted.
+- **Unsupported.** A leg asked to cross-check identifiers marked a reference
+  object EXACT MATCH because the parent object's *name* matched on both sides,
+  never noticing its three child fields had been renamed; the same run marked a
+  `digest` field EXACT MATCH because the sha256 *format* string matched, never
+  asking whether the surrounding closed schema permitted that field at all.
+  Both were real defects, independently confirmed by two other legs and by the
+  merged schema. Counted as evidence, those rows would have argued *against*
+  the correct finding.
+
+An unsupported negative is **no coverage**, and belongs in the round-up as
+that — not as agreement.
 
 The gate that makes the difference visible:
 

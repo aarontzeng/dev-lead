@@ -197,17 +197,52 @@ cd "$REVIEW_TARGET_DIR" && \
   root explicitly in the prompt ("your cwd is EXACTLY <path>; use relative
   paths") — the same run later hallucinated a neighboring absolute path and
   died identically.
-- **Four terminal failures look alike in the log and are not.** Ending with
+- **Five terminal failures look alike in the log and are not.** Ending with
   `auto-rejecting` is the permission wall — YOUR bug; fix the prompt and
   rerun. `Streaming response failed: [502]/[503] … ResourceExhausted` or
   `queue is full` is the provider out of capacity. A clean exit with
   `tokens.output=0` USUALLY means nothing was produced — but not always;
   see the retraction below. `Error: unknown certificate verification error`
   after a `> build · <model>` line is TLS failing before any token —
-  transport; plain rerun. Check before editing anything:
+  transport; plain rerun. And a fifth shape that carries no error line at
+  all: **a clean exit that read every file, ran its greps, and then simply
+  stopped.** Observed 2026-08-19, opencode 1.18.18: two consecutive
+  `deepseek-v4-flash-free` legs on the same prompt each worked through the
+  evidence pack and exited 0 without writing a word, while
+  `nemotron-3-ultra-free` on that identical prompt returned a full table
+  minutes later — and a second session on this machine was concurrently
+  running `deepseek-v4-flash-free`.
+
+  Check before editing anything, and **in this order** — the error greps
+  first, because every one of them names a cause that a model switch would
+  only reproduce:
   `grep -c auto-rejecting`, `grep -E '50[0-9]\]'`,
   `grep -c 'certificate verification'`,
   `grep -o 'tokens.output=[0-9]*' | tail -1`.
+
+  Only once all four come back clean — a run that errored nowhere and simply
+  stopped — is the fifth shape in play. **Per-model contention is a
+  hypothesis there, not an established cause**: one uncontrolled observation
+  cannot separate it from provider state, a model-specific fault, or account
+  quota, and `pgrep` cannot prove the other process holds the *same* model.
+  What the episode does establish is two cheap steps that cost nothing and
+  settle it either way:
+
+  ```bash
+  pgrep -af "opencode run"    # another local session? which model?
+  ```
+
+  Mind the self-match — a guard whose own command line contains the pattern
+  always finds itself, so read the PIDs rather than counting them. Then rerun
+  the same prompt on a different free model. That is the fork: if the other
+  model returns a report, whatever went wrong was specific to the first one
+  and switching is the fix; if nothing returns, you are in the provider-wide
+  congestion case below, where switching does not help.
+
+  Getting this order wrong has a cost beyond the wasted rerun: a permission
+  wall gets rediagnosed as a dead provider pool, or the empty run gets written
+  up as a model-behaviour finding — and that claim then outlives the session
+  in whatever notes the lead keeps.
 
   **Retraction worth keeping: `tokens.output=0` is a broken accounting
   metric, not a verdict.** Measured: two runs with that fingerprint were

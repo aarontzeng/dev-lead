@@ -21,8 +21,9 @@ own working directory, its own permission mode, or a different model.
 Review / read-only worker:
 
 ```bash
-claude -p "$(cat "$RUN_DIR/prompt.md")" --permission-mode plan --model <tier> \
-  --strict-mcp-config --mcp-config '{"mcpServers":{}}'
+claude -p --permission-mode plan --model <tier> \
+  --strict-mcp-config --mcp-config '{"mcpServers":{}}' \
+  < "$RUN_DIR/prompt.md"
 ```
 
 Implementation worker (inside a git worktree the lead created):
@@ -34,6 +35,20 @@ cd "$WORKTREE" && claude -p "$(cat "$RUN_DIR/task.md")" \
 
 ## Measured behavior
 
+- **A trailing prompt argument is safe only while no variadic option
+  precedes it.** `--add-dir` takes a variable number of values, so
+  `claude -p --add-dir "$DIR" "$(cat prompt.md)"` feeds the prompt to
+  `--add-dir` and the run dies with `Input must be provided either through
+  stdin or as a prompt argument when using --print` (measured 2026-08-19,
+  claude 2.1.235) — which reads like a missing-prompt bug rather than an
+  argument-order one. The positional form elsewhere in this file and in
+  `claude-implement` is fine as written, because neither passes a variadic
+  option; the review invocation redirects from stdin because that shape has
+  no ordering hazard at all and the reviewer is the leg most likely to grow
+  an `--add-dir`. Do not generalise this to other families: opencode's rule is
+  stricter and for a different reason — argv there cannot carry a real prompt
+  at all (it hangs above ~2 KB), so its prompt must come from a file. Take the
+  shape from the family's own runtime note, never from the leg you ran last.
 - **Headless auth just works** — no silent-auth dance (contrast agy).
 - **`acceptEdits` covers both file writes and shell/git in one flag.** It
   wrote files, ran `git add`, and committed without a single prompt or hang.

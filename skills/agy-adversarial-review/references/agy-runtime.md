@@ -103,6 +103,14 @@ Rules that follow:
   them is how "I allow-listed that" and a silent death can both be true —
   check the live file when diagnosing, update both when ruling.
 
+`--mode plan` denies the same class through a different door, and the
+message differs: `permission check failed for command "<cmd>": user denied
+permission to run command`. Observed twice in one session (2026-08-19, agy
+1.1.15) — once on `ssh`, once on `node -e` — each time killing the leg
+outright with that single line as its whole output. Both were the lead's
+fault, not the delegate's: the brief invited work the runtime could not do
+(see [`methodology.md`](../../../docs/methodology.md) §3).
+
 ## The workspace is NOT your cwd — `--add-dir` is mandatory
 
 Measured: a headless `agy -p` run's workspace root is agy's own scratch
