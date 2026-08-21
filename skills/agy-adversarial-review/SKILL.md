@@ -53,17 +53,15 @@ was frozen at.
 ```bash
 RUN_DIR=$(mktemp -d "${TMPDIR:-/tmp}/agy-review.XXXXXX")
 # Write the prompt to "$RUN_DIR/prompt.md" in its own step.
-# Confirm this Gemini pair is in the account catalogue; if not, replace BOTH
-# values with one available suffix pair. The first 3.7 Flash run is calibration.
+# Confirm this Gemini model is in the account catalogue; if not, pick an
+# available suffix variant. The first 3.7 Flash run is calibration.
 AGY_MODEL=gemini-3.7-flash-high
-AGY_EFFORT=high
 
 agy -p "$(cat "$RUN_DIR/prompt.md")" \
     --model "$AGY_MODEL" \
     --mode plan \
     --sandbox \
     --add-dir "$REVIEW_TARGET_DIR" \
-    --effort "$AGY_EFFORT" \
     --print-timeout 10m0s
 ```
 
@@ -84,16 +82,17 @@ Role-specific choices in that command:
   `--disable-slash-commands` silently cancels (above) — never pass both.
 - **`--print-timeout 10m0s`** — a real review of a few files takes 5–10
   minutes and the CLI default (5m0s) cuts it off mid-flight.
-- **Gemini model/effort pair** — the current review default is
-  `gemini-3.7-flash-high` with `high`, only when the account catalogue offers
-  it. The suffix and effort must match exactly: `-medium` needs `medium` and
-  `-low` needs `low`. Verify from the log which model actually served; this
-  new model has no calibration rows, so its first verified use is not a gate
-  merely because it is newer.
+- **Gemini model, effort omitted** — the current review default is
+  `gemini-3.7-flash-high`, only when the account catalogue offers it. The
+  `-high` suffix IS the effort; do not pass `--effort` (measured: omitting it
+  works, and a mismatched value is a hard CLI error, so the flag can only
+  break the run or restate the suffix). Verify from the log which model
+  actually served; this new model has no calibration rows, so its first
+  verified use is not a gate merely because it is newer.
 - **Model family** — the CLI may expose a second family's pool (e.g. Claude)
   on separate quota, a legitimate cross-family reviewer for anything that
-  family did NOT write. That is a different template: remove `AGY_EFFORT`
-  and `--effort` entirely for Claude models (see runtime).
+  family did NOT write. `--effort` stays absent there too — it is rejected
+  outright for Claude models (see runtime).
 
 Verify the TARGET before launching — `git -C "$REVIEW_TARGET_DIR" rev-parse
 HEAD` must equal `$REVIEW_HEAD` (a wrong-target launch from a stale cwd is

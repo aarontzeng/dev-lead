@@ -101,7 +101,7 @@ chmod -R a-w "$RUN_DIR/evidence"                         # NOT $RUN_DIR: the log
 # `if`, not a bare call + `$?` — a caller's `set -e` would exit before the
 # capture and leave $RUN_DIR unwritable (agy-runtime.md, retry section).
 if agy -p "$(cat "$RUN_DIR/prompt.md")" --model <gemini-tier> --mode plan --sandbox \
-       --add-dir "$REVIEW_TARGET_DIR" --add-dir "$RUN_DIR" --effort high --print-timeout 15m0s
+       --add-dir "$REVIEW_TARGET_DIR" --add-dir "$RUN_DIR" --print-timeout 15m0s
 then status=0; else status=$?; fi
 
 chmod -R u+w "$RUN_DIR/evidence"

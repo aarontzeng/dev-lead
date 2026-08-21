@@ -40,7 +40,7 @@ caller's `set -e` exit before the capture, leaving `$RUN_DIR` unwritable:
 
 ```bash
 if agy -p "$(cat "$RUN_DIR/prompt.md")" --model <gemini-tier> --mode plan --sandbox \
-       --add-dir "$REVIEW_TARGET_DIR" --add-dir "$RUN_DIR" --effort high --print-timeout 15m0s
+       --add-dir "$REVIEW_TARGET_DIR" --add-dir "$RUN_DIR" --print-timeout 15m0s
 then status=0; else status=$?; fi
 ```
 
