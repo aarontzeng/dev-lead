@@ -137,14 +137,17 @@ everything here except `--mode`, whose value is the role.
 - `--sandbox` — the CLI's terminal restrictions. Keep it on in both roles;
   mode alone does not constrain shell commands. It only works together with
   the allow-list above.
-- `--effort` — a real flag (`low|medium|high`); agy tops out at `high`.
-  **Gemini models only** — measured: it is rejected outright for the Claude
-  pool's models (the "-thinking" in those ids is the whole effort control);
-  drop the flag entirely there. It is not orthogonal to the Gemini model-id
-  suffix: `-low`, `-medium`, and `-high` each require the identically named
-  explicit effort. A contradicting pair (for example `--effort low` with a
-  `-high` model id) is a hard CLI error; a matching value is preferred in the
-  run log.
+- `--effort` — a real flag (`low|medium|high`), and **the correct use is to
+  OMIT it whenever the model id carries a suffix.** An earlier version of this
+  entry said each `-low`/`-medium`/`-high` suffix *requires* the identically
+  named explicit effort — measured 2026-08-21, that is wrong: bare
+  `--model gemini-3.7-flash-high` with no `--effort` runs fine. The suffix IS
+  the effort control; passing `--effort` merely restates it, and a mismatch
+  (for example `--effort low` with a `-high` id) is a hard CLI error. So the
+  flag can only ever break a run or be redundant — a session was observed
+  repeatedly tripping the mismatch by maintaining the same fact in two places.
+  For the Claude pool's models it is rejected outright (the "-thinking" in
+  those ids is the whole effort control). Drop it everywhere.
 - `--print-timeout` — **the default (5m0s) cuts real work off mid-flight.**
   Use `10m0s` for a review, `20m0s` for an implementation.
 - `--disable-slash-commands` — stops prompt text being expanded as slash

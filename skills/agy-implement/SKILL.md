@@ -63,17 +63,15 @@ risk observable instead of assumed away.
 ```bash
 # RUN_DIR was created in the worktree step above.
 # Write the task prompt to "$RUN_DIR/task.md" in its own step.
-# Confirm this Gemini pair is in the account catalogue; if not, replace BOTH
-# values with one available suffix pair. The first 3.7 Flash run is calibration.
+# Confirm this Gemini model is in the account catalogue; if not, pick an
+# available suffix variant. The first 3.7 Flash run is calibration.
 AGY_MODEL=gemini-3.7-flash-high
-AGY_EFFORT=high
 
 agy -p "$(cat "$RUN_DIR/task.md")" \
     --model "$AGY_MODEL" \
     --mode accept-edits \
     --sandbox \
     --add-dir "$WORKTREE" \
-    --effort "$AGY_EFFORT" \
     --disable-slash-commands \
     --print-timeout 20m0s
 ```
@@ -96,8 +94,9 @@ Role-specific choices:
   quality upgrade.
 - **Model family** — if the CLI exposes a second family's pool on separate
   quota, that pool's strong model is a legitimate implementer too (diversity
-  constrains the reviewer, not the implementer). For Claude models, remove
-  `AGY_EFFORT` and `--effort` entirely.
+  constrains the reviewer, not the implementer). `--effort` stays absent for
+  Claude models too — there it is rejected outright (see runtime: the model-id
+  suffix is the effort control in both pools, so the flag is never needed).
 
 ## Writing the task prompt
 
