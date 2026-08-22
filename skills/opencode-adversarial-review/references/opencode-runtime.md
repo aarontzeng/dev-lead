@@ -23,11 +23,25 @@ spend paid quota.
 - Vendor-keyed models (e.g. `google/*`) also appear in the catalogue — they
   bill the user's own API key. They are NOT the free pool; do not spend them
   without asking.
+  - **Carve-out — OpenRouter's own `:free`-tagged models** (`openrouter/*:free`,
+    e.g. `openrouter/nvidia/nemotron-3-ultra-550b-a55b:free`,
+    `openrouter/z-ai/glm-5.2:free`): zero monetary cost like the native pool,
+    but DO need the OpenRouter API key configured in opencode's auth first —
+    so treat them as free-to-spend once that key exists, not as a
+    no-credential-at-all model. Confirmed live 2026-08-22: 19 models across
+    vendors the native pool doesn't otherwise reach (NVIDIA Nemotron variants,
+    Z-AI GLM, Google Gemma, Cohere, Liquid, Poolside, ThinkingMachines,
+    Dots-Studio). **Enumerate live, don't trust this count** —
+    `opencode models | grep ':free$'`; OpenRouter's free tier churns
+    independently of opencode's own pool and carries its own per-key rate
+    limit (commonly tighter than the native pool's congestion behavior) —
+    measure before routing a time-sensitive round through it.
 
 ## Auth: the free pool needs no credential
 
 Measured: free-pool calls succeed with no login dance, no token expiry, no
-silent-auth coin flip.
+silent-auth coin flip. (OpenRouter's `:free` tier is the one exception —
+see the carve-out above; it needs the key but not spend.)
 
 ## Headless invocation — the prompt goes on STDIN, never in argv
 
