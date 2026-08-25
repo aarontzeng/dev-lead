@@ -1406,8 +1406,60 @@ def test_lint_version(tmp):
 ROOT_MD = sorted(p for p in SCRIPTS.parent.rglob("*.md") if ".git" not in p.parts)
 
 
+# -------------------------------------------------------- await-codex-job ----
+def test_await_codex_job(tmp):
+    """The waiter's job is to make the host's 'finished' notification mean the
+    JOB finished. Two properties matter and both are checkable without a real
+    codex run: it must not hang forever when the job never becomes terminal,
+    and it must resolve the plugin's own status command rather than the target
+    repo's cwd."""
+    await_sh = SCRIPTS / "await-codex-job.sh"
+
+    r = subprocess.run(["bash", "-n", str(await_sh)], capture_output=True, text=True)
+    check("await-codex-job.sh parses", r.returncode == 0, r.stderr.strip())
+
+    r = subprocess.run(["bash", str(await_sh)], capture_output=True, text=True)
+    check("await-codex-job.sh requires a job id",
+          r.returncode != 0, f"rc={r.returncode}")
+
+    # An unknown job must hit the caller's own deadline instead of spinning
+    # forever. A waiter that can hang is worse than no waiter: the round never
+    # reports and the lead is back to asking "is it done yet".
+    env = dict(os.environ, HOME=str(tmp / "empty-home"))
+    (tmp / "empty-home").mkdir(exist_ok=True)
+    r = subprocess.run(["bash", str(await_sh), "task-nope", str(tmp), "1"],
+                       capture_output=True, text=True, timeout=120, env=env)
+    check("await-codex-job.sh exits non-zero when the companion is absent",
+          r.returncode != 0, f"rc={r.returncode} out={r.stdout.strip()[:80]}")
+
+    # The TIMEOUT path needs its own case: the check above exits early on a
+    # missing companion and never reaches the loop, so on its own it lets a
+    # mutant that returns 0 after the deadline survive (measured -- it did).
+    # Stand up a fake companion that answers `status` forever without ever
+    # going terminal, and require a non-zero exit.
+    fake_home = tmp / "fake-home"
+    comp = fake_home / ".claude/plugins/cache/openai-codex/codex/9.9.9/scripts"
+    comp.mkdir(parents=True, exist_ok=True)
+    (comp / "codex-companion.mjs").write_text(
+        "console.log('- task-forever | running | rescue | Codex Task');\n")
+    r = subprocess.run(["bash", str(await_sh), "task-forever", str(tmp), "1"],
+                       capture_output=True, text=True, timeout=180,
+                       env=dict(os.environ, HOME=str(fake_home)))
+    check("await-codex-job.sh exits non-zero when the job never goes terminal",
+          r.returncode != 0, f"rc={r.returncode}")
+    check("await-codex-job.sh says TIMEOUT rather than failing silently",
+          "TIMEOUT" in (r.stderr + r.stdout), (r.stderr + r.stdout)[:120])
+
+    body = await_sh.read_text()
+    check("await-codex-job.sh resolves the companion under $HOME/.claude",
+          "plugins/cache/openai-codex/codex" in body)
+    check("await-codex-job.sh treats failed/cancelled as terminal, not just completed",
+          "failed" in body and "cancelled" in body)
+
+
 def main():
-    for script in ("freeze-target.sh", "verify-target.sh", "snapshot-refs.sh"):
+    for script in ("freeze-target.sh", "verify-target.sh", "snapshot-refs.sh",
+                   "await-codex-job.sh"):
         p = SCRIPTS / script
         if not p.is_file():
             print(f"  FAIL missing script: {script}")
@@ -1427,6 +1479,8 @@ def main():
         test_verify(tmp, frozen, sha)
         print("snapshot-refs.sh")
         test_snapshot(tmp)
+        print("await-codex-job.sh")
+        test_await_codex_job(tmp)
 
     print("lint.py check_paths")
     test_lint_paths()

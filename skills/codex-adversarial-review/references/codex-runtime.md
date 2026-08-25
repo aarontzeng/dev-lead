@@ -39,6 +39,55 @@ shell tool's default timeout (exit 143), losing the run.
   look for `Thread ready` / `Turn started` there before concluding the
   launch failed.
 
+### Getting TOLD it finished, instead of remembering to look
+
+Backgrounding the launch is not the same as backgrounding the work. With
+`--background` the companion returns as soon as the job is accepted, so a host
+that notifies on "background task finished" fires within seconds — while the
+delegate has not started thinking. Nothing then wakes the lead, and the run
+sits complete until somebody thinks to check.
+
+Measured 2026-08-25, one session, three rounds in a row: the delegate finished
+14, 20 and 40+ minutes before the lead noticed, every time only because the
+human asked. Two of those were refusals the lead had explicitly asked for and
+should have acted on immediately.
+
+**The rule, and it is not codex-specific: the host's background mechanism must
+wrap the thing that takes the time.**
+
+- A CLI that runs in the FOREGROUND (`agy`, `opencode run`, `codex exec`) is
+  already the long-running thing — hand it to the host background mechanism
+  directly and **do not add `&` or `nohup ... &` inside**. Detaching it makes
+  the host task exit at launch and throws the notification away. (Measured in
+  the same session: an `agy` review launched with an inner `&` produced a
+  "completed" notification in under a second, and the leg had in fact died.)
+- The companion's `task --background` does NOT run in the foreground, so it
+  needs a second host-background step that blocks until the job is terminal:
+
+  ```bash
+  # 1. launch (returns immediately, prints the job id)
+  cd "$WORKTREE" && node "$SCRIPT" task --background --write --fresh \
+      --model <model> --effort <effort> --prompt-file "$TASK_FILE" \
+      > "$RUN_DIR/launch.log" 2>&1
+  JOB=$(grep -o 'task-[a-z0-9-]*' "$RUN_DIR/launch.log" | head -1)
+
+  # 2. THIS is what goes in the host's background mechanism.
+  #    The resolver is required: a skill runs with the TARGET repo as cwd, so
+  #    a bare scripts/… would point at the user's project and exit 127.
+  DEV_LEAD=${DEV_LEAD_ROOT:-$(ls -d "$HOME"/.claude/plugins/cache/dev-lead/dev-lead/* 2>/dev/null | sort -V | tail -1)}
+  [ -x "$DEV_LEAD/scripts/await-codex-job.sh" ] || { echo "dev-lead root unresolved — set DEV_LEAD_ROOT"; exit 1; }
+  "$DEV_LEAD/scripts/await-codex-job.sh" "$JOB" "$WORKTREE"
+  ```
+
+  `await-codex-job.sh` polls the companion's `status` for a terminal state and
+  falls back to 20-minute log quiescence for the launcher-output mode where no
+  job is ever registered. It exits 0 on terminal, 1 on its own timeout.
+
+Do not poll by hand between turns instead. A hand-rolled poll loop is a live
+task the user can interrupt, and interrupting it is indistinguishable from the
+job ending — one such loop was killed mid-run in the same session and the lead
+briefly believed the delegate had stopped.
+
 ## Watching a run
 
 - **`status` computes "running" from `startedAt` and never checks the

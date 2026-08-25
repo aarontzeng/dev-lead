@@ -189,6 +189,26 @@ user can set it at invocation. Each round:
    with why it is real and what fix is required** — this shape fixed
    everything first-try in live runs; vague "address the review" has no track
    record.
+
+   **Background the WORK, not the launch.** Whatever the host uses to notify
+   you that a background task finished must be wrapped around the thing that
+   actually takes the minutes. A foreground CLI (`agy`, `opencode run`,
+   `codex exec`) already is that thing — hand it over directly and never add
+   an inner `&`/`nohup … &`, which makes the host task exit at launch and
+   discards the notification. A launcher that returns immediately (the codex
+   companion's `task --background`) needs a second backgrounded step that
+   blocks until the job is terminal; each runtime file names its own waiter.
+
+   Measured 2026-08-25, one session: three consecutive rounds finished 14, 20
+   and 40+ minutes before the lead noticed, every time only because the human
+   asked — and two of those were delegate refusals the lead had explicitly
+   asked for and should have acted on at once. The delegate was not slow; the
+   lead was not listening. In the same session an `agy` leg launched with an
+   inner `&` reported "completed" in under a second and had actually died.
+
+   Do not substitute a hand-rolled poll loop between turns. It is a live task
+   the user can interrupt, and an interrupted poll is indistinguishable from
+   the job ending.
 2. **Lead verifies independently** — never from the delegate's self-report.
    Order matters when the work comes back uncommitted (some sandboxes cannot
    commit in a worktree at all): FIRST inspect the working tree itself
