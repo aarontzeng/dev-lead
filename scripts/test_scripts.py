@@ -611,12 +611,12 @@ def test_lint_delegate_audit_trails():
             "request_id\n"
         ),
         "skills/agy-adversarial-review/SKILL.md": (
-            "AGY_MODEL=gemini-3.7-flash-high\nAGY_EFFORT=high\n"
-            '--model "$AGY_MODEL"\n--effort "$AGY_EFFORT"\n'
+            "AGY_MODEL=gemini-3.7-flash-high\n"
+            '--model "$AGY_MODEL"\n'
         ),
         "skills/agy-implement/SKILL.md": (
-            "AGY_MODEL=gemini-3.7-flash-high\nAGY_EFFORT=high\n"
-            '--model "$AGY_MODEL"\n--effort "$AGY_EFFORT"\n'
+            "AGY_MODEL=gemini-3.7-flash-high\n"
+            '--model "$AGY_MODEL"\n'
         ),
     }
 
@@ -662,14 +662,14 @@ def test_lint_delegate_audit_trails():
     check("audit: flags Cursor output with no request identity",
           any("request_id" in e for e in got), f"got {got}")
 
-    mismatched_tier = dict(good)
-    mismatched_tier["skills/agy-adversarial-review/SKILL.md"] = (
-        "AGY_MODEL=gemini-3.7-flash-high\nAGY_EFFORT=low\n"
+    stale_effort = dict(good)
+    stale_effort["skills/agy-adversarial-review/SKILL.md"] = (
+        "AGY_MODEL=gemini-3.7-flash-high\nAGY_EFFORT=high\n"
         '--model "$AGY_MODEL"\n--effort "$AGY_EFFORT"\n'
     )
-    got = run_against(mismatched_tier)
-    check("audit: flags mismatched agy model and effort tiers",
-          any("does not match" in e for e in got), f"got {got}")
+    got = run_against(stale_effort)
+    check("audit: flags a reintroduced AGY_EFFORT as redundant",
+          any("redundant" in e for e in got), f"got {got}")
 
 
 # ------------------------------------------------------------- claim audit ----

@@ -634,9 +634,8 @@ AGY_ROLE_SKILLS = (
     "skills/agy-adversarial-review/SKILL.md",
     "skills/agy-implement/SKILL.md",
 )
-AGY_PAIR_RE = re.compile(
-    r"^AGY_MODEL=gemini-[A-Za-z0-9._-]+-(?P<tier>low|medium|high)$\n"
-    r"^AGY_EFFORT=(?P<effort>low|medium|high)$",
+AGY_MODEL_RE = re.compile(
+    r"^AGY_MODEL=gemini-[A-Za-z0-9._-]+-(?:low|medium|high)$",
     re.M,
 )
 
@@ -663,14 +662,12 @@ def check_delegate_audit_trails():
         if not path.is_file():
             continue                          # check_structure() reports it
         text = path.read_text(encoding="utf-8")
-        pair = AGY_PAIR_RE.search(text)
-        if pair is None:
-            err(rel(path), "missing AGY_MODEL/AGY_EFFORT Gemini tier pair")
-        elif pair.group("tier") != pair.group("effort"):
-            err(rel(path), "AGY_MODEL suffix does not match AGY_EFFORT")
-        for fragment in ('--model "$AGY_MODEL"', '--effort "$AGY_EFFORT"'):
-            if fragment not in text:
-                err(rel(path), f"does not use its declared model/effort pair: {fragment}")
+        if AGY_MODEL_RE.search(text) is None:
+            err(rel(path), "missing AGY_MODEL=gemini-...-<tier> declaration")
+        if '--model "$AGY_MODEL"' not in text:
+            err(rel(path), 'does not use its declared model: --model "$AGY_MODEL"')
+        if "AGY_EFFORT" in text or '--effort "$AGY_EFFORT"' in text:
+            err(rel(path), "AGY_EFFORT is redundant — the model suffix IS the effort (fad0ef0)")
 
 
 # ---- families: the accounting model must match what is on disk ----
