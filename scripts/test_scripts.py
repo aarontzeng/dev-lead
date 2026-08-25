@@ -599,6 +599,9 @@ def test_lint_delegate_audit_trails():
     sys.path.insert(0, str(SCRIPTS))
     import lint
 
+    def bash_fence(code):
+        return "```bash\n" + code + "```\n"
+
     good = {
         "skills/cursor-adversarial-review/SKILL.md": (
             "--output-format json\n"
@@ -610,11 +613,11 @@ def test_lint_delegate_audit_trails():
             '"$(cat \"$RUN_DIR/task.md\")" > "$RUN_DIR/impl.json" 2> "$RUN_DIR/impl.err"\n'
             "request_id\n"
         ),
-        "skills/agy-adversarial-review/SKILL.md": (
+        "skills/agy-adversarial-review/SKILL.md": bash_fence(
             "AGY_MODEL=gemini-3.7-flash-high\n"
             '--model "$AGY_MODEL"\n'
         ),
-        "skills/agy-implement/SKILL.md": (
+        "skills/agy-implement/SKILL.md": bash_fence(
             "AGY_MODEL=gemini-3.7-flash-high\n"
             '--model "$AGY_MODEL"\n'
         ),
@@ -663,13 +666,34 @@ def test_lint_delegate_audit_trails():
           any("request_id" in e for e in got), f"got {got}")
 
     stale_effort = dict(good)
-    stale_effort["skills/agy-adversarial-review/SKILL.md"] = (
+    stale_effort["skills/agy-adversarial-review/SKILL.md"] = bash_fence(
         "AGY_MODEL=gemini-3.7-flash-high\nAGY_EFFORT=high\n"
         '--model "$AGY_MODEL"\n--effort "$AGY_EFFORT"\n'
     )
     got = run_against(stale_effort)
     check("audit: flags a reintroduced AGY_EFFORT as redundant",
           any("redundant" in e for e in got), f"got {got}")
+
+    hardcoded_effort = dict(good)
+    hardcoded_effort["skills/agy-adversarial-review/SKILL.md"] = bash_fence(
+        "AGY_MODEL=gemini-3.7-flash-high\n"
+        '--model "$AGY_MODEL"\n--effort high\n'
+    )
+    got = run_against(hardcoded_effort)
+    check("audit: flags a hardcoded --effort flag with no AGY_EFFORT variable",
+          any("redundant" in e for e in got), f"got {got}")
+
+    prose_only_effort = dict(good)
+    prose_only_effort["skills/agy-adversarial-review/SKILL.md"] = (
+        "Do not pass `--effort` — the model suffix IS the effort.\n\n"
+        + bash_fence(
+            "AGY_MODEL=gemini-3.7-flash-high\n"
+            '--model "$AGY_MODEL"\n'
+        )
+    )
+    got = run_against(prose_only_effort)
+    check("audit: does NOT flag --effort mentioned only in prose, outside the code fence",
+          not any("redundant" in e for e in got), f"got {got}")
 
 
 # ------------------------------------------------------------- claim audit ----

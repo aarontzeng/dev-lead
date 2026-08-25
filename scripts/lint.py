@@ -662,12 +662,13 @@ def check_delegate_audit_trails():
         if not path.is_file():
             continue                          # check_structure() reports it
         text = path.read_text(encoding="utf-8")
-        if AGY_MODEL_RE.search(text) is None:
+        code = "\n".join(line for _, line in bash_blocks(text))
+        if AGY_MODEL_RE.search(code) is None:
             err(rel(path), "missing AGY_MODEL=gemini-...-<tier> declaration")
-        if '--model "$AGY_MODEL"' not in text:
+        if '--model "$AGY_MODEL"' not in code:
             err(rel(path), 'does not use its declared model: --model "$AGY_MODEL"')
-        if "AGY_EFFORT" in text or '--effort "$AGY_EFFORT"' in text:
-            err(rel(path), "AGY_EFFORT is redundant — the model suffix IS the effort (fad0ef0)")
+        if "AGY_EFFORT" in code or "--effort" in code:
+            err(rel(path), "--effort/AGY_EFFORT is redundant — the model suffix IS the effort (fad0ef0)")
 
 
 # ---- families: the accounting model must match what is on disk ----
