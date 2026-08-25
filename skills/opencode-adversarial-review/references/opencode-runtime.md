@@ -37,6 +37,29 @@ spend paid quota.
     limit (commonly tighter than the native pool's congestion behavior) —
     measure before routing a time-sensitive round through it.
 
+## OpenRouter `:free` candidates — first-probe results (2026-08-25)
+
+One golden-answer probe per model (n=1 — see "n=1 proves nothing" below;
+these are first looks, not yet default-pool promotions). The task: an
+adversarial review of a real diff where a new independently-gated interface
+(`validateRoute()`) exists and is unit-tested, but the production call site
+still invokes the old method (`verify()`) against shared, non-independent
+instances — the exact "interface exists and is tested" vs. "production path
+actually uses it" trap that a Gemini leg and a Claude Sonnet 5 leg both fell
+into on a real review this same week. Correct verdict: BLOCKING, evidence at
+the `verify()` call site.
+
+| date | model | family | role | outcome |
+|---|---|---|---|---|
+| 2026-08-25 | `openrouter/cohere/north-mini-code:free` | North | review (n=1) | HIT — correct BLOCKING verdict, exact citation, concise |
+| 2026-08-25 | `openrouter/thinkingmachines/inkling:free` | Inkling | review (n=1) | HIT — correct BLOCKING verdict, reached it via real grep/read tool use |
+| 2026-08-25 | `openrouter/poolside/laguna-s-2.1:free` | Laguna | review (n=1) | HIT — most thorough of the four: also caught that `validateRoute()` internally delegates back to `verify()`, and cited the class's own header comment admitting shared-instance reuse; slowest (~4–5 min) |
+| 2026-08-25 | `openrouter/z-ai/glm-5.2:free` | GLM | review | UNTESTABLE — 3 consecutive attempts over several minutes all returned `[Decart] z-ai/glm-5.2:free is temporarily rate-limited upstream`, zero model output. A transport-layer finding, not a quality signal — retry later rather than concluding the model is weak. |
+
+Run each of the three hits again before treating them as reliable — a single
+correct answer on one hand-picked probe is exactly the "n=1" trap this file
+already warns about.
+
 ## Auth: the free pool needs no credential
 
 Measured: free-pool calls succeed with no login dance, no token expiry, no

@@ -26,7 +26,7 @@
     },
     "opencode": {
       "cli": "opencode",
-      "serves": ["DeepSeek", "Nemotron", "unknown"],
+      "serves": ["DeepSeek", "Nemotron", "GLM", "North", "Inkling", "Laguna", "unknown"],
       "note": "free pool; catalogue changes, verify with `opencode models`"
     },
     "grok": {
@@ -46,6 +46,10 @@
     "Gemini": {"accounting_valid": true},
     "DeepSeek": {"accounting_valid": true},
     "Nemotron": {"accounting_valid": true},
+    "GLM": {"accounting_valid": true, "note": "Z-AI; OpenRouter :free carve-out"},
+    "North": {"accounting_valid": true, "note": "Cohere; OpenRouter :free carve-out"},
+    "Inkling": {"accounting_valid": true, "note": "Thinking Machines Lab; OpenRouter :free carve-out"},
+    "Laguna": {"accounting_valid": true, "note": "Poolside; OpenRouter :free carve-out"},
     "Grok": {"accounting_valid": true},
     "Kimi": {"accounting_valid": true},
     "Composer": {
