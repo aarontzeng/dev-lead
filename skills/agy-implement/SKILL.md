@@ -86,12 +86,11 @@ Role-specific choices:
 - **`--mode accept-edits`** is the write mode and the whole point.
 - **`--add-dir "$WORKTREE"`** — the worktree, never the main checkout.
 - **`--print-timeout 20m0s`** — implementations run longer than reviews.
-- **Gemini model/effort pair** — the default keeps the current 3.7 Flash
-  `-high` suffix paired with `high`. If you deliberately choose `-medium` or
-  `-low` to suit the task, change both values together; mismatches are a CLI
-  error. Verify from the log which model actually served (runtime file), and
-  treat the first verified 3.7 run as calibration rather than an automatic
-  quality upgrade.
+- **Gemini model tier** — the default keeps the current 3.7 Flash `-high`
+  suffix; the suffix IS the effort, so change only `AGY_MODEL` to `-medium`
+  or `-low` if the task calls for it, nothing else. Verify from the log which
+  model actually served (runtime file), and treat the first verified 3.7 run
+  as calibration rather than an automatic quality upgrade.
 - **Model family** — if the CLI exposes a second family's pool on separate
   quota, that pool's strong model is a legitimate implementer too (diversity
   constrains the reviewer, not the implementer). `--effort` stays absent for
