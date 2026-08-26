@@ -186,7 +186,15 @@ When verified findings require fixes, iterate in the SAME worktree: launch a
 follow-up task that quotes each verified finding verbatim, with why it is
 real and what fix is required, and commits on top — then re-run the full
 verification (tests, mutation proof for new regression tests, fresh review of
-the new diff). Measured across families: findings-quoted-verbatim follow-up
+the new diff). **The verify-order above applies to EVERY round, not just the
+first: checkpoint-commit the fix round BEFORE any mutation proof.** Measured
+(2026-08-26): a lead ran a mutation against an uncommitted fix round and
+restored with `git checkout -- <file>` — which restores to HEAD, wiping the
+delegate's entire uncommitted fix in that file; recovery required replaying
+`apply_patch` payloads out of the codex session rollout. The commit-first
+rule exists in dev-lead Phase 2; the second round is where it gets skipped,
+because the first round's commit makes the tree FEEL safe. Measured across
+families: findings-quoted-verbatim follow-up
 tasks fixed everything on the first try. Small, precisely diagnosed defects
 you find during verification are cheaper to fix directly than to delegate a
 third round for. When quota is tight, spend Codex on the review gate and

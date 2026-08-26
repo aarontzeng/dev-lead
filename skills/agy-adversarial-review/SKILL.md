@@ -48,6 +48,26 @@ before AND after the run — are in
 `$REVIEW_TARGET_DIR` is that frozen directory and `$REVIEW_HEAD` is the SHA it
 was frozen at.
 
+**agy exception — the frozen target must be a self-contained CLONE, not a
+git worktree.** Measured (2026-08-26): `freeze-target.sh` creates a worktree,
+whose `.git` is a one-line pointer FILE into the main repo's `.git/worktrees/`
+— which sits outside `--add-dir`. agy's first `read_file` on that pointer is
+auto-denied (`permission check failed for read_file ".../.git"`) and the whole
+run dies with that single line as its output. Every other family in this
+suite reads worktrees fine; agy's sandbox is the one that cannot. Freeze for
+agy with a local clone instead, then verify and bracket exactly as the helper
+flow would:
+
+```bash
+git clone --quiet "$REPO" "$REVIEW_TARGET_DIR"
+git -C "$REVIEW_TARGET_DIR" checkout --quiet "$SHA"
+[ "$(git -C "$REVIEW_TARGET_DIR" rev-parse HEAD)" = "$SHA" ] || exit 1
+[ -z "$(git -C "$REVIEW_TARGET_DIR" status --porcelain=v1)" ] || exit 1
+```
+
+A clone's `.git` is a real directory inside `--add-dir`, so nothing escapes
+the sandbox. The same before/after HEAD + porcelain bracket still applies.
+
 ## Run it
 
 ```bash
