@@ -72,6 +72,37 @@ that was a deliberate safety re-check; the delegate faithfully removed it. A
 wrong premise dispatched is a wrong feature implemented. If the repo has its
 own plan discipline, the plan document precedes dispatch.
 
+**Premortem — for HIGH risk, and for any task that deletes or disables
+existing behavior.** Before writing the task brief, run one prompt against
+the plan: *"Assume this change shipped and failed — we are in the
+postmortem. List the scenarios we forgot to consider."* This is the
+premise-check systematized, and it attacks the one axis nothing downstream
+covers: every later gate (adversarial review, mutation testing,
+cross-family) reads a DIFF, and a diff structurally cannot show what the
+plan wrongly left out or wrongly marked deletable. Two measured shapes of
+that blind spot:
+
+- A plan marked live code as "dead code, delete" — the diff just shows an
+  unreferenced block removed; no reviewer has grounds to object. The
+  premortem's top-ranked failure was the exact thing that block handled.
+- Two operations each individually correct composed into a broken runtime
+  behavior (a credential read and a rotated-credential write, each
+  OS-prompt-gated, produced a double biometric prompt per login). Three
+  review legs passed it, because the defect lived in the composition at
+  runtime, not in any hunk. "Imagine the user's complaint after ship"
+  reaches it; reading the diff harder does not.
+
+Deletion-shaped tasks get the premortem even at MEDIUM: removing behavior
+is where a wrong premise is most expensive and least reviewable. LOW-risk
+mechanical work skips it — this is one prompt, not a new phase.
+
+Premortem output is hypotheses, not findings. Verify each named scenario
+against the actual code before it shapes the brief; what cannot be
+verified goes into the task brief labeled as an unverified assumption for
+the delegate and reviewers to check — never silently absorbed as a
+requirement. Skipping that verification step turns this into an anxiety
+generator that bloats every brief with speculative hardening.
+
 ## Phase 1 — Dispatch
 
 **Probe availability first, cheaply.** Each family's runtime file has its
