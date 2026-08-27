@@ -20,8 +20,17 @@ the `--add-dir` workspace trap, the silent-death mode, auth diagnosis, and
 the model catalogue. This file assumes you know them and covers only what
 makes a run an *implementation*.
 
-Two runtime facts this role depends on directly:
+Three runtime facts this role depends on directly:
 
+- **This role needs TOOL permissions, not just the `unsandboxed(...)` shell
+  rules — and it is the role that finds out.** An empty `permissions.allow`
+  loads as `permissions=<nil>` and falls back to asking a human who is not
+  there, so the first tool call is auto-denied and the run dies having read
+  nothing. The review role survives that (its prompt hands it a pre-written
+  diff), this one does not. Add `read_file(<worktree>/**)` and
+  `write_file(<worktree>/**)` scoped to the worktree, never the home
+  directory. Full diagnosis, and why the error message's own suggested fix is
+  the wrong one, in the runtime file's permission section.
 - The **write set** is the read-only git rules plus `unsandboxed(git add)`,
   `unsandboxed(git commit)`, and the pinned test-runner spellings (a ruled
   exception — the runtime file carries the ruling and what it costs).

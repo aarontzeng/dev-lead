@@ -30,6 +30,38 @@ either role, so `~/.gemini/antigravity-cli/settings.json` needs these under
 "unsandboxed(git rev-parse)"
 ```
 
+**The `unsandboxed(...)` entries are not the whole story, and an empty
+`permissions.allow` fails EARLIER than any of them.** With no `allow` array at
+all the CLI loads `permissions=<nil>` and falls back to
+`toolPermission=request-review` — every tool call asks a human who is not
+there, so the FIRST tool call is auto-denied and the run dies before reading a
+single file. The review role never hit this (its prompts hand it a pre-written
+diff file, so it can produce a report having read nothing); `agy-implement`
+hits it immediately. The tool permissions themselves must be listed, scoped to
+the worktree rather than the home directory:
+
+```json
+"read_file(/abs/path/to/worktree/**)",
+"write_file(/abs/path/to/worktree/**)"
+```
+
+Diagnose it from the CLI log, which records what was actually loaded — this is
+the line that distinguishes "wrong rule" from "no rules at all":
+
+```bash
+grep -oE "permissions=[^,]*, toolPermission=[a-z-]*" \
+  ~/.gemini/antigravity-cli/log/cli-*.log | tail -1
+```
+
+`permissions=<nil>` means nothing loaded; `permissions=&{Allow:[...]}` lists
+what did. Measured 2026-08-27: a run with `<nil>` died in seconds with
+`no output produced — a tool required the "read_file" permission`, and the same
+prompt with the rules loaded ran normally. Note the error text names ONE tool
+and invites `--dangerously-skip-permissions`; that invitation is the wrong fix
+(it auto-approves everything, discarding the boundary this whole setup exists
+to keep) and the named tool is merely the first one attempted, not the only one
+missing.
+
 Those six are not quite the read set — see below. The **write set** adds
 these, for `agy-implement` only:
 
