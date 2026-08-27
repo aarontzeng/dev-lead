@@ -58,6 +58,23 @@ differently-briefed legs each found the only instance of their own class:
 - **is it still true** — for anything amended repeatedly, which text is dead
   but still reads as live? Append-only docs create this hazard by
   construction, and no other role looks for it.
+- **falsifiability** — can each test here actually FAIL? Walk every path from
+  entry to `exit 0` and name the input that reaches it. This is NOT the
+  challenge role: challenge asks whether the approach is right, and a green
+  suite answers it "yes" just as convincingly whether or not the suite can
+  fail. Ask it of guards and gates especially — the ones whose value is
+  entirely "it would have caught X".
+
+  Measured, one round, three legs on the same frozen commit: only the leg
+  briefed this way found any of it, and it found five — a gate whose two
+  required-positive checks reported ALLOWED when the login was refused, a
+  probe that read an EOF as an allow, a range where every commit was skipped
+  yet the run still printed its success line, an unchecked `docker run` that
+  let probes pass against a broker the commit never configured, and a
+  direction assertion that only covered the first table row. The
+  sequences-briefed leg returned HOLDS on all seven properties it was given
+  and was right about every one of them; it simply was not asked this. **The
+  brief decided the yield, not the model.**
 
 **Write your own findings down BEFORE the legs fire.** The overlap number is
 the whole evidence base for brief diversity, and a lead who reads three reports

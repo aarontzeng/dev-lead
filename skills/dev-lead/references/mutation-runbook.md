@@ -132,3 +132,46 @@ believed it. Ordered roughly by how early in a round they bite.
   figure a conclusion leans on, state the spread, and let the claim be
   "lands inside the measured range" when that is all the data supports.
 
+
+## Retrospective mutation: run the mutant against the OLD test
+
+Forward mutation asks "does my new test fail when I break the code?" That
+proves the test is connected to something. It does NOT prove the test is
+STRONGER than the one it replaced, and when a review round tells you an
+existing assertion is weak, that is the question actually on the table.
+
+So when a finding says a test is weak, unfalsifiable, or checks the wrong
+thing, run the mutant TWICE — once against the fix, once against the version
+the finding was written about:
+
+```bash
+# 1. the mutant, against the NEW test: must fail
+<apply mutant>; <run test>; echo "new exit=$?"          # expect non-zero
+
+# 2. the SAME mutant, against the OLD test: if it passes, the finding is proven
+git show "$BEFORE":path/to/test > /tmp/old_test
+<swap in /tmp/old_test>; <run it>; echo "old exit=$?"   # expect zero
+```
+
+Two things come out of this that nothing else gives you:
+
+- **It converts a reviewer's opinion into a measurement.** "Your verdict logic
+  is unfalsifiable" is a claim you can accept or dispute. "Give the account a
+  wrong password and the previous version prints ALLOWED, ALLOWED, then 'ACL
+  mitigation holds', exit 0" is not disputable, and it belongs in the commit
+  message verbatim — a future reader inherits the evidence, not the assertion.
+- **It separates a strengthened test from a rearranged one.** Measured in the
+  same round: a test was changed to pin which SIDE of a config a subject
+  appears on. Forward mutation killed it, so it looked strengthened. Only the
+  retrospective run showed the previous version ALSO failed that mutant — the
+  real gap was one table row over, where the old version passed and the new one
+  failed naming `sysid='10'`. Without step 2, the wrong mutant would have
+  "confirmed" a fix that missed the finding.
+
+Pick the mutant from the FINDING's trigger, not from the code you touched. A
+mutant chosen from your own diff tests the change; a mutant chosen from the
+finding tests the claim. When they differ, the finding's is the one that
+settles the round.
+
+Cost is one extra test run. Skip it only when the finding is about code that
+had no previous test at all — there is no old version to measure against.

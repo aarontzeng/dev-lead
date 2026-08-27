@@ -203,8 +203,12 @@ whether the approach was right at all, one audited for text that was
 superseded but still read as live. Their principal findings overlapped zero
 percent, and each leg found the only instance of its own class. The roles
 worth splitting, in the order they tend to pay: **sequences**, **challenge**
-(never phrased as "find defects"), **consistency**, **is-it-still-true**
-(see [`docs/methodology.md`](../../docs/methodology.md) §2).
+(never phrased as "find defects"), **consistency**, **is-it-still-true**, and
+**falsifiability** — can each test here actually FAIL? Give that last one to a
+leg whenever the change ADDS a guard or a gate, because a green suite is
+equally convincing whether or not the suite is able to go red (measured: on one
+three-leg round it was the only lens that found anything, and it found five;
+see [`docs/methodology.md`](../../docs/methodology.md) §2).
 
 Quota economics: when one model is scarce, spend it on **review**, not
 implementation — review leverage is higher, and implementation has more
@@ -249,14 +253,31 @@ user can set it at invocation. Each round:
    makes the checkpoint commit, and only then do ranged checks,
    commit-message hygiene, and **mutation-proof every new regression test**.
 
-   **Changing a statement? grep for its copies BEFORE you edit.** The same
-   sentence usually lives in three places — the implementation comment, the
-   header/API doc, and the operator-facing log line — and fixing the one you
-   happen to be in leaves the others contradicting it. Measured: the same
-   correction was made three times across three review rounds, each round
-   catching one more surviving copy. Tests never catch this class. `grep -rn`
-   a distinctive phrase from the sentence you are about to change, fix every
-   hit in the same edit, and say in the commit how many there were.
+   **Changing a statement OR A PREDICATE? grep for its copies BEFORE you
+   edit.** The same sentence usually lives in three places — the implementation
+   comment, the header/API doc, and the operator-facing log line — and fixing
+   the one you happen to be in leaves the others contradicting it. Measured:
+   the same correction was made three times across three review rounds, each
+   round catching one more surviving copy. Tests never catch this class.
+   `grep -rn` a distinctive phrase from the sentence you are about to change,
+   fix every hit in the same edit, and say in the commit how many there were.
+
+   **A wrong test predicate copies exactly the same way, and the rule used to
+   miss it because it only said "statement".** Measured, a later round: a probe
+   decided its verdict with `"Permissions Violation" not in r`. That is wrong —
+   a REJECTED LOGIN also lacks that string, so it reported ALLOWED — and the
+   expression appeared four times in one file plus once in a sibling. Fixing
+   the two instances review named would have left twelve required-positive
+   checks with the same hole. Here the rule's own line, "tests never catch this
+   class", was literally true: every suite was green with all four copies
+   broken, because the copies WERE the suite.
+
+   So before changing any decision expression — a verdict, a guard, a
+   comparison a test's result turns on — `grep -rn` the expression itself, not
+   just its surrounding prose. Then prefer collapsing the copies onto one
+   function over correcting each: the count is what makes the next occurrence
+   impossible, and correcting N copies leaves N places for the next person to
+   fix N-1 of.
 
    **Writing a NEW statement? Name what would make it false.** The grep rule
    above catches a sentence that went stale; it cannot catch one that was false
