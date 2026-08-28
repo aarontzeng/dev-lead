@@ -45,6 +45,20 @@ the worktree rather than the home directory:
 "write_file(/abs/path/to/worktree/**)"
 ```
 
+**Scope the READ rule to every directory the role will ever see, not to
+today's one.** A review role reads a FROZEN target, and freezing creates a new
+directory each round — so a rule naming one worktree works until the first
+round whose frozen copy has a different name, and then fails. Measured: three
+review legs ran fine because their frozen directories happened to be named
+after the same worktree, and the fourth died with "a tool required the
+read_file permission" after the naming changed. The intermittency is the trap;
+a rule that never worked is easier to diagnose than one that stops.
+
+A sibling glob over the repo family covers it — `read_file(/abs/path/repo-*/**)`
+— and note that WRITE should stay narrow. A review role has no reason to write
+anywhere, and widening both together silently hands the read fix to the write
+rule as well.
+
 Diagnose it from the CLI log, which records what was actually loaded — this is
 the line that distinguishes "wrong rule" from "no rules at all":
 
