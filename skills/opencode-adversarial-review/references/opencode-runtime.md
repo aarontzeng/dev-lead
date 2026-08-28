@@ -80,6 +80,33 @@ entry point's own call site, not either allocator function.
 | 2026-08-28 | `opencode/hy3-free` | **Tencent** (Hunyuan, marketed as "Hy3"; new family) | review (n=1) | HIT — correct, concise, ~9s |
 | 2026-08-28 | `opencode/muse-spark-1.2-contributor-free` | **Meta** (marketed as "Muse Spark"; new family) | review (n=1) | HIT — tied for most detailed: walked the trigger through the test's own fixture values (`unit-1`, `remaining_fuel=0`) instead of describing it abstractly; ~10s |
 
+**Round 2 (2026-08-28, same day), a DIFFERENT bug shape** — deliberately not
+a re-run of the same file, to rule out memorizing one fixture rather than
+generalizing the trap class. This scenario is the "result computed and
+persisted for audit, but the field that actually gates production is never
+set from it" shape (a real bug this same account's lead caught live in a
+Stanley Tsao PF-08 change the same week: a conflict verdict was computed
+correctly but the pipeline's pass/fail field never read it). Correct verdict:
+BROKEN, citing the unconditional `status = READY` assignment, not the verdict
+computation.
+
+| date | model | family | role | outcome |
+|---|---|---|---|---|
+| 2026-08-28 | `opencode/big-pickle` | unknown | review (n=2 total) | HIT again — same exact-citation style, ~7s |
+| 2026-08-28 | `opencode/nemotron-3-ultra-free` | Nemotron | review (n=2 total) | HIT again — mid-run recovered on its own from one upstream `[502] Service temporarily overloaded`, then answered correctly on retry |
+| 2026-08-28 | `opencode/nemotron-3.5-lightning-free` | Nemotron | review | UNTESTABLE again, and with a DIFFERENT error this time: `AI_APICallError: [404] Provider returned error` (round 1 was `[400]`) on every retry. Two failed attempts, two different HTTP codes, same day — reads as this specific model route being broken upstream right now, not one-off congestion. Do not route real work through `nemotron-3.5-lightning-free` until it clears on a later probe; `nemotron-3-ultra-free` (same family, same pool) is unaffected and fine to use meanwhile. |
+| 2026-08-28 | `opencode/mimo-v2.5-free` | Xiaomi | review (n=2 total) | HIT again |
+| 2026-08-28 | `opencode/hy3-free` | Tencent | review (n=2 total) | HIT again |
+| 2026-08-28 | `opencode/muse-spark-1.2-contributor-free` | Meta | review (n=2 total) | HIT again — again cited the test's own concrete fixture values rather than describing them abstractly |
+
+Five of six are now 2/2 on two structurally different bug shapes in one day —
+past the single-anecdote stage this file otherwise warns about, though still
+short of a full calibration-journal promotion (that wants dated rows over
+multiple sessions/weeks, not two runs in one). `nemotron-3.5-lightning-free`
+is 0/2 with two different transport error codes; treat it as currently
+unavailable rather than untested, and prefer `nemotron-3-ultra-free` for
+Nemotron-family free-pool work until it's re-probed clean.
+
 **Family identification matters here more than the hit rate.** `hy3`,
 `mimo-v2.5`, and `muse-spark-1.2-contributor` all resolve to disclosed
 vendors in `opencode models`'s parallel `openrouter/<vendor>/...` listings
