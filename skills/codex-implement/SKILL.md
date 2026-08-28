@@ -129,6 +129,26 @@ the runtime's launcher rules. Do not use
 `--dangerously-bypass-approvals-and-sandbox`; `workspace-write` is the
 intended write boundary.
 
+**Then await the job, or you will not learn that it finished.** `task
+--background` returns as soon as the job is ACCEPTED, so the host's completion
+notification fires for the launcher — seconds later — and never for the work.
+Measured across a long session: every codex round was discovered only when the
+user asked whether it was done, while agy and opencode rounds notified
+normally, because those CLIs run in the foreground of the backgrounded command
+and codex's does not.
+
+```bash
+DEV_LEAD=${DEV_LEAD_ROOT:-$(ls -d "$HOME"/.claude/plugins/cache/dev-lead/dev-lead/* 2>/dev/null | sort -V | tail -1)}
+"$DEV_LEAD/scripts/await-codex-job.sh" "$JOB_ID" "$WORKTREE"
+```
+
+Run THAT under the host's background mechanism — it blocks until the job
+reaches a terminal state, so its completion notification is the job's. The
+helper and the reasons not to hand-roll a poll loop are in the
+[runtime file](../codex-adversarial-review/references/codex-runtime.md); this
+pointer exists because reading only this file leaves you waiting for a
+notification that is never coming.
+
 Two sandbox limits from the runtime file shape this role directly: the
 delegate **cannot commit from a git worktree** (structural — expect the work
 back UNCOMMITTED, and say so in the task prompt so it doesn't waste a denied
