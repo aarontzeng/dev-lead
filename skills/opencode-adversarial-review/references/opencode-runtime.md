@@ -135,6 +135,47 @@ again, and probe `nemotron-3.5-lightning-free` again on a different day
 before writing it off — one 400-error run under load is not a verdict either
 way.
 
+## Native `opencode/*` pool — real-diff round (2026-08-28)
+
+The two probes above used synthetic single-function scenarios and five models
+tied at full marks, so they ranked nothing. This round replaced the scenario
+with a REAL pre-merge diff from a live service: a portal dashboard's fan-out
+made concurrent (bounded pool, per-card deadline, whole-page budget) plus a
+cache with a stated contract — actor-keyed, 60s TTL, errors not cached,
+single-flight, invalidated on key change. 303 lines changed, 785 tests green,
+and six mutations already caught by the lead before the reviewers saw it.
+
+Four models, same frozen commit, same claims file, four independent read-only
+worktrees, run concurrently.
+
+| date | model | family | role | outcome |
+|---|---|---|---|---|
+| 2026-08-28 | `opencode/big-pickle` | unknown | review (n=1) | **HIT, top of the round** — found the shared MAJOR *and* the round's only unique finding: offboarding (`purge_redmine_key`, `revoke_user_tokens`) changes a credential without invalidating the cache. Stated unprompted that the lead's five-site mutation suite "structurally cannot catch" it — correct, those sites are all on the enrolment path. Both verified. |
+| 2026-08-28 | `opencode/hy3-free` | Tencent | review (n=1) | HIT — same MAJOR, named it a resource-exhaustion vector. Saw the offboarding gap too but rated it MINOR (actor-scoped staleness, not a cross-actor leak). Defensible; the lead took MAJOR because offboarding is when stale data matters most. |
+| 2026-08-28 | `opencode/muse-spark-1.2-contributor-free` | Meta | review (n=1) | HIT — same MAJOR, cleanest severity split ("HOLDS for HTTP response, FALSIFIED for resource exhaustion"). Did not reach the offboarding path. |
+| 2026-08-28 | `opencode/mimo-v2.5-free` | Xiaomi | review (n=1) | **MISS — silent empty.** 23 steps, 81 KB of log, all file reads, last line still `Read minter.py`, zero conclusions. All four error greps clean (`auto-rejecting` 0, no 5xx, no TLS, `tokens.output=0` as always). Same shape as the DeepSeek empty run documented above. |
+
+Three of four converged independently on the same MAJOR: `ThreadPoolExecutor`
+bounds workers but NOT its queue, and the pool is process-wide — so a burst
+against one slow backend degrades the dashboard for everyone, reintroducing at
+portal scope the exact failure the change fixed at page scope. Verified and
+fixed.
+
+**What made this round rank them.** A real diff has more than one layer. Every
+model that engaged found the queue bound, because it is visible from the pool
+construction. Only one asked the second-order question — *which code path does
+invalidation hang off, and is that the only path that changes a credential?* —
+and that is what separated it. This matches the Laguna observation in the
+OpenRouter table above: single-layer traps do not rank, second-order ones do.
+If your probes keep tying, the probe is too small, not the models too similar.
+
+**Caveat on ranking by one round.** n=1 per model, one diff, one domain
+(concurrency + cache invalidation). MiMo scored a MISS here and 2/2 HITs on the
+two synthetic probes above — this round says it did not finish a 300-line
+review, not that it is worse at finding bugs. Big Pickle's family is still
+`unknown` in `data/families.json`, so it remains an ADDITIONAL pair of eyes,
+never the leg that satisfies the cross-family rule, however well it performs.
+
 ## Auth: the free pool needs no credential
 
 Measured: free-pool calls succeed with no login dance, no token expiry, no
