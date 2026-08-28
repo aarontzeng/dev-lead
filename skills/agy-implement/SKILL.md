@@ -124,6 +124,17 @@ Role-specific choices:
   attempts). Plain-English commit messages, no AI-authorship trailers.
 - **Point it at the repo's own standards** — the governing
   `CLAUDE.md`/`AGENTS.md` for the touched area, not conventions it invents.
+- **Say the finishing steps are ACCEPTANCE CRITERIA, not closing etiquette.**
+  Two measured failures, same shape: a run that edited nothing because "run
+  the whole suite before finishing" was read as a FIRST step — it backgrounded
+  the suite, had nothing left to do while waiting, and ended its turn with a
+  clean worktree and a one-line report; and a run that produced good work and
+  never committed it, with `git add`/`git commit` allow-listed and the prompt
+  explicitly permitting them. Permission to do something is not an instruction
+  to do it. Write both as numbered criteria the delegate must satisfy, and for
+  the suite say WHERE it runs: "run it in the FOREGROUND and wait for it; do
+  not background it and end your turn."
+
 - **Tests: PIN the exact command, because only the allow-listed spellings
   exist.** Any other spelling (`.venv/bin/pytest`, `uv run pytest`,
   `make test`) is auto-denied and **kills the whole run with zero output** —
