@@ -60,6 +60,54 @@ Run each of the three hits again before treating them as reliable — a single
 correct answer on one hand-picked probe is exactly the "n=1" trap this file
 already warns about.
 
+## Native `opencode/*` pool — first-probe results (2026-08-28)
+
+Distinct from the OpenRouter `:free` carve-out above — these are the CLI's
+own native free-pool models, no OpenRouter key required. One golden-answer
+probe per model (n=1 — same caveat as above), a fresh scenario built from a
+real class of bug found the same week on a live review round (Swarm-Matrix
+PF-03..PF-08 stack): a new energy-aware allocator is added and unit-tested in
+isolation, but the production entry point's own deferral comment admits it
+still calls the old, fuel-blind allocator. Correct verdict: BROKEN, citing the production
+entry point's own call site, not either allocator function.
+
+| date | model | family | role | outcome |
+|---|---|---|---|---|
+| 2026-08-28 | `opencode/big-pickle` | unknown (no OpenRouter listing found under this name; treat as stealth) | review (n=1) | HIT — correct BROKEN verdict, exact citation, ~6s, most concise of the six |
+| 2026-08-28 | `opencode/nemotron-3-ultra-free` | Nemotron | review (n=1) | HIT — correct, concise, ~10s. Distinct route from the already-documented `openrouter/nvidia/nemotron-3-ultra-550b-a55b:free` above; not yet confirmed to be the same served weights |
+| 2026-08-28 | `opencode/nemotron-3.5-lightning-free` | Nemotron | review | UNTESTABLE — first attempt hit the outer 180s timeout with the log stalled right after model selection (no error, no output); a 240s retry surfaced the real cause: repeated `AI_APICallError: [400] Provider returned error` on every retry with backoff, never succeeding. Transport-layer finding, not a quality signal — matches this file's own GLM precedent above. |
+| 2026-08-28 | `opencode/mimo-v2.5-free` | **Xiaomi** (new family this file didn't track before this probe) | review (n=1) | HIT — most detailed of the six: also named the exact deferral-comment line; ~15s |
+| 2026-08-28 | `opencode/hy3-free` | **Tencent** (Hunyuan, marketed as "Hy3"; new family) | review (n=1) | HIT — correct, concise, ~9s |
+| 2026-08-28 | `opencode/muse-spark-1.2-contributor-free` | **Meta** (marketed as "Muse Spark"; new family) | review (n=1) | HIT — tied for most detailed: walked the trigger through the test's own fixture values (`unit-1`, `remaining_fuel=0`) instead of describing it abstractly; ~10s |
+
+**Family identification matters here more than the hit rate.** `hy3`,
+`mimo-v2.5`, and `muse-spark-1.2-contributor` all resolve to disclosed
+vendors in `opencode models`'s parallel `openrouter/<vendor>/...` listings
+(`tencent/hy3`, `xiaomi/mimo-v2.5`, `meta/muse-spark-1.2-contributor`) even
+though the native `opencode/*` names alone don't say so — checked before
+writing these into [`data/families.json`](../../../data/families.json) as
+`accounting_valid`. `big-pickle`
+has no such cross-reference in the catalogue; treat it as `unknown` (extra
+eyes, never the accounting leg) until proven otherwise. This is also why the
+cross-check step matters: five names that read as playful codenames turned
+out to be four real, differently-branded flagship models plus one genuine
+stealth model, not five stealth models.
+
+**Independent field corroboration, same week:** a teammate's Gerrit review
+tooling (`Alan.Yeh`, Swarm-Matrix change #10922, 2026-08-27) already lists
+`muse-spark-1.2-contributor-free` and `MiMo-V2.5` as live adversary legs
+alongside `gemini-3.7-flash-high` — this probe is confirming models already
+in someone else's real rotation, not discovering untested ones.
+
+All five HITs here were faster (6-15s) than the OpenRouter `:free` table's
+hits above (which ran up to 4-5 minutes) — a first data point, not yet a
+claimed structural difference between the two pools; the OpenRouter probe
+task was also a longer, class-based diff rather than this one's single
+function-and-deferral-comment scenario, so latency is not comparable as-is. Run each hit
+again, and probe `nemotron-3.5-lightning-free` again on a different day
+before writing it off — one 400-error run under load is not a verdict either
+way.
+
 ## Auth: the free pool needs no credential
 
 Measured: free-pool calls succeed with no login dance, no token expiry, no
