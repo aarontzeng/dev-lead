@@ -113,6 +113,7 @@ quota width (not behavior) is expected to change with the plan.
 | date | model | role | outcome |
 |---|---|---|---|
 | 2026-08-13 | cursor/composer-2.5[fast] | probe | 5 integration probes: write-posture, plan-silent-empty ×2, ask-mode review (1 seeded defect, 1/1 found at file:line), json shape — not a scored review round |
+| 2026-08-30 | cursor/cursor-grok-4.6-xhigh-fast | review | First real review round (plan-document review, AaTrader mobile UX redesign, challenge brief): 7/7 verdicts delivered, 3 HIGH; every lead-spot-checked citation (5/5) genuine at file:line; ask mode refused nothing it needed, ~5 min wall clock, request_id captured. Strongest single leg of a 4-family round (agy/claude/nemotron beside it). |
 
 First real review rounds append here, per the journal format — verified hit
 rates, not impressions.

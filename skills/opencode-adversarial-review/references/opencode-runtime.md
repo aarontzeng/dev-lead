@@ -173,7 +173,7 @@ If your probes keep tying, the probe is too small, not the models too similar.
 (concurrency + cache invalidation). MiMo scored a MISS here and 2/2 HITs on the
 two synthetic probes above — this round says it did not finish a 300-line
 review, not that it is worse at finding bugs. Big Pickle's family is still
-`unknown` in `data/families.json`, so it remains an ADDITIONAL pair of eyes,
+`unknown` in [`data/families.json`](../../../data/families.json), so it remains an ADDITIONAL pair of eyes,
 never the leg that satisfies the cross-family rule, however well it performs.
 
 ## Auth: the free pool needs no credential
