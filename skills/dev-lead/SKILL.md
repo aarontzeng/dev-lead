@@ -158,6 +158,17 @@ delegate reports a suite total, **compare it to your baseline digit for
 digit** — a total that differs by more than the tests you added is a different
 environment, not a different result.
 
+**Matching totals do not clear it, though — the same test can pass there and
+fail here.** Measured 2026-08-30: a delegate reported "3 passed" for the three
+tests the lead was measuring as failed on the same commit, with identical suite
+totals. The sandbox has no network; the test's mock was unbound, so the real
+function underneath reached out, raised, and the code returned a fallback the
+assertion accepted. No error, no skip, nothing for a totals diff to catch. When
+a round turns on specific tests, **re-run those tests yourself** rather than
+diffing counts — and treat the divergence as a finding in its own right, since
+a test whose verdict depends on the runner having network is a test hitting
+live network.
+
 **"Provision" is not "copy the real one."** The untracked file the suite wants
 is very often the one holding every credential the project has, and a write
 delegate has its whole worktree inside its sandbox — so copying it in hands a
@@ -279,6 +290,18 @@ user can set it at invocation. Each round:
    function over correcting each: the count is what makes the next occurrence
    impossible, and correcting N copies leaves N places for the next person to
    fix N-1 of.
+
+   **A working-tree restore invalidates every verification behind it,
+   including the commit message you already wrote.** Measured 2026-08-30: a
+   `git checkout --` (aimed at a concurrent agent's stray edit) also reverted
+   the lead's own uncommitted fix; the checkpoint commit then landed with a
+   message describing behavior that was no longer in the tree. Nothing
+   downstream catches that — review reads the diff, and the diff was honest
+   about what it contained; only the prose was wrong. So after ANY restore,
+   stash, or reset in the worktree, re-read the diff against the message,
+   re-run the suite, and re-run the mutations, all against the **committed**
+   tree. Related, from the repo side: never `git checkout` to undo your own
+   uncommitted work while another agent shares the checkout.
 
    **Writing a NEW statement? Name what would make it false.** The grep rule
    above catches a sentence that went stale; it cannot catch one that was false

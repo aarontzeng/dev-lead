@@ -144,12 +144,34 @@ errors; re-measure when the sandbox changes):
   environment limit; tell the delegate to run what it can and list what it
   could not) — otherwise the delegate burns its run discovering it, or
   worse, soft-pedals the gap.
+- **It has no network, and that silently rewrites what a test asserts.** This
+  one does not announce itself as an environment limit, because nothing errors:
+  a test whose mock failed to bind still runs, the real function underneath
+  reaches for the network, raises, and the code under test returns its
+  fallback — which is often perfectly serializable, so the assertion passes.
+  Measured 2026-08-30: the delegate reported "3 passed" twice for exactly the
+  three tests the lead was measuring as **failed** on the same commit. Neither
+  side was lying and the suite totals matched digit for digit, so the standing
+  totals check (`dev-lead` Phase 1) cannot see this class. What settles it is
+  re-running the named tests yourself; and the divergence is itself the
+  finding — a test whose verdict depends on whether the runner has network is
+  a test that hits live network, which was the actual defect that round.
 
 These limits are also why a codex COMPANION delegate cannot take the *lead*
 role on repos whose suites need sockets or worktree commits — while the same
 vendor's interactive CLI under an approved elevated runner can (capability
 is a property of the runtime, not the brand; see `dev-lead`'s host
 capability gate).
+
+## Calibration journal
+
+Per the journal format — verified hit rates, one row per run, appended never
+rewritten.
+
+| date | model | role | outcome |
+|---|---|---|---|
+| 2026-08-30 | gpt-5.6-terra xhigh (companion) | implement | Two rounds (a date-arithmetic test bug; a test-isolation sweep binding 7 unbound mocks). Both landed correct after one fix round. Round 2 reported a green the lead measured as red — root cause was the sandbox's absent network, not delegate dishonesty (see Sandboxes above); the divergence exposed the round's real defect. |
+| 2026-08-30 | gpt-5.6-luna (companion) | review | Repeat extra leg across several rounds on a *challenge* brief ("is this approach right at all", never "find defects"). Its principal finding was disjoint from the named-family legs' more often than not — the cheapest leg with the most distinct coverage this session. Route it the challenge brief specifically; on a plain defect-hunt brief it duplicates. |
 
 ## Model and effort plumbing
 

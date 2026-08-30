@@ -127,6 +127,12 @@ permission-level survives a model that misreads its instructions. When a
 lead delegates something destructive-adjacent, state the rule in the task
 prompt anyway — belt and braces, at zero cost.
 
+## Calibration journal
+
+| date | model | role | outcome |
+|---|---|---|---|
+| 2026-08-30 | claude-sonnet-5 (subagent) | review | Repeat extra leg across several rounds, given the **test-quality** brief (are these tests able to fail? do they pin the contract or mirror the code?). Repeatedly the only leg to return anything on rounds where the defect-hunt legs came back clean — its findings were about the SUITE, which the other briefs structurally do not look at. Weak as a general defect hunter beside the frontier legs; strong and cheap in this one role. |
+
 ## For a foreign lead (codex or agy orchestrating)
 
 The pieces you still own, which `claude -p` does not give you:
