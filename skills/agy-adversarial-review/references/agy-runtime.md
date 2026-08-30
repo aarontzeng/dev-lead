@@ -432,6 +432,8 @@ and keep it out of any upstream contribution:
 
 | date | model | role | outcome |
 |---|---|---|---|
+| 2026-08-30 | gemini-3.7-flash-high | review (plan doc) | 6/6 HOLDS but ONE VERDICT REJECTED: cited `userEdited`/`hasPrefilled` code that does not exist (grep 0 hits) — narrated PLANNED behavior as existing code with fabricated quotes. Spot-check every citation before accepting a HOLDS from this leg; the other 5 verdicts' quotes were genuine. |
+| 2026-08-30 | gemini-3.7-flash-high | review (code diff) | Clean round: 6 properties, quotes all genuine on spot-check, 1 real BROKEN (web error-state cleanup) the other legs missed. Same model, same day as the fabrication row — per-run verification is the control, not model choice. |
 
 Two observations from the run that opened this section are recorded as dated
 measurements rather than as a table, because they are about METHOD and

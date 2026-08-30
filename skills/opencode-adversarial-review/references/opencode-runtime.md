@@ -176,6 +176,22 @@ review, not that it is worse at finding bugs. Big Pickle's family is still
 `unknown` in [`data/families.json`](../../../data/families.json), so it remains an ADDITIONAL pair of eyes,
 never the leg that satisfies the cross-family rule, however well it performs.
 
+## Concurrent legs across the two routes (measured 2026-08-30)
+
+One session launched a native-pool leg (`opencode/nemotron-3-ultra-free`) and
+an OpenRouter-key leg (`openrouter/poolside/laguna-s-2.1:free`) at the same
+minute; both completed full reports (55 KB / 52 KB). The two routes are
+separate queues — native congestion does not touch the OpenRouter key's
+per-key limit, and vice versa — so "one native + one openrouter" is the
+concurrency-safe pairing. The suspect case remains SAME-model concurrency
+(the deepseek n=1 above); pick different models per concurrent leg.
+
+Laguna S 2.1 is now n=2 on real reviews and remains the thoroughness
+outlier: on 2026-08-30 it was the only leg of four to append a
+"NOT REACHED (runtime)" boundary with an exact command per claim, and it
+caught a fullwidth-input false-negative the sequences leg passed. Slow
+(~5–10 min); brief it where depth beats latency.
+
 ## Auth: the free pool needs no credential
 
 Measured: free-pool calls succeed with no login dance, no token expiry, no

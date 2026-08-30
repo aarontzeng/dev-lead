@@ -94,6 +94,18 @@ through those entries; prefer ZDR-covered tiers for anything sensitive.
   per-project override file, and `--sandbox enabled`'s actual semantics are
   all UNVERIFIED — none is load-bearing in the skills yet.
 
+## Quota pools: two meters, and the CLI cannot read either (2026-08-30)
+
+The subscription meters TWO pools, visible only on the cursor.com dashboard —
+`Auto` (serves `auto` and `composer-*`) and `API` (every pinned named model:
+gpt/claude/grok/kimi tiers). `cursor-agent --help` exposes no usage/quota
+subcommand and `status` is auth-only, so **percent-remaining is not probeable
+from the CLI**. What IS probeable is exhaustion, because quota failure is loud
+(below): a cheap one-liner against the pool you intend to bill is the dispatch
+probe. Corollary worth planning around: when the API pool runs dry, `auto` and
+`composer-*` still spend the other meter — a legitimate extra-eyes fallback
+(never the accounting leg; families.json).
+
 ## Quota: how this leg fails (measured 2026-08-13)
 
 ```text
@@ -113,6 +125,8 @@ quota width (not behavior) is expected to change with the plan.
 | date | model | role | outcome |
 |---|---|---|---|
 | 2026-08-13 | cursor/composer-2.5[fast] | probe | 5 integration probes: write-posture, plan-silent-empty ×2, ask-mode review (1 seeded defect, 1/1 found at file:line), json shape — not a scored review round |
+| 2026-08-30 | cursor/cursor-grok-4.6-xhigh-fast | implement | First implement round (backend API contract, S): ran its own premise preflight, wrote tests red-first unprompted, collapsed a pre-existing duplicate suffix judgement into one helper, found an unrelated pre-existing calendar bug, honestly flagged an out-of-scope web regression its own change caused. COMMITTED locally with a clean conventional message — resolving UNVERIFIED "committed or dirty": this adapter commits. Zero fix rounds needed. |
+| 2026-08-30 | cursor/composer-2.5[fast] | review | First scored review round (extra-eyes leg, RN code-craft brief): 2 BROKEN, both lead-verified real (iOS-only a11y prop, Dynamic Type clipping) — the only leg of a 3-family round to catch either; also produced a route-param abuse table nobody asked for. Strong extra-eyes value; family still unknown, still never the accounting leg. |
 | 2026-08-30 | cursor/cursor-grok-4.6-xhigh-fast | review | First real review round (plan-document review, AaTrader mobile UX redesign, challenge brief): 7/7 verdicts delivered, 3 HIGH; every lead-spot-checked citation (5/5) genuine at file:line; ask mode refused nothing it needed, ~5 min wall clock, request_id captured. Strongest single leg of a 4-family round (agy/claude/nemotron beside it). |
 
 First real review rounds append here, per the journal format — verified hit
