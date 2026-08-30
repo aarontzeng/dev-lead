@@ -35,7 +35,11 @@ last_size=-1
 quiet_since=0
 
 while [ "$SECONDS" -lt "$deadline" ]; do
-    line=$(cd "$WT" && timeout 60 node "$SCRIPT" status "$JOB" 2>/dev/null \
+    # No GNU `timeout` here: macOS ships without it, and its absence made this
+    # poll exit 127 on every iteration — the terminal case below never fired and
+    # a 3.5-minute preflight refusal was discovered 10 minutes later, by the
+    # human (2026-08-30). perl's alarm is on every macOS and Linux base install.
+    line=$(cd "$WT" && perl -e 'alarm 60; exec @ARGV' node "$SCRIPT" status "$JOB" 2>/dev/null \
             | grep -F "$JOB" | head -1)
 
     case "$line" in
@@ -51,7 +55,9 @@ while [ "$SECONDS" -lt "$deadline" ]; do
     # collaboration/wait tool, and one such pause has lasted well past 10.
     log=$(find_log)
     if [ -n "$log" ] && [ -f "$log" ]; then
-        size=$(stat -c %s "$log" 2>/dev/null || echo 0)
+        # BSD stat first (macOS), GNU as fallback — the GNU-only spelling
+        # returned 0 forever on macOS, degrading this into a flat 20-minute timer.
+        size=$(stat -f %z "$log" 2>/dev/null || stat -c %s "$log" 2>/dev/null || echo 0)
         if [ "$size" = "$last_size" ]; then
             [ "$quiet_since" -eq 0 ] && quiet_since=$SECONDS
             if [ $(( SECONDS - quiet_since )) -ge 1200 ]; then
