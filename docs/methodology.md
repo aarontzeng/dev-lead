@@ -255,6 +255,31 @@ Nothing a delegate self-reports is evidence. The lead:
    the step is deleted only if neither ever happens — the same standard §4
    applies to everything else.
 
+### Where the suite cannot see: verifying on a real runtime
+
+Some acceptance criteria are not testable by the suite at all — accessibility
+focus order, large-type layout, anything whose observable is pixels. There a
+green suite proves only that the code declares the right props; the lead has
+to go look. Two things learned doing that on an iOS simulator, 2026-08-30:
+
+- **The runtime you are inspecting may be showing you stale layout.** Changing
+  the system text size while the app is running (`simctl ui <dev> content_size`)
+  leaves React Native's cached text measurements from BEFORE the change. Every
+  string on screen renders with its lower half cut off — a perfect imitation of
+  a catastrophic clipping bug, on a screen that is in fact fine. Relaunch the
+  app after changing any environment setting and re-read before you believe a
+  visual defect. This was one screenshot away from a fabricated finding.
+- **"Wraps instead of clipping" is not the same as "passes".** The same run
+  found a row that had been fixed from clipping to wrapping, and the wrap
+  crushed its left column to one character per line. The acceptance clause
+  ("no clipping at 200%") was satisfied on its letter while the result was
+  unusable. When you write a visual acceptance clause, name the failure you
+  do NOT want, not the mechanism you happen to fear.
+
+State plainly which cells of a device matrix you did NOT reach. A matrix
+reported as "run" with three uncovered cells is worse than no matrix, because
+the next person reads the checkmarks and not the caveat.
+
 ## 7. Review targets are frozen and spans are pinned
 
 - Review a **committed** state in a directory nothing else touches. A reviewer

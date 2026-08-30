@@ -169,6 +169,28 @@ diffing counts — and treat the divergence as a finding in its own right, since
 a test whose verdict depends on the runner having network is a test hitting
 live network.
 
+**Never provision a shared directory by SYMLINKING the lead's copy into the
+delegate's worktree.** It looks like the cheap answer for a 700-package
+`node_modules` and it puts the lead's own installation inside the delegate's
+blast radius. Measured 2026-08-30, twice in one day, from a single symlink:
+
+- The delegate's `git add` swept the LINK into its feature commit —
+  `.gitignore`'s `node_modules/` (trailing slash) matches directories, not
+  symlinks — and the merge then replaced the real directory with a
+  self-pointing broken link in the main checkout.
+- Both delegates independently judged the link "broken" and replaced it with
+  their own install. The `rm -rf` went THROUGH the link and gutted the LEAD's
+  `node_modules`: 645 of 693 entries left as empty directories, `.bin` empty.
+  Nothing in git was lost, and nothing announced itself either — it surfaced
+  an hour later as a launcher that could not find its own binary.
+
+Give each worktree a real directory: its own `npm ci`/`uv sync` (slow, always
+correct), or a hardlink copy (`cp -al`) if the ecosystem tolerates it —
+separate directory entries, so a delete cannot reach back. And note that this
+is not just an efficiency trade: two delegates that "fixed" the link both
+produced test runs against an install the lead never verified, which is the
+same class of false green as the interpreter mismatch above.
+
 **"Provision" is not "copy the real one."** The untracked file the suite wants
 is very often the one holding every credential the project has, and a write
 delegate has its whole worktree inside its sandbox — so copying it in hands a
