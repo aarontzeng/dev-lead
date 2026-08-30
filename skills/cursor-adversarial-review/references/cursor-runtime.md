@@ -94,6 +94,19 @@ through those entries; prefer ZDR-covered tiers for anything sensitive.
   per-project override file, and `--sandbox enabled`'s actual semantics are
   all UNVERIFIED — none is load-bearing in the skills yet.
 
+## Provisioning symlinks are commit bait (measured 2026-08-30)
+
+A worktree provisioned with `ln -s <main-checkout>/node_modules
+<worktree>/node_modules` handed the delegate a symlink that its `git add`
+swept into the feature commit — `.gitignore`'s `node_modules/` (trailing
+slash) matches only DIRECTORIES, not a symlink. The lead's handoff stat
+showed the extra file and it was missed; the fast-forward merge then
+REPLACED the main checkout's real node_modules with a self-pointing broken
+symlink, destroying the installed tree (recovered via `npm ci`). Rules:
+put provisioning symlinks at paths git ignores WITHOUT the trailing-slash
+form, or add them to the worktree's `.git/info/exclude` at creation; and
+treat any `mode 120000` line in a delegate's diff stat as a stop-and-look.
+
 ## Quota pools: two meters, and the CLI cannot read either (2026-08-30)
 
 The subscription meters TWO pools, visible only on the cursor.com dashboard —
