@@ -194,6 +194,7 @@ strongest tier available:
 | HIGH risk, any implementer | **two independent reviewers from two families** — measured: two families independently converging on the same root cause was itself the strongest signal the finding was real |
 | MEDIUM risk, when a free leg is available | **take the second reviewer anyway.** Measured: on a MEDIUM change, two families each returned 2 real defects with zero overlap. Convergence is the strong signal when it happens; disjoint coverage is the ordinary case, and a zero-quota second leg costs only wall-clock. Run them concurrently against the same frozen commit |
 | Re-review of a prescriptive fix round | a mid tier is enough — the changes follow written findings; save the frontier tier for open-ended hunts |
+| **Owner standing ruling (2026-08-30, this account)** | **default WIDE, not minimum**: beyond the accounting leg, take the free/cheap extra legs by default — a Laguna (OpenRouter :free) or free-pool leg, plus a cheap GPT tier (e.g. luna) challenge leg — whenever wall-clock allows. The owner asked "why only two legs" twice in one day; the minimum table above is the floor, not this account's default. Distinct briefs per leg, as always |
 
 **When you spend a second or third leg, change the BRIEF, not just the
 model.** The table above is the accounting rule, not the coverage rule.
