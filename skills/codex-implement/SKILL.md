@@ -97,7 +97,11 @@ The prompt must include:
    denied attempt. The LEAD makes the checkpoint commit after verifying.
    State the standing rules verbatim: never push, never reset/clean, never
    alter another branch, no AI-authorship trailers.
-6. No recursive delegation to Codex, other CLIs, or review scripts.
+6. **Ask it to end by saying where it stopped and what state the file is
+   in** — one line, free when the run finishes normally, and the difference
+   between a minutes-long handoff and a restart when it does not. See
+   "Resuming a run that was CUT OFF" below for what that line buys you.
+7. No recursive delegation to Codex, other CLIs, or review scripts.
 
 Use a fresh thread for a new task. Resolve the companion per the runtime
 file, then:
@@ -201,6 +205,41 @@ Verify each finding against code or an executable reproduction. Report the
 verified findings, rejected false positives, test results, exact base SHA,
 and the complete diff scope to the user. Only after the user explicitly
 approves may you fast-forward merge and remove the worktree. Never push.
+
+## Resuming a run that was CUT OFF, not one that was wrong
+
+A delegate that hits its limit mid-edit is a different handoff from one whose
+work needs fixing, and confusing them wastes the round. Measured across a long
+session: a run ended while "making the first rendering slice", having written
+twelve correct tests and left `minter.py` with an unterminated string
+concatenation. The suite then reported 265 failures.
+
+**That number was one syntax error.** A file that will not parse fails every
+test that imports it. Handed to the next round as-is, the obvious reading is
+catastrophe, and the delegate starts "fixing" things that were never broken.
+So the resume task must say, in this order:
+
+1. **You were cut off; this was not your decision.** Otherwise the delegate
+   treats its own half-finished file as a mistake to undo, and the completed
+   part goes with it.
+2. **The exact broken state** — file and line, and that it is a half-applied
+   edit rather than a reasoning error.
+3. **Which failure counts are artefacts.** "Fix the syntax first, run the
+   suite ONCE, report that number before changing anything else" — a real
+   baseline before any judgement is made against a fake one.
+4. **What is already done, and what is left**, measured by you rather than
+   taken from the delegate's last message.
+5. What NOT to redo. Its tests were fine; rewriting them costs a round and
+   risks losing the cases it had already reasoned through.
+
+Ask every implement task to end by saying where it stopped and what state the
+file is in — one line, cheap when unused. The run above did that unprompted
+("I'm now making the first rendering slice") and it was the whole reason the
+handoff cost minutes instead of a restart. A task that instead reports only
+success or silence leaves you diffing to find out how far it got.
+
+Do not reach for `--fresh` here. The half-finished worktree IS the context;
+a fresh thread re-derives what the previous one already worked out.
 
 When verified findings require fixes, iterate in the SAME worktree: launch a
 follow-up task that quotes each verified finding verbatim, with why it is
