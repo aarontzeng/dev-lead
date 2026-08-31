@@ -100,6 +100,12 @@ Launch under the host's own background mechanism with output redirected to a
 file, per the runtime's launcher rules (`--background` does not guarantee a
 prompt return; a lossy pipe can destroy the only copy of the report).
 
+**Running this leg as a subagent? You are a leaf — block, do not "wait".**
+Nothing will wake you when the job finishes; ending your turn on "waiting for
+the notification" abandons the review. Poll to terminal inside a single tool
+call, and issue another such call immediately if it times out
+([dev-lead Phase 2](../dev-lead/SKILL.md)).
+
 ## Model choice
 
 The review path takes `--model` only; depth otherwise comes from the user's

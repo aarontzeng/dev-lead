@@ -55,7 +55,16 @@ cd "$REVIEW_TARGET_DIR" && \
 
 Launch under the host's background mechanism. Keep stdout as the JSON audit
 record and stderr separate; mixing them makes a failed launch look like a
-malformed successful response. Role-specific choices:
+malformed successful response.
+
+**Running this leg as a subagent? You are a leaf — block, do not "wait".**
+Nothing will wake you when `cursor-agent` exits; ending your turn on "still
+running" abandons the review. Poll to exit inside a single tool call, and
+issue another immediately if it times out ([dev-lead Phase
+2](../dev-lead/SKILL.md)). Budget for it: a measured `-xhigh` code review took
+48 minutes against ~9 for a `-high` document review the same day.
+
+Role-specific choices:
 
 - **`--mode ask` is load-bearing** (measured: refuses writes, still
   reports). Never `--mode plan` here — measured twice returning empty

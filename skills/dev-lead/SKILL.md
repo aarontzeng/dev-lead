@@ -278,6 +278,27 @@ user can set it at invocation. Each round:
    Do not substitute a hand-rolled poll loop between turns. It is a live task
    the user can interrupt, and an interrupted poll is indistinguishable from
    the job ending.
+
+   **Dispatching a leg to a SUBAGENT inverts that last rule — say so in the
+   prompt.** A subagent driving an external CLI is a *leaf*: nothing will wake
+   it when the CLI exits, because the host's completion notification goes to
+   the session that spawned it, not to the spawned one. So a leaf that ends
+   its turn to "wait for the monitor" is not waiting — it has silently
+   abandoned the run, and only a human noticing gets it back. For a leaf the
+   blocking poll the lead must avoid is exactly the right answer, provided it
+   lives *inside a single tool call* (`while kill -0 $PID 2>/dev/null; do
+   sleep 15; done`, generous per-call timeout, another such call immediately
+   if the first times out) rather than across turns. Spell this out in the
+   dispatch prompt; the review skills describe how to *launch*, and a leaf
+   that follows only that stops one step early.
+
+   Measured 2026-08-31, one session: across three 4-leg rounds this cost five
+   manual re-prompts — opencode, codex and cursor legs each ended a turn on
+   "waiting for the background monitor", and one leg needed two nudges before
+   it stopped reaching for the host's monitor tool and wrote a real loop. Two
+   phrases predict the failure and belong in the prompt as explicit
+   prohibitions: *"I'll report once the notification arrives"* and *"still
+   running, continuing to wait"*. Neither is a valid end state for a leaf.
 2. **Lead verifies independently** — never from the delegate's self-report.
    Order matters when the work comes back uncommitted (some sandboxes cannot
    commit in a worktree at all): FIRST inspect the working tree itself

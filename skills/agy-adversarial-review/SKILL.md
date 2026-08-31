@@ -126,6 +126,13 @@ git -C "$REVIEW_TARGET_DIR" status --porcelain=v1 # -C, or you bracket the
                                                   # lead's own cwd, not the target
 ```
 
+**Running this leg as a subagent? You are a leaf — block, do not "wait".**
+`agy -p` is a foreground CLI, so handing it to the host's background mechanism
+and then ending your turn on "waiting for the notification" abandons the run —
+nothing will wake you. Poll to exit inside a single tool call, and issue
+another immediately if it times out ([dev-lead Phase
+2](../dev-lead/SKILL.md)).
+
 **Verifying the target is not verifying the SPAN.** The check above proves
 you launched at the right commit; it says nothing about which range the
 prompt tells the delegate to read. For a topic branch that range is the

@@ -302,6 +302,13 @@ cd "$REVIEW_TARGET_DIR" && \
   congestion — a measured healthy run went silent 10+ minutes mid-generation
   and then delivered a full report at ~31 minutes). Treat a missing
   `evaluated permission=` log line as "never really ran".
+- **Running this leg as a subagent? You are a leaf — block, do not "wait".**
+  Nothing will wake you when `opencode run` exits; ending your turn on
+  "waiting for the monitor" abandons the review. Poll to exit inside a single
+  tool call, and issue another immediately if it times out ([dev-lead Phase
+  2](../dev-lead/SKILL.md)). This leg's long silent stretches make the urge to
+  end the turn strongest here — and its documented silent-death mode means a
+  leaf that leaves early cannot tell a dead run from a slow one.
 - **Model: the named families are the accounting-valid reviewers.** A
   stealth model (family undisclosed by design) is an ADDITIONAL pair of
   eyes, never the leg that satisfies the cross-family rule — and never
