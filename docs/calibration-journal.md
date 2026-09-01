@@ -62,7 +62,21 @@ actionable" are calibration data. Verify every finding before you count it.
   while the fourth agreed with everyone and was independently wrong on the one
   item it answered alone. A 3-of-4 majority is not evidence — if you are
   tempted to trim a leg, trim by its sole-finding record, and expect the score
-  to move between rounds rather than settle.
+  to move between rounds rather than settle. (Held again on a fourth round the
+  next day: three legs each sole-found something real, the fourth found nothing
+  and was the only leg wrong on the item it answered alone.)
+- **A single-document freeze produces "unowned obligation" false positives.**
+  When the reviewed change is one document of a contract set, a leg sees only
+  that document and the prior patchset — so an obligation the sibling document
+  assigns reads as unassigned. Measured: a strong leg raised MAJOR that a named
+  implementation task had no person owner; the spec really does not name one,
+  and the sibling plan under review the same hour assigned it to two people by
+  name. The finding was true of the artifact and false of the contract. This is
+  not the leg's error and more context in the prompt is not always the fix —
+  pasting every sibling turns a review into a reading assignment. **The
+  mitigation is the lead's:** before accepting any finding of the shape "X has
+  no owner / no evidence / is undefined", check the siblings yourself. Expect
+  this class on every plan/spec set that splits normative text across changes.
 - **Separate the model from the transport.** "The model returned nothing" and
   "the launcher ate the output" look identical from outside. Before writing a
   failure row, check the transport diagnostics in the family's runtime file
