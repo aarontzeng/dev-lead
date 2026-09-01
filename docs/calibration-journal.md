@@ -53,6 +53,16 @@ actionable" are calibration data. Verify every finding before you count it.
   because a "stronger" reviewer is already running, and do not pick by
   parameter count — pick by measured hit rate per role, and by structural
   properties (context length) where they're load-bearing.
+- **Count the SOLE findings, not the agreements.** The number that justifies a
+  leg is how often it was the only one to reach a real defect — agreement is
+  nearly free and nearly uninformative. Measured over three consecutive 4-leg
+  rounds on one stack: every round had at least one lead-verified defect found
+  by exactly ONE leg, and it was a different leg each time. In the sharpest
+  round, three of four legs each contributed a finding no other leg reached,
+  while the fourth agreed with everyone and was independently wrong on the one
+  item it answered alone. A 3-of-4 majority is not evidence — if you are
+  tempted to trim a leg, trim by its sole-finding record, and expect the score
+  to move between rounds rather than settle.
 - **Separate the model from the transport.** "The model returned nothing" and
   "the launcher ate the output" look identical from outside. Before writing a
   failure row, check the transport diagnostics in the family's runtime file

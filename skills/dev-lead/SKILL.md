@@ -299,6 +299,13 @@ user can set it at invocation. Each round:
    phrases predict the failure and belong in the prompt as explicit
    prohibitions: *"I'll report once the notification arrives"* and *"still
    running, continuing to wait"*. Neither is a valid end state for a leaf.
+
+   **Measured effective 2026-09-01**: the next 4-leg round after this rule
+   landed, with the leaf paragraph pasted into all four dispatch prompts, took
+   **zero** manual re-prompts — every leg blocked to completion on its own
+   (160 s to ~14 min). Same lead, same four adapters, same host as the
+   five-nudge session. Carry the paragraph into the prompt; do not assume the
+   skills alone reach a leaf.
 2. **Lead verifies independently** — never from the delegate's self-report.
    Order matters when the work comes back uncommitted (some sandboxes cannot
    commit in a worktree at all): FIRST inspect the working tree itself
