@@ -357,6 +357,41 @@ user can set it at invocation. Each round:
    red?** Naming a test that runs nearby is not an answer — the assertion has to
    fail on THIS claim being false.
 
+   **Writing a statement that is TRUE NOW? Ask whether it can go false with
+   nobody editing this file.** The two rules above cover a sentence you made
+   stale by editing its neighbour, and a sentence that was false on arrival.
+   Neither reaches the third shape: true when written, untouched by any later
+   diff, and false anyway because the WORLD moved. That happens when a durable
+   document cites a fact scoped to something outside it — a review vote, "the
+   current patchset", "nobody has reviewed this yet", "the newest release", a
+   count of open items.
+
+   Measured, one session: a normative document argued that another document
+   must not be the tie-breaker partly because "its current patchset carries an
+   Owner -1". Uploading the next patchset of that document outdated the vote, so
+   the sentence was false within the hour — self-invalidating, in a file meant
+   to outlive the review that produced it. In the same round a four-family
+   review found the same file resting its ONLY recorded owner acceptance on
+   "#10302 PS10 carries a +1", linked to a host that had since been
+   decommissioned: a perishable fact behind a dead link, in the document that
+   had just declared such facts invalid. And an operational gate — whether an
+   operator may enable a mode — read "current-patchset review", so it changed
+   when the review tool changed rather than when the design or the software did.
+
+   **The test is MONOTONICITY, not volatility**, and getting this wrong makes
+   the rule worse than not having it. "Change 10943 is merged" is volatile in
+   the sense that it was once untrue — but it can only go from false to true, so
+   citing it is safe. "PS4 carries a +1" goes from true to false. In the same
+   round a leg applied the rule mechanically and flagged every "merged" as a
+   perishable fact; acting on that would have deleted correct sentences. Ask
+   which DIRECTION the sentence can flip, not whether it can.
+
+   The fix is almost never to delete the fact — it is to cite the durable thing
+   the perishable one was evidence for. An acceptance is durable; the vote that
+   expressed it is not. A merged change is durable; the patchset that became it
+   is not. Record "Owner X accepted on DATE (change NNNNN)", not "PS10 carries
+   their +1".
+
    **It is an attention cue, not a control.** It verifies nothing and exits 0
    either way; a silent run means "nothing matched the noun list", NOT "the prose
    is anchored", and it is never evidence that claims were checked.
