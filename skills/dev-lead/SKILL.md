@@ -300,12 +300,23 @@ user can set it at invocation. Each round:
    prohibitions: *"I'll report once the notification arrives"* and *"still
    running, continuing to wait"*. Neither is a valid end state for a leaf.
 
-   **Measured effective 2026-09-01**: the next 4-leg round after this rule
-   landed, with the leaf paragraph pasted into all four dispatch prompts, took
-   **zero** manual re-prompts — every leg blocked to completion on its own
-   (160 s to ~14 min). Same lead, same four adapters, same host as the
-   five-nudge session. Carry the paragraph into the prompt; do not assume the
-   skills alone reach a leaf.
+   **Measured effective 2026-09-01, for SUBAGENT dispatch specifically**: a
+   4-leg round run through four subagents, each prompt opening with the leaf
+   paragraph above, took **zero** manual re-prompts — every leg blocked to
+   completion on its own (160 s to ~14 min). Same lead, same four adapters,
+   same host as the five-nudge session. Carry the paragraph into the prompt;
+   do not assume the skills alone reach a leaf.
+
+   **But the stronger move is to not create a leaf at all.** A peer lead ran
+   two 4-leg rounds the same day with zero re-prompts and no leaf paragraph
+   anywhere, because it launched each CLI directly as a backgrounded job from
+   its own session: the host's completion notification then comes back to the
+   session that can act on it, and this failure mode cannot arise. Reserve
+   subagent dispatch for when you actually need the leg's tool-call traffic
+   kept out of your context; when you don't, dispatch directly. Do not read
+   the measurement above as "the paragraph is what makes 4-leg rounds work" —
+   it is what makes them work *once you have already chosen* the shape that
+   can strand a leg.
 2. **Lead verifies independently** — never from the delegate's self-report.
    Order matters when the work comes back uncommitted (some sandboxes cannot
    commit in a worktree at all): FIRST inspect the working tree itself

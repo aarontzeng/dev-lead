@@ -84,6 +84,13 @@ through those entries; prefer ZDR-covered tiers for anything sensitive.
   served-model verification path remains UNVERIFIED.
 - `--trust` is required for headless runs in fresh directories — every
   probe used it; without it a workspace-trust prompt has nowhere to go.
+  **Its absence fails in the worst possible shape** (measured 2026-09-01, a
+  peer lead's round): the CLI prints only the trust prompt and **exits 0**, so
+  by exit code alone a never-started run is indistinguishable from a completed
+  one that found nothing. A frozen review target is a fresh directory every
+  time, so this is the default case, not an edge one. Never certify a cursor
+  leg on exit status — require `result` and `request_id` in the JSON, which is
+  the check that separates the two.
 - Flags that must never appear on a review launch: `-f`/`--force`,
   `--yolo`, `--approve-mcps`. The first two are allow-everything, the third
   hands the run to whatever MCP servers the account has wired.
