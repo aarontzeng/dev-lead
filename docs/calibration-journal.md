@@ -77,6 +77,19 @@ actionable" are calibration data. Verify every finding before you count it.
   mitigation is the lead's:** before accepting any finding of the shape "X has
   no owner / no evidence / is undefined", check the siblings yourself. Expect
   this class on every plan/spec set that splits normative text across changes.
+- **Verify the evidence STEP, not just the conclusion.** A leg can reach a
+  defensible conclusion and invent the check it claims to have run. Measured: a
+  free leg presented a specific `grep` as its "Verification" for one item; no
+  such call appears in its log, and that command form would have been denied by
+  its read-only config. The conclusion was sound — derivable from text it really
+  had read — which is exactly what makes this hard to catch, because spot-checking
+  the *conclusion* passes. A fabricated provenance is worse than a wrong answer:
+  a wrong answer gets refuted, while an invented citation gets promoted into your
+  review and then into a document someone cites later. When a leg names a command
+  or a file:line as its evidence, grep the log for the command and open the file.
+  If the run produces no log you can grep, you cannot score that leg on evidence
+  quality at all — only on whether its conclusions survive your own checks.
+
 - **Separate the model from the transport.** "The model returned nothing" and
   "the launcher ate the output" look identical from outside. Before writing a
   failure row, check the transport diagnostics in the family's runtime file
