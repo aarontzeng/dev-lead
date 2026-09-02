@@ -253,6 +253,15 @@ substitutes.
 `ROUNDS_MAX = 3` implementation rounds by default (R1 + two fix rounds); the
 user can set it at invocation. Each round:
 
+**A review that did not come from an implement round still has rounds.** When
+the user simply asks for a two- or four-leg review of work already in the tree —
+often work the LEAD wrote — the same cap and the same stop conditions apply, and
+nothing else here changes except who is holding the pen. Say the cap out loud at
+the start; without it a review-fix-review loop has no defined end and stops when
+the lead happens to feel finished, which is not a criterion. Measured
+2026-09-01: a standalone two-leg review of a ~130-line lead-written script ran
+two rounds and would have run a third on no principle at all.
+
 1. **Implement/fix** in the worktree (same worktree across rounds, new
    commits on top). R2+ task prompts quote each verified finding **verbatim,
    with why it is real and what fix is required** — this shape fixed
@@ -268,6 +277,17 @@ user can set it at invocation. Each round:
    companion's `task --background`) needs a second backgrounded step that
    blocks until the job is terminal; each runtime file names its own waiter.
 
+   **A multi-leg round is therefore one backgrounded call PER LEG, not one call
+   that starts them all.** This is the operative consequence, and it names the
+   reason a lead reaches for the inner `&` at all: wanting four legs running at
+   once, `cmd1 & cmd2 & cmd3 &` inside a single foreground call looks like the
+   obvious way there, and it is exactly the shape the rule above forbids — that
+   call returns in milliseconds, the host marks it complete, and the legs are
+   orphaned with nothing tracking them. Measured 2026-09-01, one session: a lead
+   who had read this section did precisely that three times; every leg finished
+   30-100 minutes before it noticed, each time only because the user asked. The
+   same session then dispatched two legs as two separate backgrounded calls and
+   was woken by the host on the first one.
    Measured 2026-08-25, one session: three consecutive rounds finished 14, 20
    and 40+ minutes before the lead noticed, every time only because the human
    asked — and two of those were delegate refusals the lead had explicitly
@@ -533,6 +553,19 @@ user can set it at invocation. Each round:
   the findings history, let the user decide. Do not merge.
 - A fix round introduces a **new** HIGH finding (fix churn) → the spec or the
   delegate is wrong for this task; lead takes over or stops.
+  **When the lead IS the implementer, that escalation inverts**: "lead takes
+  over" is a no-op, and the party making the errors is the one who would take
+  over. Delegate the fix round, or stop and hand the findings to the user.
+- **Round N's findings land inside round N−1's fixes** → stop patching. This is
+  not the same as fix churn: each fix was correct as far as it went, and the
+  next reviewer simply found the half of the problem the fix did not reach.
+  Measured 2026-09-01, one 130-line script: "do not leave a partial file on
+  error" was fixed without covering SIGKILL, which does not raise; a strict
+  validator was added for the incoming snapshot and none at all for the
+  baseline the same function compares it against. Both were second halves,
+  found one round later, by a different family. When the findings start landing
+  in the previous round's diff, the change is being grown by accretion — rewrite
+  the unit from its requirements instead, and review THAT.
 - The same finding survives two fix rounds → the task prompt is failing to
   transmit it; lead fixes it directly.
 - The same finding CATEGORY keeps reopening against approximation-shaped code
