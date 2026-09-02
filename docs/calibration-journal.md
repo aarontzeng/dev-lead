@@ -77,6 +77,22 @@ actionable" are calibration data. Verify every finding before you count it.
   mitigation is the lead's:** before accepting any finding of the shape "X has
   no owner / no evidence / is undefined", check the siblings yourself. Expect
   this class on every plan/spec set that splits normative text across changes.
+- **Your downgrade is a finding too — hold it to the same standard.** Rating a
+  leg's finding down is itself a claim about a mechanism, and it is the claim
+  nobody else will check. Measured: a leg reported that a sequence step's
+  terminal NO_ACK does not stop the sequence and called it "state desync"; the
+  lead downgraded it to MINOR, reasoning that the sequence advances on confirmed
+  vehicle state, so a step's NO_ACK is merely informational and the outcome is
+  still correct. State-gating was the hazard, not the mitigation: the command had
+  actually reached the aircraft and only its ACK was lost, so a later heartbeat
+  armed and launched it *after* the operator had been told it failed. A second
+  leg's framing corrected the lead. The error has a shape worth naming — the
+  downgrade reasoned about the code ("does it still reach the right state?") when
+  the question was about the operator and the machine ("what were they told, and
+  what did it then do?"). Before you write MINOR on something a leg called
+  serious, state the mechanism you think makes it benign, then attack that
+  mechanism the way you would attack the leg's.
+
 - **Verify the evidence STEP, not just the conclusion.** A leg can reach a
   defensible conclusion and invent the check it claims to have run. Measured: a
   free leg presented a specific `grep` as its "Verification" for one item; no
