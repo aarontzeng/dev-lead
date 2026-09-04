@@ -49,6 +49,43 @@ finding verification, merge verdict); on a mid-tier session, an optional
 frontier-tier subagent at the Phase-3 verdict check buys judgment exactly
 where it pays.
 
+## Plan mode — fan out a question, not a change
+
+Everything below assumes the deliverable is a **change**. When it is a
+**plan** — a spec, a roadmap, a decision that needs facts nobody has yet —
+run the same machinery with three substitutions, and read
+[`docs/research-briefs.md`](../../docs/research-briefs.md) first: 23 measured
+rules, each carrying the failure that produced it.
+
+1. **Split the problem into falsifiable questions, not topics.** "Investigate
+   how X works" invites a plausible synthesis with invented citations. "Which
+   file and line performs the project comparison?" does not. Name the settled
+   decisions in the brief verbatim, or legs will produce findings against
+   choices that already have an ADR.
+2. **Demand a completeness argument you can re-run.** Not "say what search
+   establishes this is exhaustive" but "give the exact command and the number
+   of results it returned; we will re-run it." Measured: this single demand,
+   not the question's phrasing, is what turned a one-route answer into a
+   seventeen-route enumeration from the same leg on the same question. And a
+   demanded argument is still only *checkable* — the pilot's own best
+   enumeration carried a false completeness claim, self-rated 1.0.
+3. **Dispatch through the existing review adapters.** There is no
+   `*-research` skill and there should not be: the runtime adapter is the
+   expensive part and it is role-independent. Swap the brief, keep the
+   containment.
+
+**Prefer a leg that can execute.** Reading legs find where to look; an
+executing leg finds what is actually true there. Give it a scratch directory,
+forbid commits and tracked-file edits, and require that any test it writes is
+shown to fail against unmutated source before it counts.
+
+**Nothing a leg returns enters the plan unverified.** Fan-out saves the lead's
+*search* time, not reading time. A false finding in a review gets challenged;
+a false premise in a plan gets built on.
+
+Output contract: legs return facts with citations and confidence. **Legs never
+write plan prose.** The lead writes the plan.
+
 ## Phase 0 — Intake (no delegation yet)
 
 Refuse to dispatch until the task has:

@@ -203,6 +203,32 @@ rules — adopt them in your own agent instructions if you don't have them:
 > [codex-runtime.md](skills/codex-adversarial-review/references/codex-runtime.md)
 > — same workflow, honestly-listed reduced guarantees.
 
+## Research briefs — fanning out a question instead of a change
+
+The suite's third role, beside implement and review. A lead splits a problem
+into falsifiable questions, dispatches them through the *existing* review
+adapters (there is no `*-research` skill and there should not be — the runtime
+adapter is the expensive part and it is role-independent), verifies every
+returned fact, and writes the plan itself. Legs return facts with citations;
+legs never write plan prose.
+
+[docs/research-briefs.md](docs/research-briefs.md) is 23 rules, each one a
+measurement with the failure that produced it attached. The two that cost the
+most to learn:
+
+- **Demand a completeness argument you can re-run** — "give the exact command
+  and the number of results it returned", not "say what search establishes
+  this". Measured: that single demand, not the question's phrasing, turned a
+  one-route answer into a seventeen-route enumeration from the same leg on the
+  same question. It makes an answer *checkable*, not checked — the pilot's best
+  enumeration still carried a false completeness claim, self-rated 1.0.
+- **Ask whether the leg can execute.** Three reading legs, two of them frontier
+  models, missed a cross-tenant content leak that the one executing leg
+  reproduced in a single round.
+
+Most of the rules are about the lead's own instruments rather than the
+delegates', which was not the expected shape.
+
 ## The calibration journal
 
 The model tables in these skills ship with *structure*, not *your numbers*.
