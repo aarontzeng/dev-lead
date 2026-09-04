@@ -11,6 +11,9 @@ Every check here guards against a failure this repo has ACTUALLY shipped
                 nine commits shipped past v0.1.0 with it unchanged -- a new
                 install requirement and a behavior change in all four review
                 skills, handed to installed users under the version they had
+  published     `git describe` is reachability-based, so two clones working in
+                parallel each saw their own tags, both bumped to the same
+                version, and both linted green -- this asks origin instead
   links         a placeholder link (https://github.com/ with no repo) shipped once
   paths         a skill runs with the TARGET repo as cwd, so a bare `scripts/…`
                 or `docs/…` points at the user's project: freeze-target.sh
@@ -255,6 +258,93 @@ def check_version():
             "and this commit is past it — `marketplace update` would hand these "
             "changes to an installed user under the version they already have")
 
+
+
+# ---- published: the bump must not reuse a version already released ----
+#
+# check_version()'s rule 2 asks "is the manifest ahead of the last release I can
+# SEE", and `git describe` answers by REACHABILITY. That is the wrong question in
+# a repo two sessions work in at once: a version another clone tagged and pushed
+# on a disjoint line of work is not reachable from this HEAD, so describe never
+# mentions it and the bump looks clean in both clones at once.
+#
+# MEASURED, 2026-09-04: two clones each walked 0.3.38 -> 0.3.39 -> 0.3.40 against
+# their own reachable tags. Both were green. The second push was rejected on every
+# tag it tried to create, and two tags had already been created against commits a
+# rebase then made unreachable. `fetch-depth: 0` does not help -- those tags were
+# fetched and still unreachable; reachability was never the problem.
+#
+# This asks the remote instead. It needs network, so an unreachable remote is a
+# note(), not an err() -- the same honesty the tagless-clone path above uses.
+REMOTE_TIMEOUT_S = 10
+
+
+def _published_max():
+    """(version, tag) of the highest v* tag on origin.
+
+    None means UNKNOWN, not "none published" -- callers must not read it as an
+    all-clear. Distinguishing the two is the whole point of the note() below.
+    """
+    try:
+        p = subprocess.run(
+            ["git", "-C", str(ROOT), "ls-remote", "--tags", "--refs", "origin", "v*"],
+            capture_output=True, text=True, timeout=REMOTE_TIMEOUT_S)
+    except (subprocess.TimeoutExpired, OSError):
+        return None
+    if p.returncode != 0:
+        return None
+    best = None
+    for line in p.stdout.splitlines():
+        parts = line.split("refs/tags/")
+        if len(parts) != 2:
+            continue
+        tag = parts[1].strip()
+        version = _semver(tag[1:]) if tag.startswith("v") else None
+        if version and (best is None or version > best[0]):
+            best = (version, tag)
+    return best
+
+
+def check_version_not_published():
+    manifest = ROOT / ".claude-plugin" / "plugin.json"
+    if not manifest.is_file():
+        return                                  # check_manifest() reported it
+    try:
+        declared = json.loads(manifest.read_text(encoding="utf-8")).get("version")
+    except json.JSONDecodeError:
+        return                                  # ditto
+    version = _semver(declared)
+    if version is None:
+        return                                  # check_version() reported it
+
+    # The release commit itself declares the version being released, and by the
+    # time this runs that tag exists. Flagging it would make the check unable to
+    # pass on the one commit it is actually about -- the same carve-out
+    # check_version()'s rule 1 makes, for the same reason.
+    on_head = {t for t in (_git("tag", "--points-at", "HEAD") or "").splitlines()}
+    if f"v{declared}" in on_head:
+        return
+
+    published = _published_max()
+    if published is None:
+        note("published-version: could not read origin's tags, so the "
+             "'this version is not already released' rule was NOT checked -- "
+             "this run guarded nothing. Offline, no `origin`, or a slow remote "
+             "all look identical here. `git ls-remote --tags origin` and re-run "
+             "before trusting a green.")
+        return
+
+    highest, tag = published
+    if version < highest:
+        err(rel(manifest),
+            f"version '{declared}' is BEHIND published tag '{tag}' -- another "
+            "clone has already released past this. Fetch and rebase before "
+            "bumping; a tag you push from here will collide.")
+    elif version == highest:
+        err(rel(manifest),
+            f"version '{declared}' is already published as tag '{tag}'. Two "
+            "different trees would ship under one version, and the tag push "
+            "will be rejected. Bump past it.")
 
 # ---- links: relative links resolve; no accidental placeholders ----
 LINK_RE = re.compile(r"\]\(([^)\s]+)\)")
@@ -735,7 +825,7 @@ def check_families():
 
 def main():
     for check in (check_structure, check_frontmatter, check_manifest,
-                  check_version,
+                  check_version, check_version_not_published,
                   check_links, check_paths, check_fences, check_mermaid,
                   check_var_order,
                   check_tracked, check_helper_args, check_sentinels, check_frozen_target,

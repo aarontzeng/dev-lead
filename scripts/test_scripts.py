@@ -1406,6 +1406,234 @@ def test_lint_version(tmp):
 ROOT_MD = sorted(p for p in SCRIPTS.parent.rglob("*.md") if ".git" not in p.parts)
 
 
+# -------------------------------------------------- lint published version ----
+def _origin_repo(tmp, name, tags):
+    """A bare `origin` carrying `tags`, plus a clone whose HEAD is on master.
+
+    Real repos again: the check shells out to `git ls-remote`, so a fake tree
+    cannot drive it.
+    """
+    bare = tmp / "pub" / f"{name}.git"
+    bare.mkdir(parents=True)
+    run("git", "init", "-q", "--bare", str(bare), check=True)
+    work = tmp / "pub" / name
+    make_repo(work, commits=1)
+    git(work, "branch", "-M", "master")
+    git(work, "remote", "add", "origin", str(bare))
+    git(work, "push", "-q", "origin", "master")
+    for tag in tags:
+        git(work, "tag", "-a", tag, "-m", tag)
+        git(work, "push", "-q", "origin", tag)
+        git(work, "tag", "-d", tag)          # published, deliberately NOT local
+    return work
+
+
+def test_lint_published_version(tmp):
+    """check_version_not_published(): the rule `git describe` structurally cannot enforce.
+
+    The case this exists for is the last one: a manifest that is ahead of every
+    tag REACHABLE from HEAD, and equal to one another clone already published.
+    check_version() is green on it -- correctly, by its own rule -- and the two
+    clones then collide on push. That is not a hypothetical; it happened on
+    2026-09-04 and cost two published tags that had to be deleted.
+    """
+    sys.path.insert(0, str(SCRIPTS))
+    import lint
+
+    last_notes = []
+
+    def run_against(name, declared, published):
+        repo = _origin_repo(tmp, name, published)
+        (repo / ".claude-plugin").mkdir(parents=True, exist_ok=True)
+        (repo / ".claude-plugin" / "plugin.json").write_text(
+            json.dumps({"name": "x", "description": "x", "version": declared}))
+        real = lint.ROOT, lint.ERRORS, lint.NOTES
+        try:
+            lint.ROOT, lint.ERRORS, lint.NOTES = repo, [], []
+            lint.check_version_not_published()
+            last_notes[:] = list(lint.NOTES)
+            return list(lint.ERRORS)
+        finally:
+            lint.ROOT, lint.ERRORS, lint.NOTES = real
+
+    got = run_against("ahead", "0.3.41", ["v0.3.40"])
+    check("published: a version past the highest published tag passes",
+          got == [], f"got {got}")
+
+    got = run_against("equal", "0.3.40", ["v0.3.40"])
+    check("published: flags a version already published",
+          any("already published as tag 'v0.3.40'" in e for e in got), f"got {got}")
+
+    got = run_against("behind", "0.3.39", ["v0.3.40"])
+    check("published: flags a version behind what is published",
+          any("BEHIND published tag 'v0.3.40'" in e for e in got), f"got {got}")
+
+    # numeric, not lexical: v0.3.9 < v0.3.10, and a string compare says otherwise
+    got = run_against("numeric", "0.3.11", ["v0.3.9", "v0.3.10"])
+    check("published: compares numerically, so v0.3.10 outranks v0.3.9",
+          got == [], f"got {got}")
+    got = run_against("numeric2", "0.3.10", ["v0.3.9", "v0.3.10"])
+    check("published: v0.3.10 published is caught by a v0.3.10 manifest",
+          any("already published" in e for e in got), f"got {got}")
+
+    # THE case. The published tags are pushed and then deleted locally, so they
+    # are unreachable from this HEAD -- exactly the shape of a parallel session's
+    # release. check_version() must pass and this check must not.
+    repo = _origin_repo(tmp, "unreachable", ["v0.3.40"])
+    (repo / ".claude-plugin").mkdir(parents=True, exist_ok=True)
+    (repo / ".claude-plugin" / "plugin.json").write_text(
+        json.dumps({"name": "x", "description": "x", "version": "0.3.40"}))
+    git(repo, "add", "-A")
+    git(repo, "commit", "-qm", "manifest")
+    real = lint.ROOT, lint.ERRORS, lint.NOTES
+    try:
+        lint.ROOT, lint.ERRORS, lint.NOTES = repo, [], []
+        lint.check_version()
+        reachable_errors = list(lint.ERRORS)
+        lint.ERRORS = []
+        lint.check_version_not_published()
+        published_errors = list(lint.ERRORS)
+    finally:
+        lint.ROOT, lint.ERRORS, lint.NOTES = real
+    check("published: check_version() is green on an unreachable published tag "
+          "(this is why the new check exists, not a bug in the old one)",
+          reachable_errors == [], f"got {reachable_errors}")
+    check("published: the new check catches what reachability cannot see",
+          any("already published" in e for e in published_errors),
+          f"got {published_errors}")
+
+    # the release commit itself: HEAD carries the very tag being published, and
+    # its manifest must declare that version. A check that fires here cannot pass
+    # on the one commit it exists to describe.
+    rel_repo = _origin_repo(tmp, "onrelease", ["v0.3.40"])
+    (rel_repo / ".claude-plugin").mkdir(parents=True, exist_ok=True)
+    (rel_repo / ".claude-plugin" / "plugin.json").write_text(
+        json.dumps({"name": "x", "description": "x", "version": "0.3.40"}))
+    git(rel_repo, "add", "-A")
+    git(rel_repo, "commit", "-qm", "Release 0.3.40")
+    git(rel_repo, "tag", "-a", "v0.3.40", "-m", "v0.3.40")
+    real = lint.ROOT, lint.ERRORS, lint.NOTES
+    try:
+        lint.ROOT, lint.ERRORS, lint.NOTES = rel_repo, [], []
+        lint.check_version_not_published()
+        got = list(lint.ERRORS)
+    finally:
+        lint.ROOT, lint.ERRORS, lint.NOTES = real
+    check("published: silent on the release commit that carries the tag",
+          got == [], f"got {got}")
+
+    # honesty: no origin at all must NOT read as an all-clear
+    solo = tmp / "pub" / "noremote"
+    make_repo(solo, commits=1)
+    (solo / ".claude-plugin").mkdir(parents=True, exist_ok=True)
+    (solo / ".claude-plugin" / "plugin.json").write_text(
+        json.dumps({"name": "x", "description": "x", "version": "9.9.9"}))
+    real = lint.ROOT, lint.ERRORS, lint.NOTES
+    try:
+        lint.ROOT, lint.ERRORS, lint.NOTES = solo, [], []
+        lint.check_version_not_published()
+        got, notes = list(lint.ERRORS), list(lint.NOTES)
+    finally:
+        lint.ROOT, lint.ERRORS, lint.NOTES = real
+    check("published: an unreachable remote reports nothing as an error",
+          got == [], f"got {got}")
+    check("published: ... and says so, instead of passing silently",
+          any("guarded nothing" in n for n in notes), f"got {notes}")
+
+
+# ------------------------------------------------------------------ release ----
+def test_release(tmp):
+    """release.sh: every guard, and that it does not publish.
+
+    Each refusal below is a failure that actually happened on 2026-09-04 --
+    a colliding bump, a tag pushed ahead of its commit, and a one-line
+    annotation that became a one-line release page.
+    """
+    release = SCRIPTS / "release.sh"
+    notes = tmp / "notes.md"
+    notes.write_text("Title line\n\n- a real bullet\n- and another\n")
+    thin = tmp / "thin.md"
+    thin.write_text("just one line\n")
+
+    def repo_at(name, declared="0.3.41", tags=("v0.3.40",)):
+        work = _origin_repo(tmp, name, list(tags))
+        (work / ".claude-plugin").mkdir(parents=True, exist_ok=True)
+        (work / ".claude-plugin" / "plugin.json").write_text(
+            json.dumps({"name": "x", "description": "x", "version": declared}))
+        # The script locates its repo from BASH_SOURCE, not cwd -- deliberately,
+        # so it releases the repo it belongs to and not whatever directory you
+        # happen to be standing in. Driving it therefore means putting a copy
+        # inside the fixture, exactly where a real one lives.
+        (work / "scripts").mkdir(exist_ok=True)
+        shutil.copy2(release, work / "scripts" / "release.sh")
+        git(work, "add", "-A")
+        git(work, "commit", "-qm", "content")
+        git(work, "push", "-q", "origin", "master")
+        return work
+
+    def call(repo, *args):
+        return run("bash", str(repo / "scripts" / "release.sh"), *args)
+
+    check("release: refuses no arguments", call(repo_at("noargs")).returncode != 0)
+
+    r = call(repo_at("thin"), thin)
+    check("release: refuses a thin annotation (it becomes the release page)",
+          r.returncode != 0 and "fewer than 3" in r.stderr, r.stderr)
+
+    dirty = repo_at("dirty")
+    (dirty / "scratch.txt").write_text("uncommitted\n")
+    r = call(dirty, notes)
+    check("release: refuses a dirty tree", r.returncode != 0 and "dirty" in r.stderr, r.stderr)
+
+    # THE ordering guard: a commit that is not on origin/master yet
+    unpushed = repo_at("unpushed")
+    (unpushed / "later.txt").write_text("x\n")
+    git(unpushed, "add", "-A")
+    git(unpushed, "commit", "-qm", "not pushed")
+    r = call(unpushed, notes)
+    check("release: refuses to tag a commit that is not on origin/master",
+          r.returncode != 0 and "not on origin/master" in r.stderr, r.stderr)
+
+    # the collision this whole change exists for
+    r = call(repo_at("collide", declared="0.3.40"), notes)
+    check("release: refuses a manifest version already published",
+          r.returncode != 0 and "already published v0.3.40" in r.stderr, r.stderr)
+    check("release: ... and names the next free version",
+          "0.3.41" in r.stderr, r.stderr)
+
+    r = call(repo_at("behind", declared="0.3.39"), notes)
+    check("release: refuses a manifest version behind what is published",
+          r.returncode != 0, r.stderr)
+
+    # numeric compare: 0.3.9 published must not outrank a 0.3.10 manifest
+    r = call(repo_at("numeric", declared="0.3.10", tags=("v0.3.9",)), notes)
+    check("release: compares numerically, so 0.3.10 releases past v0.3.9",
+          r.returncode == 0, r.stderr)
+
+    # happy path
+    ok = repo_at("ok")
+    r = call(ok, notes)
+    check("release: succeeds on a clean, pushed, correctly-bumped master",
+          r.returncode == 0, r.stderr)
+    check("release: does NOT create a bump commit (rule 2 wants it in content)",
+          git(ok, "log", "--oneline", "-1").stdout.split(None, 1)[1].strip() == "content",
+          git(ok, "log", "--oneline", "-1").stdout)
+    # `git tag -l` also lists v0.3.40: release.sh fetches tags, so the published
+    # one comes back locally. What matters is which commit the NEW tag names.
+    check("release: tags HEAD with the version the manifest declares",
+          git(ok, "rev-list", "-n1", "v0.3.41").stdout.strip()
+          == git(ok, "rev-parse", "HEAD").stdout.strip(),
+          git(ok, "tag", "-l").stdout)
+    check("release: creates an ANNOTATED tag (ci.yml hard-fails on lightweight)",
+          git(ok, "cat-file", "-t", "v0.3.41").stdout.strip() == "tag")
+    check("release: the annotation is the notes file verbatim",
+          "and another" in git(ok, "tag", "-l", "--format=%(contents)", "v0.3.41").stdout)
+    check("release: prints an --atomic push and does NOT push it itself",
+          "--atomic origin master v0.3.41" in r.stdout, r.stdout)
+    check("release: ... so origin still has no such tag",
+          git(ok, "ls-remote", "--tags", "origin", "v0.3.41").stdout.strip() == "")
+
+
 # -------------------------------------------------------- await-codex-job ----
 def test_await_codex_job(tmp):
     """The waiter's job is to make the host's 'finished' notification mean the
@@ -1503,6 +1731,14 @@ def main():
     print("lint.py check_version")
     with tempfile.TemporaryDirectory() as td:
         test_lint_version(Path(td))
+
+    print("lint.py check_version_not_published")
+    with tempfile.TemporaryDirectory() as td:
+        test_lint_published_version(Path(td))
+
+    print("release.sh")
+    with tempfile.TemporaryDirectory() as td:
+        test_release(Path(td))
 
     print("claim-audit.py")
     with tempfile.TemporaryDirectory() as td:
