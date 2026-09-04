@@ -77,6 +77,32 @@ actionable" are calibration data. Verify every finding before you count it.
   mitigation is the lead's:** before accepting any finding of the shape "X has
   no owner / no evidence / is undefined", check the siblings yourself. Expect
   this class on every plan/spec set that splits normative text across changes.
+- **Check a plan's code claims at the revision the plan is written against.**
+  The lead's own near-miss, caught before it reached a review: verifying a
+  planning document's "reuse these existing components" list, five type names and
+  two profile strings all returned zero hits — which would have been a devastating
+  finding, and was entirely an artifact of grepping the working tree, which sat on
+  an unrelated older branch. At the reviewed revision all five types exist. Two of
+  the strings still showed zero because they live in `contracts/` and an ADR, not
+  in the service source that was searched. Both halves generalise: **pin the
+  revision, then widen the scope before concluding a referenced thing does not
+  exist.** A plan reviewed against the wrong tree produces confident findings that
+  are pure coordinate error — the same defect the legs get charged for.
+
+- **A stop gate that is currently tripped is not a contradiction.** Measured on a
+  planning document where two independent legs — one paid, one free — both
+  returned BLOCKING for "this task can never start, the whole track is
+  deadlocked." The plan defines a gate that halts work while upstream owners are
+  unassigned, the current state is unassigned, so the gate halts. Its own closing
+  sentence said the blocked outcome was correct and expected; neither leg quoted
+  it, and the exemption that resolves the apparent circularity was stated in three
+  separate places. **Two of three legs agreeing did not make it true** — this is
+  the sharpest instance yet of the sole-findings rule's converse: a majority
+  reached the same wrong conclusion, no leg reached the right one, and only the
+  lead's own reading of the surrounding text settled it. When every leg converges
+  on "this document contradicts itself", read the document yourself before
+  believing them.
+
 - **Your downgrade is a finding too — hold it to the same standard.** Rating a
   leg's finding down is itself a claim about a mechanism, and it is the claim
   nobody else will check. Measured: a leg reported that a sequence step's
