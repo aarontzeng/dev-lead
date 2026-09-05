@@ -1,6 +1,6 @@
 {
   "name": "dev-lead",
-  "version": "0.4.5",
+  "version": "0.4.6",
   "description": "Cross-model delegation and adversarial review for CLI coding agents: one lead, six runtime adapters, and no change merges reviewed only by its own model family.",
   "author": {
     "name": "Aaron Tzeng",

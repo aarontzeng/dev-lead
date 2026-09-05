@@ -135,6 +135,16 @@ Role-specific choices:
   the suite say WHERE it runs: "run it in the FOREGROUND and wait for it; do
   not background it and end your turn."
 
+- **Every shell command the brief itself mentions must be allow-listed — the
+  delegate runs exactly what you wrote.** Measured 2026-09-06, twice in one
+  hour: a brief said "find the file with `ls tests | grep adjusted`", the next
+  revision listed `npx vitest run` as the test spelling; neither was
+  allow-listed and each killed the run at that step with zero output and
+  nothing on disk. The fix is not a bigger allow-list: list in the brief the
+  ONLY spellings that exist (the git reads, `git add`/`commit`, the pinned
+  runners, `grep`/`rg`/`head`/`tail`/`wc`), say anything else — `ls`, `cat`,
+  `sed`, `find`, `npx`, pipes — kills the run, and put file names in the brief
+  instead of telling the delegate how to discover them.
 - **Tests: PIN the exact command, because only the allow-listed spellings
   exist.** Any other spelling (`.venv/bin/pytest`, `uv run pytest`,
   `make test`) is auto-denied and **kills the whole run with zero output** —
