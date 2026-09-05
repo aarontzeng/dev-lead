@@ -285,6 +285,38 @@ Quota economics: when one model is scarce, spend it on **review**, not
 implementation — review leverage is higher, and implementation has more
 substitutes.
 
+### The brief's premises are the one thing no reviewer checks (measured 2026-09-05)
+
+Every gate in this suite reads a diff or a spec that the LEAD wrote. A false
+sentence in the brief is therefore invisible to all of them at once — and the
+more legs you run, the more confident the false sentence looks.
+
+Measured, in a repo where price history feeds portfolio valuation: the lead's
+plan asserted that one provider flag returns the raw as-traded price. It does
+not; that series is already adjusted for splits. Three families reviewed the
+change, fifteen findings were verified and fixed across two rounds, the suite
+went from 2936 to 2960 green — and every one of those tests encoded the same
+wrong premise, because the fixtures were built from the brief. The defect
+(every pre-split position undervalued by the split factor) shipped to main and
+was found afterwards, by one query against real data:
+`select close, adj_close from stock_prices where symbol='AAPL' and time near the split`.
+
+So, for any brief that rests on what an external system returns:
+
+- **State each premise as a claim with a check next to it**, not as background
+  prose: "X returns Y — verified by <command>, <date>". An unverified premise
+  goes in labeled as unverified, which at least lets a reviewer aim at it.
+- **Run the check before writing the brief**, not after the merge. One query or
+  one API call against real data costs a minute and is the only gate that reads
+  the world instead of the diff.
+- **A green suite built from a wrong premise is evidence of nothing.** Its
+  fixtures inherit the error; mutation testing confirms the tests pin the code,
+  not that the code is right. When the change is about how an outside system
+  behaves, put one assertion against real data in the acceptance criteria.
+- Do this even when the premise is "obviously" true. The measured one had been
+  stated in a design doc, quoted in three review briefs, and repeated in commit
+  messages before anyone looked.
+
 ### Parallel implement legs (measured 2026-09-05)
 
 Two write legs can run at once — different families, different slices — but
