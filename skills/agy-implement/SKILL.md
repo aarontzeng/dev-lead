@@ -166,6 +166,20 @@ Role-specific choices:
   class-method-shaped test landed outside its class, parsed as a nested
   function, and was NEVER COLLECTED — green suite, zero protection, caught
   only by the lead's mutation check.
+- **Say the test run must be in the FOREGROUND, in the same step.** This
+  delegate backgrounds its own `pytest` and then ends its turn waiting for a
+  completion notification that will never arrive — the same leaf failure the
+  suite documents for subagents, except here the delegate does it to itself.
+  Measured twice on `gemini-3.8-flash-high`: once with zero edits after 20
+  minutes, and once (2026-09-05) with the whole implementation finished and
+  correct but never verified, shipping two red guardrail tests the delegate
+  would have seen in one run. The second time the task prompt did not carry
+  this clause, which is the control: the trap is the model's DEFAULT, not a
+  regression. Put it in verbatim — "run the test command in the foreground and
+  read its output in the same step; nothing will notify you; a turn that ends
+  in 'waiting for the test suite' has abandoned the task" — and treat a run
+  whose log ends on that sentence as complete-but-unverified: take the work,
+  do not re-dispatch it.
 - **No recursive delegation**: "do not invoke agy, other CLIs, or any review
   script."
 
