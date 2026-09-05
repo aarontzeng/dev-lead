@@ -285,6 +285,40 @@ Quota economics: when one model is scarce, spend it on **review**, not
 implementation — review leverage is higher, and implementation has more
 substitutes.
 
+### Parallel implement legs (measured 2026-09-05)
+
+Two write legs can run at once — different families, different slices — but
+only when the slices share **zero files**, and the way to get there is not to
+hope: the lead writes and COMMITS the shared layer first (types, API contract,
+the shared engine), and every delegate worktree branches from that SHA. On the
+measured run (backend + shared engine committed by the lead; then a Gemini leg
+on `mobile/` and a Grok leg on `frontend/` in parallel) both merges were
+conflict-free by construction, not by luck. What changes when there are two:
+
+- **Everything per leg is per leg.** Its own worktree, its own `snapshot-refs`
+  baseline, its own baseline suite run *in that worktree*, its own review legs
+  (cross-family is decided against THAT leg's implementer: the Gemini slice got
+  GPT + free-pool + Grok, the Grok slice got GPT + Gemini + free-pool), and its
+  own fix round. Do not share a review brief across slices — the lenses are the
+  same, the file lists are not.
+- **One waiter per leg**, each backgrounded on its own; a single poll loop
+  waiting for "both" cannot tell which finished. And read the family's runtime
+  file for what a finished leg looks like: `cursor-agent` buffers its whole JSON
+  result until exit, so a 0-byte output file means *running*, not dead — the
+  lead misread three legs as dead this way and relaunched duplicates.
+- **Merge serially, gate once more.** Land the legs one at a time onto the
+  integration branch (`--no-ff`, so each leg's history stays legible), then run
+  ALL suites on the merged tree before it touches main — two green legs are not
+  a green merge, they are two green legs.
+- **The parallel brief carries the lead's premises twice as far.** A wrong
+  factual claim in a shared brief lands in both slices before any reviewer sees
+  either. Measured: the brief asserted a helper "needs no actions because a
+  split never changes which symbols are held"; the delegate complied; the
+  Grok review leg falsified it with a three-line counter-example. When the
+  reviewer proves the brief wrong, the fix-round brief says so — "this was the
+  lead's error, not yours" — because the delegate is about to be told to undo
+  work it was ordered to do.
+
 ## Phase 2 — Rounds (bounded)
 
 `ROUNDS_MAX = 3` implementation rounds by default (R1 + two fix rounds); the
