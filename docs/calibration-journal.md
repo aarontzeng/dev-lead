@@ -132,6 +132,37 @@ actionable" are calibration data. Verify every finding before you count it.
   If the run produces no log you can grep, you cannot score that leg on evidence
   quality at all — only on whether its conclusions survive your own checks.
 
+- **Read the review's own "missing evidence" section before you act on its
+  verdict.** The highest-yield check on a received review costs one minute: take
+  each BLOCKING finding and ask whether it rests on something the review itself
+  said it could not confirm. Measured 2026-09-07, twice in one day, from two
+  different reviewers on two different changes:
+
+  - One −1 rested on "if `UpdateWirelessConfigInterface` modifies the flag, the
+    guard reads stale state" — and listed, under its own Missing evidence
+    heading, that the function's body was not in the context it was given. The
+    signature is `const WifiInterface interface`: by value, and const. The
+    premise was not merely unproven, it was impossible.
+  - Another −1 asserted that a named commit had already rewritten the function
+    under measurement, so the numbers no longer held. `git cat-file -t` on that
+    SHA returned "not a valid object" in a clone carrying both branches, and the
+    tracker had no change mentioning the ticket at all.
+
+  Both reviews were otherwise excellent, and that is the point: the same two
+  reports independently re-derived line numbers, arithmetic and control flow
+  that all checked out. Accuracy on the verified half tells you nothing about
+  the unverified half, so grade the halves separately. **A finding that names
+  its own gap is doing you a favour — it is telling you exactly which claim to
+  open a file on.** The failure mode is not dishonesty; it is a reviewer
+  carrying an inference past the last point it had evidence for, and then a
+  severity step that does not ask whether the ground under it held.
+
+  This bullet is about reviews you RECEIVE — a colleague's automated reviewer,
+  a bot on your change — not only legs you dispatch. The journal is worth
+  keeping for those too: you cannot pick their model, but you can learn which
+  of their claims to spend verification time on, and "the blocking half rested
+  on the part it flagged as unchecked" is a pattern you will see again.
+
 - **Separate the model from the transport.** "The model returned nothing" and
   "the launcher ate the output" look identical from outside. Before writing a
   failure row, check the transport diagnostics in the family's runtime file
