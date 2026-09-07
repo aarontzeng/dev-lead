@@ -177,8 +177,15 @@ cd "$REVIEW_TARGET_DIR" && \
   [ "$(git rev-parse HEAD)" = "$REVIEW_HEAD" ] && \
   opencode run --print-logs --log-level INFO \
     -m opencode/<free-model> \
+    --variant <effort> \
     < "$RUN_DIR/prompt.md" > "$RUN_DIR/review.log" 2>&1
 ```
+
+- **`--variant` is the effort knob** — this family's `--effort`. Pass it
+  explicitly; omitting it takes the provider default, and there is no
+  `reasoningEffort` key in `opencode.json` to set instead (runtime file).
+  The free pool costs no quota, so this is the one leg where you can spend
+  the top tier without a budget argument.
 
 - **"In its own step" means its own FOREGROUND step.** Measured: a prompt
   file written by a heredoc inside a backgrounded compound command raced the

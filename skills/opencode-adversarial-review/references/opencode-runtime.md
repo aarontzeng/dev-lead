@@ -242,9 +242,23 @@ congested in exactly the same way at the same moment, so uniform silence is
 a LOCAL fault. Confirm with a one-word probe: a trivial prompt answers in
 under 10 s even while argv-launched runs beside it are wedged.
 
-- Useful flags (verified via `--help`; re-verify per version):
+- **`--variant <effort>` is this family's reasoning-depth knob** — the
+  counterpart to codex's `--effort` / `model_reasoning_effort`, grok's
+  `--effort`, and agy's model-name suffix (`-medium` / `-high`). `--help`
+  calls it "model variant (provider-specific reasoning effort, e.g., high,
+  max, minimal)"; the accepted values are the provider's rather than a fixed
+  set, so confirm the one you want against the model you picked. There is
+  **no** `reasoningEffort` key in `opencode.json`: a lead who assumes the
+  config file carries effort silently gets the provider default. Measured
+  2026-09-07 — this bullet used to list `--variant` as a bare name among the
+  other flags, and a lead who had read this file still went looking for a
+  config key that does not exist, because every *other* family's runtime file
+  has an effort section and this one did not. Because the free pool costs no
+  quota, spend high effort here freely: this is the one leg where depth is
+  not a budget decision.
+- Other useful flags (verified via `--help`; re-verify per version):
   `-m provider/model`, `--agent <name>`, `--dir <path>`, `--format json`,
-  `--variant`, and `--auto` (**never use it** — auto-approves anything not
+  and `--auto` (**never use it** — auto-approves anything not
   explicitly denied; this family's equivalent of a skip-permissions flag).
 - **Always pass `--print-logs --log-level INFO`** and capture to a file: the
   INFO stream carries `projectID=` (config binding, below) and
