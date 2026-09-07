@@ -61,6 +61,24 @@ wrap the thing that takes the time.**
   the host task exit at launch and throws the notification away. (Measured in
   the same session: an `agy` review launched with an inner `&` produced a
   "completed" notification in under a second, and the leg had in fact died.)
+- **`codex exec` with an argv prompt needs `< /dev/null` when backgrounded
+  (measured 2026-09-07).** Handed to a host background mechanism with stdin
+  left open, it prints `Reading additional input from stdin...` and blocks
+  there forever — the prompt is already in argv, so nothing will ever arrive.
+  It looks exactly like a long-running review: the process is alive, the CPU is
+  idle, the output file holds those 39 bytes and never grows. One round lost
+  ten minutes to it before anyone read the file. The other three adapters in
+  this suite do not do this, so a lead who has only launched them will not
+  expect it.
+
+  ```bash
+  codex exec --sandbox read-only --cd "$REVIEW_TARGET_DIR" \
+    -c model_reasoning_effort=<effort> -m <model> \
+    "$(cat "$RUN_DIR/prompt.md")" < /dev/null > "$RUN_DIR/review.out" 2>&1
+  ```
+
+  The tell, before you wait: a healthy leg's output file grows within the first
+  minute. One stuck at exactly the size of that banner is not thinking.
 - The companion's `task --background` does NOT run in the foreground, so it
   needs a second host-background step that blocks until the job is terminal:
 
@@ -184,6 +202,7 @@ rewritten.
 | 2026-09-06 | gpt-5.6-terra (raw `codex exec`, medium) | review (PF-19/PF-20 contract across 3 services + a migration, 10 posed items) | **35 of 35 citations exact — the first perfect citation round on this account — and it got there by following an instruction.** The preamble said to read with `nl -ba`; it used `rtk nl -ba … | sed -n` on all 14 file reads, and the 2-4 line drift its 2026-09-05 row recorded vanished. 228 s, fastest leg by 30%, zero NOT REACHED, per-item evidence blocks for a third consecutive round. It ran `git blame` unprompted and reported that 3 of its 34 cited lines were pre-existing, including the one that falsifies the commit message's pagination claim. **It also downgraded its own findings twice, correctly**: it refused the brief's 'two rows claiming the same revision' framing (the PK turns the race into a lost insert) and refused 'rows skipped or duplicated' on the pagination item (underfilled pages, nothing lost). Both downgrades survived the lead's check; a leg that argues its own severity DOWN is rarer than one that finds the defect. One miss: it graded the migration backfill MAJOR without noticing the poll has no LIMIT, which is what makes the flood unbounded. **Operating note: give terra the `nl -ba` instruction in every preamble — it is a one-line fix for the only defect this account still had.** |
 | 2026-09-06 | gpt-5.6-terra | review ×2 (sequences on S2 detection; then the fix round) | R1: two CRITICALs in S0 loader code the lead had shipped days earlier — a user's manual split plus a global confirmation applied the ratio twice, and `.TW`/`.TWO` did the same — plus the mobile role-state write after an await with no epoch fence. All three verified; lead fixed the loader itself. R2 check found two more real ones the fix round introduced or left: refresh promotion dropped the admin role (defaulted arg), and FinMind's swallowed `[]` still counted as a clean scan. Its residual (overlapping runs on symbol aliases) was correctly labelled as contingent. Four rounds on this feature, zero rejected findings. |
 | 2026-09-06 | gpt-5.6-terra (--effort medium) | review ×2 (sequences on a lead-written S3 change + #30) | Strongest leg of the round at medium effort. Found the CRITICAL the lead shipped: the Python importer accepted an `actions` argument and never wired it — never passed to the oversell replay, never persisted, then an undefined counter referenced after commit (a stale `replace()` in the lead's own edit). big-pickle converged on the same from the consistency side (NameError on the dead `written_actions`). Also: an importer-inferred user row outranking a confirmed global fact, and the web import continuing to post rows after an action POST fails (half-import a retry duplicates). Every finding verified; none rejected. medium effort was plenty for a diff this size — no depth lost vs the high-effort S2 round. |
+| 2026-09-07 | gpt-5.6-terra (raw `codex exec`, `-c model_reasoning_effort=medium`) | review ×2 (authorization-gate change, 8 claims; then the fix round, 5 claims) | **The leg that caught the fix round's own new bug, which is the harder half of the job.** R1: converged with three families on the round's central defect and was **sole** on the "same snapshot" guarantee being over-claimed — the precheck binds the patchset, but nothing is atomic against the server, and the ADR said otherwise. Its C8 mutation matrix matched the lead's own run and flagged the one flag-assertion nobody had pinned. R2 (the fix round): the lead's 409 disambiguation matched the substring `patchset` — which **both** refusal messages contain — so the bug it was written to fix survived in a new shape; terra found it, with `git blame` naming the commit that introduced it. Also named a surviving `any()`→`all()` mutation whose test only used lists where every element was bad. Its design challenge was half right: the naming and the undocumented response contract were conceded, the alternative was rejected (it would have preserved the re-derivation four families had just converged on). **Operating note, now upstream: `< /dev/null` when backgrounded with an argv prompt** — this round lost ten minutes to it hanging on stdin. |
 
 ## Model and effort plumbing
 

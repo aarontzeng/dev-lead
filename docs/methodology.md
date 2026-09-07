@@ -214,6 +214,27 @@ Nothing a delegate self-reports is evidence. The lead:
    **rejections to the same evidence standard as findings** — a correctly
    rejected false positive and a wrongly dismissed real bug otherwise leave an
    identical run log.
+   **A surviving mutant is sometimes a message about the CODE, not the tests
+   (measured 2026-09-07).** A gate was written as `all(v.tag == AGENT for v in
+   qualifying) and len({v.username for v in qualifying}) < 2`. Four of five
+   mutants died; `all()` → `any()` lived. The reflex is to write the missing
+   test — but there is none to write: the upstream system emits one row per
+   account, so in every reachable state the distinct-count is the row count,
+   and with one row `all` and `any` are the same function. It was an EQUIVALENT
+   MUTANT, and the only fixture that could have killed it was a shape the
+   server cannot produce.
+
+   Shipping the line with a note would have been defensible and was the wrong
+   call. The survivor was evidence that a reader could not tell which of two
+   readings was meant — the code did not say what rule it implemented. It was
+   rewritten as the two questions the rule actually asks (`signed_by_a_person`
+   / `agent_accounts`), the ambiguity disappeared, and the re-run went 5/5.
+   So: when a mutant survives, ask **"is this untestable, or is it unclear?"**
+   before reaching for a fixture. Untestable-and-clear earns a comment saying
+   why; untestable-because-unclear is a rewrite. A test invented purely to kill
+   an equivalent mutant pins a state that cannot occur, and the next reader
+   believes it can.
+
 6. Anchors the round's **prose**, not just its code. Mutation-proofing works for
    step 4 because a test executes; a sentence does not, so no mutant of the code
    under test can make a false comment or doc line fail. The exception is worth

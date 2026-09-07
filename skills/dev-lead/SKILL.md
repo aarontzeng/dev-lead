@@ -281,6 +281,38 @@ equally convincing whether or not the suite is able to go red (measured: on one
 three-leg round it was the only lens that found anything, and it found five;
 see [`docs/methodology.md`](../../docs/methodology.md) §2).
 
+**A brief is written PER FAMILY. It is not a template (measured 2026-09-07).**
+The lenses above vary the question; the PREAMBLE has to vary with the sandbox,
+because the four adapters do not agree on what a delegate may run. A lead
+wrote one preamble for a 4-leg round and copied it into all four briefs. It
+carried terra's proven operating condition — "read files with `nl -ba <path> |
+sed -n`, so every citation carries a real line number" — which is right for
+codex and wrong everywhere else:
+
+- **agy** auto-denies an unlisted shell command in headless mode and kills the
+  run with ZERO output. The leg died in about 90 seconds having read nothing.
+  The runtime file already records this failure shape; the brief walked into it.
+- **opencode** was under a config denying `bash: {"*": "deny"}` except five git
+  reads. It survived only because a denial comes back to that model as a
+  message and it fell back to its own file tools (`auto-rejecting` count 0) —
+  luck, not design.
+- **codex** and **cursor** were fine, which is exactly why the mistake is easy
+  to miss: half the round works.
+
+So: write the lens once, the preamble four times. Say in each what that
+delegate may actually run, and say that anything else ends the run. And when a
+leg comes back empty in under two minutes, suspect the brief before the model —
+`grep -c auto-rejecting` and the agy stderr both name the denied command.
+
+**Rewriting a brief mid-round voids that leg's scaffold bracket.** Same
+session: the lead fixed the three broken briefs while one leg was still
+running, and re-recorded the digests. The before/after comparison for that leg
+then proved nothing, because the "before" had been overwritten. The change was
+harmless — it removed an instruction the leg had already consumed from stdin —
+but the evidence chain was gone. Kill and relaunch, or record in the run log
+that the bracket is void for that leg and why. Silently re-recording the digest
+turns a proof into a decoration.
+
 Quota economics: when one model is scarce, spend it on **review**, not
 implementation — review leverage is higher, and implementation has more
 substitutes.
