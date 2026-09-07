@@ -305,6 +305,45 @@ def _published_max():
     return best
 
 
+def _tag_on_origin_points_at_head(declared):
+    """True if origin's v<declared> resolves to the commit at HEAD.
+
+    False also means UNKNOWN here -- offline, no origin, or a slow remote all
+    return False, which only costs a spurious error on a release commit whose
+    remote cannot be read. That is the safe direction: the check it guards is
+    the one that stops two trees shipping under one version.
+    """
+    head = _git("rev-parse", "HEAD")
+    if not head:
+        return False
+    ref = "refs/tags/v" + declared
+    try:
+        p = subprocess.run(
+            # BOTH patterns. A pattern filters the peeled line out too, and
+            # for an ANNOTATED tag the unpeeled line carries the tag OBJECT's
+            # sha, which can never equal a commit -- so asking for the plain
+            # ref alone makes this function answer False for every annotated
+            # tag, i.e. for every release this repo cuts.
+            ["git", "-C", str(ROOT), "ls-remote", "--tags", "origin",
+             ref, ref + "^{}"],
+            capture_output=True, text=True, timeout=REMOTE_TIMEOUT_S)
+    except (subprocess.TimeoutExpired, OSError):
+        return False
+    if p.returncode != 0:
+        return False
+    for line in p.stdout.splitlines():
+        parts = line.split("\t")
+        if len(parts) != 2:
+            continue
+        sha, name = parts[0].strip(), parts[1].strip()
+        # an annotated tag prints the tag OBJECT and the peeled commit; only
+        # the peeled line can equal HEAD, and a lightweight tag prints one line
+        # that already is the commit
+        if name in (ref, ref + "^{}") and sha == head:
+            return True
+    return False
+
+
 def check_version_not_published():
     manifest = ROOT / ".claude-plugin" / "plugin.json"
     if not manifest.is_file():
@@ -321,9 +360,25 @@ def check_version_not_published():
     # time this runs that tag exists. Flagging it would make the check unable to
     # pass on the one commit it is actually about -- the same carve-out
     # check_version()'s rule 1 makes, for the same reason.
-    on_head = {t for t in (_git("tag", "--points-at", "HEAD") or "").splitlines()}
-    if f"v{declared}" in on_head:
-        return
+    #
+    # The carve-out has to ask the SAME SOURCE the check asks. Asking only the
+    # LOCAL tag list is what broke it in production: an --atomic push publishes
+    # master and the tag together, GitHub starts a run for each, and the
+    # branch-push run's checkout can lack the tag the check then reads off
+    # origin -- so the carve-out missed and the release commit reddened its own
+    # CI. MEASURED 2026-09-07, on the v0.4.9 push; reproduced from a bare origin
+    # in test_lint_published_version.
+    #
+    # Both paths additionally require the manifest to be the COMMITTED one. A
+    # tag pointing at HEAD says what that commit ships; it says nothing about an
+    # edited working copy, and "two different trees under one version" is
+    # exactly what an uncommitted bump is.
+    manifest_is_committed = not _git("status", "--porcelain", "--",
+                                     str(manifest.relative_to(ROOT)))
+    if manifest_is_committed:
+        on_head = {t for t in (_git("tag", "--points-at", "HEAD") or "").splitlines()}
+        if f"v{declared}" in on_head or _tag_on_origin_points_at_head(declared):
+            return
 
     published = _published_max()
     if published is None:

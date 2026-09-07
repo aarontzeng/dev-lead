@@ -1522,6 +1522,59 @@ def test_lint_published_version(tmp):
     check("published: silent on the release commit that carries the tag",
           got == [], f"got {got}")
 
+    # THE regression. The block above tags LOCALLY, so it only ever exercised
+    # the local half of the carve-out -- and the half it never reached is the
+    # one that broke. An --atomic push publishes master and the tag together,
+    # GitHub starts a run for each, and the branch-push run's checkout can lack
+    # the tag that this check then reads off origin: carve-out misses, check
+    # fires, and the release commit reddens its own CI. MEASURED 2026-09-07 on
+    # the real v0.4.9 push, reproduced here from a bare origin.
+    ci_repo = tmp / "pub" / "ci-branch-run"
+    ci_bare = tmp / "pub" / "ci-branch-run.git"
+    ci_bare.mkdir(parents=True)
+    run("git", "init", "-q", "--bare", str(ci_bare), check=True)
+    make_repo(ci_repo, commits=1)
+    (ci_repo / ".claude-plugin").mkdir(parents=True, exist_ok=True)
+    (ci_repo / ".claude-plugin" / "plugin.json").write_text(
+        json.dumps({"name": "x", "description": "x", "version": "0.4.9"}))
+    git(ci_repo, "add", "-A")
+    git(ci_repo, "commit", "-qm", "Release 0.4.9")
+    git(ci_repo, "branch", "-M", "master")
+    git(ci_repo, "remote", "add", "origin", str(ci_bare))
+    git(ci_repo, "push", "-q", "origin", "master")
+    git(ci_repo, "tag", "-a", "v0.4.9", "-m", "v0.4.9")
+    git(ci_repo, "push", "-q", "origin", "v0.4.9")
+    git(ci_repo, "tag", "-d", "v0.4.9")   # the checkout that has no tag
+
+    def against_ci():
+        real = lint.ROOT, lint.ERRORS, lint.NOTES
+        try:
+            lint.ROOT, lint.ERRORS, lint.NOTES = ci_repo, [], []
+            lint.check_version_not_published()
+            return list(lint.ERRORS)
+        finally:
+            lint.ROOT, lint.ERRORS, lint.NOTES = real
+
+    check("published: silent on the release commit when the tag is on ORIGIN "
+          "but not in the checkout (the branch-push CI run)",
+          against_ci() == [], f"got {against_ci()}")
+
+    # ... and the carve-out stays narrow. Both of these once passed only because
+    # the check fired on everything; they are what stops it becoming a blanket
+    # return. An annotated tag's unpeeled ls-remote line carries the TAG
+    # OBJECT's sha, so a lookup that forgets to ask for `^{}` answers "no match"
+    # here and this first case would go red again.
+    (ci_repo / ".claude-plugin" / "plugin.json").write_text(
+        json.dumps({"name": "x", "description": "x", "version": "0.4.9", "e": 1}))
+    check("published: an EDITED manifest is not the released tree, tag or no tag",
+          any("already published" in e for e in against_ci()), f"got {against_ci()}")
+    git(ci_repo, "checkout", "-q", "--", ".claude-plugin/plugin.json")
+
+    git(ci_repo, "commit", "-q", "--allow-empty", "-m", "past the tag")
+    check("published: a commit PAST the published tag still collides",
+          any("already published" in e for e in against_ci()), f"got {against_ci()}")
+    git(ci_repo, "reset", "-q", "--hard", "HEAD~1")
+
     # honesty: no origin at all must NOT read as an all-clear
     solo = tmp / "pub" / "noremote"
     make_repo(solo, commits=1)
