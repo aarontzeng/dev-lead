@@ -172,6 +172,32 @@ dispatch. Reusing a task file verbatim across a family switch produces a
 silent, output-less death that reads like a code problem and is a prompt
 problem. Re-read the target skill's task-prompt section on every switch.
 
+**The sharpest version of that: never hand a delegate a scope it cannot
+REACH.** A brief names two things independently — what to look at, and what
+the delegate is allowed to run — and it is entirely possible to write a pair
+that cannot both be true. The self-contradiction does not announce itself;
+the run dies, output-less, looking exactly like a model failure.
+
+Measured 2026-09-07, one session, one lead, three separate legs killed by
+three different versions of the same mistake:
+
+- A `nl -ba` read instruction in the preamble. Correct and load-bearing for
+  one family; in headless mode on another it is an auto-denied shell call, so
+  the FIRST tool call killed the run before a file was read.
+- The same instruction carried to a third family whose config denies `*`
+  except git — same death, different allow-list.
+- **A `git diff <base> HEAD` scope in a brief that forbids shell.** The
+  delegate did the only thing left: it tried to READ the range, reaching for
+  `.git/worktrees/<name>/logs/HEAD` — outside the `--add-dir`ed directory,
+  auto-denied, run over. A git range is not a description of files; it is an
+  instruction to run git.
+
+The fix is not a longer brief, it is a per-family one: write the scope in
+the vocabulary the delegate actually has. Where shell is forbidden, name the
+files explicitly — an eight-line list beats a one-line range, and it is the
+only form that survives the sandbox. Where a read command is pinned, confirm
+it is on THAT family's allow-list before it goes in the preamble.
+
 **The worktree is missing everything the suite needs that git does not track,
 and the delegate will not tell you — it will quietly use something else.**
 Worktree isolation is usually discussed as "what is shared" (databases, ports,
