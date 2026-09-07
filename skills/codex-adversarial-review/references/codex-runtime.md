@@ -101,6 +101,27 @@ wrap the thing that takes the time.**
   falls back to 20-minute log quiescence for the launcher-output mode where no
   job is ever registered. It exits 0 on terminal, 1 on its own timeout.
 
+## The session refuses to start if a project MCP server is unreachable
+
+**Measured 2026-09-07.** A review launched in a repo whose `.mcp.json` carried a
+stale gateway token died before any thread existed:
+
+```
+error creating thread: Fatal error: Failed to initialize session:
+required MCP servers failed to initialize: <server>: ... HTTP 401: unauthorized
+```
+
+The failure is in the CLI's own stderr, not in a review log, and it costs the
+whole leg. Two things follow. **MCP reachability is a hard startup dependency
+for this adapter**, so a token that expired since the last run turns a healthy
+model into a dead leg — and the repo you review in decides which `.mcp.json`
+applies, which is not necessarily the one the lead's own session is using (the
+lead's session kept working throughout, which is what made this confusing).
+And it is indistinguishable at a glance from a quota or transport failure, so
+`grep -i 'failed to initialize' "$RUN_DIR"/*.err` belongs in the same triage
+list as the 50x and `auto-rejecting` checks. Fix the token, or launch from a
+directory whose MCP config resolves; nothing about the prompt is at fault.
+
 Do not poll by hand between turns instead. A hand-rolled poll loop is a live
 task the user can interrupt, and interrupting it is indistinguishable from the
 job ending — one such loop was killed mid-run in the same session and the lead
@@ -203,6 +224,7 @@ rewritten.
 | 2026-09-06 | gpt-5.6-terra | review ×2 (sequences on S2 detection; then the fix round) | R1: two CRITICALs in S0 loader code the lead had shipped days earlier — a user's manual split plus a global confirmation applied the ratio twice, and `.TW`/`.TWO` did the same — plus the mobile role-state write after an await with no epoch fence. All three verified; lead fixed the loader itself. R2 check found two more real ones the fix round introduced or left: refresh promotion dropped the admin role (defaulted arg), and FinMind's swallowed `[]` still counted as a clean scan. Its residual (overlapping runs on symbol aliases) was correctly labelled as contingent. Four rounds on this feature, zero rejected findings. |
 | 2026-09-06 | gpt-5.6-terra (--effort medium) | review ×2 (sequences on a lead-written S3 change + #30) | Strongest leg of the round at medium effort. Found the CRITICAL the lead shipped: the Python importer accepted an `actions` argument and never wired it — never passed to the oversell replay, never persisted, then an undefined counter referenced after commit (a stale `replace()` in the lead's own edit). big-pickle converged on the same from the consistency side (NameError on the dead `written_actions`). Also: an importer-inferred user row outranking a confirmed global fact, and the web import continuing to post rows after an action POST fails (half-import a retry duplicates). Every finding verified; none rejected. medium effort was plenty for a diff this size — no depth lost vs the high-effort S2 round. |
 | 2026-09-07 | gpt-5.6-terra (raw `codex exec`, `-c model_reasoning_effort=medium`) | review ×2 (authorization-gate change, 8 claims; then the fix round, 5 claims) | **The leg that caught the fix round's own new bug, which is the harder half of the job.** R1: converged with three families on the round's central defect and was **sole** on the "same snapshot" guarantee being over-claimed — the precheck binds the patchset, but nothing is atomic against the server, and the ADR said otherwise. Its C8 mutation matrix matched the lead's own run and flagged the one flag-assertion nobody had pinned. R2 (the fix round): the lead's 409 disambiguation matched the substring `patchset` — which **both** refusal messages contain — so the bug it was written to fix survived in a new shape; terra found it, with `git blame` naming the commit that introduced it. Also named a surviving `any()`→`all()` mutation whose test only used lists where every element was bad. Its design challenge was half right: the naming and the undocumented response contract were conceded, the alternative was rejected (it would have preserved the re-derivation four families had just converged on). **Operating note, now upstream: `< /dev/null` when backgrounded with an argv prompt** — this round lost ten minutes to it hanging on stdin. |
+| 2026-09-07 | gpt-5.6-terra (**companion `adversarial-review`** — so `max`, NOT the medium the lead intended) | review (6-line C++ gate in a WiFi manager, 6 posed properties, lead had already hardware-verified the change) | **1 of 2 findings survived, and the one that did was sole and structural.** Its HIGH ("a stable disabled state suppresses required reset/recovery reloads") named the `record_reset` callers, and the lead falsified that path: those callers hit `qtwifi_ctrl unbind all` + `unload all` first, so the interface it worried about is already unloaded and there is nothing for the skipped `wifi reload` to apply. But the abstract core of it was right and was recorded on the ticket — the new gate trusts the manager's in-memory model rather than probing the radio, so the old code's incidental "re-assert down every pass" repair is gone. Its MEDIUM was the round's only structural contribution and no other leg reached it: the previous-state statics are keyed to the SIDE (`if_main_disabled`) while `interface_main` maps to a different physical band under a different `band_type`, so a mapping change compares a band against the other band's history. Currently unreachable — a `band_type` change always sets `DIFF_BAND_TYPE`, which triggers the same unbind-all — but it fails SILENTLY if anyone ever narrows that block, which is exactly the class the lead would not have found alone. **Two lead errors, both already documented here and both ignored at dispatch**: the companion path has no effort flag (row 200 says so) so this ran at `max`; and the preamble omitted the `nl -ba` line (row 202's operating note), after which its citations came back as coarse ranges (`:713-745`) instead of exact lines. Also: the first attempt died at startup on an MCP 401 — see the new section above. |
 
 ## Model and effort plumbing
 
