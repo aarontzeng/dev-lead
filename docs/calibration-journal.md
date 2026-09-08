@@ -163,6 +163,23 @@ actionable" are calibration data. Verify every finding before you count it.
   of their claims to spend verification time on, and "the blocking half rested
   on the part it flagged as unchecked" is a pattern you will see again.
 
+- **A round that finishes after you vote is not a review; it is a ticket.**
+  Findings only change a merge decision while the decision is open. Measured
+  2026-09-08: the lead approved a patchset, dispatched a three-leg round on it
+  three minutes later, and the owner submitted the change before the first leg
+  returned — so a round that produced a falsified operational instruction, a
+  mutation-proven test-coverage hole, and a systemic observability gap became
+  a follow-up ticket instead of a patchset. **Either finish the round before
+  voting, or vote and accept that the round is now backlog grooming.** Say
+  which one you are doing when you dispatch it.
+- **Do not let a stricter gate you know about stand in for the gate that
+  actually applies.** The same incident: the lead reasoned that the change
+  could not land on one approval because the gateway requires two, and the
+  owner submitted through the native tool, whose ACL requires one. A rule
+  enforced by the path you happen to use is not enforced by the paths other
+  people use. Before treating "it cannot merge yet" as a reason to defer,
+  check who can merge it and through what.
+
 - **Diff the launch command against the family's flag section BEFORE the first
   dispatch, not against `--help`.** A row that records "this leg ran at effort
   X" is worthless if X was never applied, and the way that happens is always
