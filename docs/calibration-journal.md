@@ -163,6 +163,27 @@ actionable" are calibration data. Verify every finding before you count it.
   of their claims to spend verification time on, and "the blocking half rested
   on the part it flagged as unchecked" is a pattern you will see again.
 
+- **Diff the launch command against the family's flag section BEFORE the first
+  dispatch, not against `--help`.** A row that records "this leg ran at effort
+  X" is worthless if X was never applied, and the way that happens is always
+  the same: the lead reads `--help`, does not find the knob, and reports a
+  capability gap that does not exist. Measured three times now, twice in the
+  same week — a codex round journalled as running at `max` when `medium` was
+  intended (the companion path has no `--effort`; only the config or raw
+  `codex exec -c` sets it), and an opencode round journalled here at the
+  provider default because the lead ran `opencode run --help | head -30`,
+  which truncated the `--variant` line the runtime file documents in a bullet
+  of its own. Both files already said so. **The check is mechanical: open the
+  runtime file's effort/flags section, put the launch command beside it, and
+  confirm every knob the user asked for has a home in that command.** Where a
+  knob has no observable field in the run log (opencode's `--variant`, codex's
+  inherited config), say so in the row rather than asserting the value.
+- **A capability you could not find is a claim, and it belongs to the same
+  evidence standard as a finding.** "This leg has no effort flag" reported to
+  the user is a statement about the tool, and the cost of getting it wrong is
+  that the user believes a limitation that is not there. Grep the runtime file
+  before saying it.
+
 - **Separate the model from the transport.** "The model returned nothing" and
   "the launcher ate the output" look identical from outside. Before writing a
   failure row, check the transport diagnostics in the family's runtime file
