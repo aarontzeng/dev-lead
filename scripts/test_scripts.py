@@ -1777,6 +1777,49 @@ def test_leg_cmd():
     check("leg-cmd: does not emit a flag the adapter rejects",
           "--effort" not in r.stdout, r.stdout)
 
+    # The output is documented for `eval "$(leg-cmd.sh ...)"`, so a caller
+    # value carrying shell metacharacters must come back quoted. Measured
+    # 2026-09-08: quoting only tokens containing a SPACE let a backticked
+    # model name through raw, which eval would have executed.
+    for argv, needle in (
+        (["cursor", "review", "--model", "x`id`y"], "'x`id`y'"),
+        (["agy", "review", "--model", "gemini-3.8-flash-medium",
+          "--target", '/tmp/a";touch /tmp/PWNED;"b'], "touch /tmp/PWNED"),
+    ):
+        r = subprocess.run([str(script), *argv], capture_output=True, text=True)
+        check(f"leg-cmd: quotes a hostile {argv[2]} value", r.returncode == 0, r.stderr)
+        check(f"leg-cmd: {argv[2]} metacharacters are inside quotes",
+              needle in r.stdout and "'" in r.stdout, r.stdout)
+
+    # A value the template never consumes used to be dropped in silence. For
+    # --target that is a freeze-discipline hole: the caller believes the run is
+    # pinned to a frozen worktree and it runs in their cwd.
+    r = subprocess.run([str(script), "cursor", "review", "--model",
+                        "cursor-grok-4.6-medium", "--target", "/tmp/frozen"],
+                       capture_output=True, text=True)
+    check("leg-cmd: refuses a --target the template cannot consume",
+          r.returncode != 0, r.stdout)
+    check("leg-cmd: says the run would use the caller's cwd",
+          "cwd" in r.stderr, r.stderr)
+
+    # Every corrected role must render, not just the one the author probed.
+    for argv, needle in (
+        (["agy", "implement", "--model", "gemini-3.8-flash-high",
+          "--target", "/tmp/x"], "--mode accept-edits"),
+        (["cursor", "implement", "--model", "cursor-grok-4.6-medium"], "--trust"),
+        (["claude", "review", "--model", "sonnet"], "--strict-mcp-config"),
+        (["grok", "review", "--model", "grok-4.6", "--effort", "high",
+          "--prompt-file", "/tmp/p"], "--disallowed-tools"),
+    ):
+        r = subprocess.run([str(script), *argv], capture_output=True, text=True)
+        check(f"leg-cmd: {argv[0]}/{argv[1]} renders", r.returncode == 0, r.stderr)
+        check(f"leg-cmd: {argv[0]}/{argv[1]} keeps {needle}",
+              needle in r.stdout, r.stdout)
+    check("leg-cmd: cursor implement carries no forbidden --force",
+          "--force" not in subprocess.run(
+              [str(script), "cursor", "implement", "--model", "m"],
+              capture_output=True, text=True).stdout)
+
 
 def main():
     for script in ("freeze-target.sh", "verify-target.sh", "snapshot-refs.sh",

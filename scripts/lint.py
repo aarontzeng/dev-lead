@@ -856,22 +856,93 @@ def check_launch():
         if mech == "flag" and not eff.get("flag"):
             err(rel(path), f"adapter '{name}' declares a flag mechanism but names no flag")
 
-        # 2. the drift-catcher. An adapter whose effort is NOT a bare --effort
-        #    flag must not show one in a launch block: that spelling is either
-        #    rejected by the CLI or silently ignored, and it is what leads copy.
-        if mech in ("model_suffix", "config_only", "none"):
-            skill = ROOT / "skills" / f"{name}-adversarial-review" / "SKILL.md"
-            if skill.is_file():
-                for i, line in enumerate(skill.read_text(encoding="utf-8").splitlines(), 1):
-                    stripped = line.strip()
-                    if stripped.startswith(("--effort", "-e ")) or " --effort " in line:
-                        # a line that TALKS about the flag is fine; a launch
-                        # line that PASSES it is the drift
-                        if stripped.startswith(("--effort", "-e ")) or line.startswith("    "):
-                            err(f"{rel(skill)}:{i}",
-                                f"passes --effort, but data/launch.json says {name} "
-                                f"uses effort mechanism '{mech}' -- "
-                                f"run scripts/leg-cmd.sh to see the correct spelling")
+        # 2. the drift-catcher, rewritten 2026-09-08 after a four-leg review
+        #    demonstrated the first version caught only the ONE shape its
+        #    author had mutation-tested against. Measured slips: `--effort` on
+        #    the column-0 starter line (which is how EVERY launch block in this
+        #    repo starts), `--effort=medium`, `-e high`, tab indents; plus two
+        #    false positives on prose that merely mentions the flag, and total
+        #    exemption for `flag` adapters -- so the wrong-flag-name mistake
+        #    that motivated the whole change was outside its reach.
+        #
+        #    So: parse fenced blocks into logical commands and inspect the
+        #    invocation, instead of pattern-matching lines. Prose cannot false
+        #    positive because prose is not in a fence.
+        for skill in sorted((ROOT / "skills").glob(f"{name}-*/SKILL.md")):
+            role = "implement" if skill.parent.name.endswith("-implement") else "review"
+            for lineno, cmdline in _launch_commands(skill, spec["cli"].split()[0]):
+                _check_effort_spelling(skill, lineno, cmdline, name, role, eff)
+
+
+_EFFORT_TOKEN = re.compile(r"(?:^|\s)(--effort|-e)(?:[=\s]|$)")
+_DEPTH_FLAGS = ("--effort", "-e", "--variant")
+
+
+def _launch_commands(path, cli):
+    """Yield (lineno, joined command) for each launch of `cli` in a fenced block.
+
+    Only fenced blocks: a sentence in prose that mentions a flag is not a
+    launch and must not be flagged. Backslash continuations are joined, so a
+    flag on any physical line of the invocation is seen.
+    """
+    out, in_fence, buf, start = [], False, None, 0
+    for i, raw in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        if raw.lstrip().startswith("```"):
+            in_fence = not in_fence
+            if not in_fence and buf is not None:
+                out.append((start, " ".join(buf))); buf = None
+            continue
+        if not in_fence:
+            continue
+        line = raw.strip()
+        if buf is not None:
+            buf.append(line.rstrip("\\").strip())
+            if not line.endswith("\\"):
+                out.append((start, " ".join(buf))); buf = None
+            continue
+        # a launch starts with the CLI name, or `node .../<cli>` style wrappers
+        if re.match(rf"^(?:\S*/)?{re.escape(cli)}\b", line) or f" {cli} " in f" {line} ":
+            start, buf = i, [line.rstrip("\\").strip()]
+            if not line.endswith("\\"):
+                out.append((start, " ".join(buf))); buf = None
+    if buf is not None:
+        out.append((start, " ".join(buf)))
+    return out
+
+
+def _check_effort_spelling(skill, lineno, cmdline, adapter, role, eff):
+    mech = eff.get("mechanism")
+    has_effort_flag = bool(_EFFORT_TOKEN.search(cmdline))
+
+    if mech in ("model_suffix", "none"):
+        if has_effort_flag:
+            err(f"{rel(skill)}:{lineno}",
+                f"launch passes --effort/-e, but {adapter} uses effort mechanism "
+                f"'{mech}' -- run scripts/leg-cmd.sh for the right spelling")
+    elif mech == "config_only":
+        if has_effort_flag and role == eff.get("applies_to_role", role):
+            err(f"{rel(skill)}:{lineno}",
+                f"launch passes --effort, but {adapter}'s {role} path has no effort "
+                f"flag at all (it reads {eff.get('config_key')} from "
+                f"{eff.get('config_file')})")
+    elif mech == "flag":
+        want = eff.get("flag")
+        # The wrong-flag-name mistake, and it is not "the right knob is
+        # missing" -- a command carrying BOTH its own knob and a neighbouring
+        # family's is just as wrong, and that is the shape a lead produces
+        # when copying between legs. So: any depth flag that is not this
+        # adapter's own is an error, present alongside the right one or not.
+        for other in _DEPTH_FLAGS:
+            if other == want:
+                continue
+            if re.search(rf"(?:^|\s){re.escape(other)}(?:[=\s]|$)", cmdline):
+                err(f"{rel(skill)}:{lineno}",
+                    f"launch passes '{other}', but {adapter}'s depth knob is "
+                    f"'{want}' -- the wrong-flag-name mistake")
+        if want and not re.search(rf"(?:^|\s){re.escape(want)}(?:[=\s]|$)", cmdline):
+            err(f"{rel(skill)}:{lineno}",
+                f"launch omits '{want}'; {adapter} silently takes the provider "
+                f"default without it")
 
 
 # ---- families: the accounting model must match what is on disk ----

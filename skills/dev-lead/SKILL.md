@@ -162,15 +162,25 @@ mistake measured in a single session (2026-09-08).
 
 Run it once per leg at dispatch and paste what it prints.
 
-Two reasons it is a script and not one more paragraph. First, the paragraph
-already existed: each leg skill opens by telling you to read its runtime
-file, and the wrong commands were composed anyway. Second, and this is the
-one prose cannot fix — **the skill text in your context is frozen at whatever
-plugin version was loaded, while a script reads the current file from disk.**
-The same session that produced those five wrong launches had been given an
-old copy of these skills; the corrected text existed in the repo and was not
-what the lead was holding. A launch fact you read out of your context window
-is only as fresh as the copy you were handed.
+Why a script rather than one more paragraph: the paragraph already existed —
+each leg skill opens by telling you to read its runtime file, and the wrong
+commands were composed anyway. A script also reads the current file from disk,
+while **the skill text in your context is frozen at whatever plugin version was
+loaded**; the session that produced those five wrong launches had been handed
+old copies, and the corrected text existed in the repo without being what the
+lead was holding.
+
+> [!warning] This does not close the stale-context hole, and saying otherwise
+> would be the same overclaim twice
+> The instruction to run `leg-cmd.sh` lives in **this file**, which is exactly
+> the thing that gets injected stale. A session given an old copy never learns
+> the script exists and composes from recall as before. Raised by the GPT leg
+> of the review of this very change, and it is right: the script fixes "the
+> lead did not read the runtime file", not "the lead was handed an old one".
+>
+> The channel that IS re-read fresh every session is the operator's own
+> auto-memory, so the four-leg default and the effort spellings live there too.
+> Treat that as the load-bearing copy and this file as the explanation.
 
 **Probe availability first, cheaply.** Each family's runtime file has its
 probe: agy has an AUTH_OK one-liner (stale logs describe past runs; the probe

@@ -74,6 +74,11 @@ elif mech in ("flag",) and not effort:
              % (a, eff["flag"], ", ".join(eff.get("examples", []))))
 elif mech == "none" and effort:
     sys.exit("leg-cmd: %s has no effort concept; --model selects the tier" % a)
+elif mech not in ("model_suffix", "flag", "config_only", "none"):
+    # No silent fall-through: an unrecognised mechanism means the guardrails
+    # above did not run, so the command below is unvalidated. Refuse it.
+    sys.exit("leg-cmd: %s declares unknown effort mechanism %r -- refusing to "
+             "emit an unvalidated command" % (a, mech))
 
 r = spec["role"][role]
 subst = {"{MODEL}": os.environ["MODEL"], "{EFFORT}": effort,
@@ -94,8 +99,29 @@ if missing:
     sys.exit("leg-cmd: missing required value(s): %s (pass --%s)"
              % (", ".join(sorted(missing)), " --".join(sorted(missing))))
 
-cmd = spec["cli"] + " " + " ".join(shlex.quote(t) if " " in t and not t.startswith('"') else t
-                                   for t in argv)
+# A value the caller supplied that this template never consumes is dropped
+# silently, and the caller then believes it took effect. For --target that is a
+# freeze-discipline hole: the emitted command runs in the lead's cwd, not the
+# frozen worktree the lead thinks they pinned.
+template = " ".join(r["argv"])
+for flag, ph in (("target", "{TARGET}"), ("base", "{BASE}"),
+                 ("prompt-file", "{PROMPT_FILE}")):
+    val = os.environ.get(flag.replace("-", "_").upper(), "")
+    if val and ph not in template:
+        sys.exit("leg-cmd: --%s was given but %s/%s has no %s in its template, "
+                 "so it would be silently dropped.\n"
+                 "  this adapter runs in the CALLER's cwd -- cd into the frozen "
+                 "worktree yourself and assert HEAD before launching."
+                 % (flag, a, role, ph))
+
+# Quote EVERYTHING the caller supplied. The output is documented for
+# `eval "$(leg-cmd.sh ...)"`, so a token carrying a backtick, $(), ; or |
+# is executed by the caller -- and quoting only tokens that contain a SPACE
+# lets every one of those through. Measured 2026-09-08 on this very script:
+# `--model 'x`+chr(96)+'id'+chr(96)+'y'` rendered unquoted.
+# The two exceptions are strings this script emits itself and means as shell.
+OURS = ('"$(cat "$RUN_DIR/prompt.md")"',)
+cmd = spec["cli"] + " " + " ".join(t if t in OURS else shlex.quote(t) for t in argv)
 if r["prompt_delivery"] == "stdin":
     cmd += ' < "$RUN_DIR/prompt.md"'
 

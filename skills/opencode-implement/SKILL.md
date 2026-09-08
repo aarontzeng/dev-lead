@@ -76,8 +76,14 @@ checking costs one grep.
 
 cd "$WORKTREE" && opencode run --print-logs --log-level INFO \
   -m opencode/<free-model> \
+  --variant <effort> \
   < "$RUN_DIR/task.md" > "$RUN_DIR/impl.log" 2>&1
 ```
+
+**`--variant` is not optional here either.** Omitting it silently takes the
+provider default -- measured on the review side 2026-09-08, where the default
+returned 8 findings against `xhigh`'s 10 on an identical brief and frozen
+commit. This launch block lacked it until a lint rule caught the omission.
 
 **The task prompt goes on STDIN, not in argv** — an argv prompt over ~1–2 KB
 hangs before the session is created, silently and in every model. See the

@@ -19,7 +19,8 @@
     "  model_suffix -- the effort is part of the model string (agy, cursor)",
     "  flag         -- a dedicated flag (grok --effort, opencode --variant)",
     "  config_only  -- no per-call control at all (codex review path)",
-    "  none         -- the adapter has no effort concept (claude)"
+    "  none         -- the adapter has no effort concept (claude)",
+    "2026-09-08 second pass: a four-leg review found this file disagreed with the repo's own skills in almost every role its author had NOT personally probed -- an invented agy timeout, an agy implement launch with no write mode, an invented cursor --force with --trust dropped, grok missing the three flags that ARE its read-only boundary, claude missing the MCP trim and with the wrong prompt delivery. Every one was transcription from recall, which is the exact failure this file exists to stop, one level up. Hence per-ROLE verified strings: believe the review rows, re-check an implement row against its skill before trusting it."
   ],
   "agy": {
     "cli": "agy",
@@ -36,9 +37,10 @@
           "--add-dir",
           "{TARGET}",
           "--print-timeout",
-          "15m0s"
+          "10m0s"
         ],
-        "prompt_delivery": "argv"
+        "prompt_delivery": "argv",
+        "verified": "2026-09-08 probed live"
       },
       "implement": {
         "argv": [
@@ -46,13 +48,17 @@
           "{PROMPT}",
           "--model",
           "{MODEL}",
+          "--mode",
+          "accept-edits",
           "--sandbox",
           "--add-dir",
           "{TARGET}",
+          "--disable-slash-commands",
           "--print-timeout",
-          "15m0s"
+          "20m0s"
         ],
-        "prompt_delivery": "argv"
+        "prompt_delivery": "argv",
+        "verified": "transcribed from the matching skill; not probed"
       }
     },
     "effort": {
@@ -67,9 +73,10 @@
     "not_flags": [],
     "gotchas": [
       "`--disable-slash-commands` makes `--mode plan` a no-op -- the CLI warns `--mode plan has no effect while slash command expansion is disabled`. Pick one; for a review leg keep plan mode.",
-      "`--add-dir` is mandatory: the headless workspace root is agy's own scratch dir, not your cwd."
+      "`--add-dir` is mandatory: the headless workspace root is agy's own scratch dir, not your cwd.",
+      "The review role DROPS --disable-slash-commands (it makes --mode plan a no-op); the implement role KEEPS it. Do not carry one role's flag set to the other."
     ],
-    "verified": "2026-09-08"
+    "verified": "review probed 2026-09-08; other roles transcribed"
   },
   "codex": {
     "cli": "node \"$(ls -d \"$HOME\"/.claude/plugins/cache/openai-codex/codex/*/scripts/codex-companion.mjs | sort -V | tail -1)\"",
@@ -86,7 +93,8 @@
           "{MODEL}",
           "{PROMPT}"
         ],
-        "prompt_delivery": "argv"
+        "prompt_delivery": "argv",
+        "verified": "2026-09-08 probed live"
       },
       "implement": {
         "argv": [
@@ -98,7 +106,8 @@
           "{EFFORT}",
           "{PROMPT}"
         ],
-        "prompt_delivery": "argv"
+        "prompt_delivery": "argv",
+        "verified": "transcribed from the matching skill; not probed"
       }
     },
     "effort": {
@@ -117,7 +126,7 @@
       "`--help` is not a flag on `adversarial-review`; it is parsed as focus text and runs a real, billed review. Read the script's usage line instead.",
       "Omitting `--base` reviews the working tree, which is clean right after a commit -- it will report nothing to review."
     ],
-    "verified": "2026-09-08"
+    "verified": "review probed 2026-09-08; other roles transcribed"
   },
   "cursor": {
     "cli": "cursor-agent",
@@ -134,19 +143,21 @@
           "json",
           "{PROMPT}"
         ],
-        "prompt_delivery": "argv"
+        "prompt_delivery": "argv",
+        "verified": "2026-09-08 probed live"
       },
       "implement": {
         "argv": [
           "-p",
-          "--force",
+          "--trust",
           "--model",
           "{MODEL}",
           "--output-format",
           "json",
           "{PROMPT}"
         ],
-        "prompt_delivery": "argv"
+        "prompt_delivery": "argv",
+        "verified": "transcribed from the matching skill; not probed"
       }
     },
     "effort": {
@@ -164,9 +175,10 @@
     ],
     "gotchas": [
       "`--mode ask` is the only posture that both refuses writes and returns a report; bare `-p` writes files, `--mode plan` returns empty output headless.",
-      "The pinned model decides the family for cross-family accounting; `auto` and `composer-*` satisfy nothing."
+      "The pinned model decides the family for cross-family accounting; `auto` and `composer-*` satisfy nothing.",
+      "Bare -p IS the write posture; --force/--yolo/--approve-mcps are forbidden on both roles. --trust is required -- without it a fresh worktree prints the trust prompt and exits 0."
     ],
-    "verified": "2026-09-08"
+    "verified": "review probed 2026-09-08; other roles transcribed"
   },
   "opencode": {
     "cli": "opencode",
@@ -182,7 +194,8 @@
           "--variant",
           "{EFFORT}"
         ],
-        "prompt_delivery": "stdin"
+        "prompt_delivery": "stdin",
+        "verified": "2026-09-08 probed live"
       },
       "implement": {
         "argv": [
@@ -195,7 +208,8 @@
           "--variant",
           "{EFFORT}"
         ],
-        "prompt_delivery": "stdin"
+        "prompt_delivery": "stdin",
+        "verified": "transcribed from the matching skill; not probed"
       }
     },
     "effort": {
@@ -214,7 +228,7 @@
       "The prompt goes on STDIN. An argv prompt over ~1-2 KB hangs before the session is created.",
       "`tokens.output=0` is a broken counter, not an empty run -- grep the log for your required section headers before discarding it."
     ],
-    "verified": "2026-09-08"
+    "verified": "review probed 2026-09-08; other roles transcribed"
   },
   "grok": {
     "cli": "grok",
@@ -229,13 +243,22 @@
           "{EFFORT}",
           "--sandbox",
           "read-only",
+          "--tools",
+          "read_file,grep,list_dir",
+          "--disallowed-tools",
+          "Agent",
+          "--deny",
+          "MCPTool(*)",
           "--no-memory",
           "--disable-web-search",
           "--verbatim",
           "--max-turns",
-          "40"
+          "40",
+          "--output-format",
+          "plain"
         ],
-        "prompt_delivery": "prompt_file"
+        "prompt_delivery": "prompt_file",
+        "verified": "transcribed from the matching skill; not probed"
       }
     },
     "effort": {
@@ -249,9 +272,10 @@
     },
     "not_flags": [],
     "gotchas": [
-      "`--no-memory` on every delegate run: this CLI has cross-session memory and a reviewer that remembers last session's premises is contaminated."
+      "`--no-memory` on every delegate run: this CLI has cross-session memory and a reviewer that remembers last session's premises is contaminated.",
+      "--tools + --disallowed-tools Agent + --deny 'MCPTool(*)' ARE the review boundary, not decoration: ~/.grok/config.toml may be permission_mode = always-approve, and --sandbox alone is a no-op on old kernels."
     ],
-    "verified": "unverified -- transcribed from skills/grok-adversarial-review, not re-probed 2026-09-08"
+    "verified": "transcribed from the matching skill; not probed"
   },
   "claude": {
     "cli": "claude",
@@ -262,19 +286,25 @@
           "--permission-mode",
           "plan",
           "--model",
-          "{MODEL}"
+          "{MODEL}",
+          "--strict-mcp-config",
+          "--mcp-config",
+          "{\"mcpServers\":{}}"
         ],
-        "prompt_delivery": "stdin"
+        "prompt_delivery": "stdin",
+        "verified": "transcribed from the matching skill; not probed"
       },
       "implement": {
         "argv": [
           "-p",
+          "{PROMPT}",
           "--permission-mode",
           "acceptEdits",
           "--model",
           "{MODEL}"
         ],
-        "prompt_delivery": "stdin"
+        "prompt_delivery": "argv",
+        "verified": "transcribed from the matching skill; not probed"
       }
     },
     "effort": {
@@ -285,8 +315,9 @@
       "--effort"
     ],
     "gotchas": [
-      "Never the cross-family reviewer for Claude-written work."
+      "Never the cross-family reviewer for Claude-written work.",
+      "Without --strict-mcp-config --mcp-config '{\"mcpServers\":{}}' the delegate loads the full MCP stack and the startup silence reads as a hang."
     ],
-    "verified": "unverified -- transcribed from skills/claude-adversarial-review, not re-probed 2026-09-08"
+    "verified": "transcribed from the matching skill; not probed"
   }
 }
