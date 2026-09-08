@@ -1738,6 +1738,46 @@ def test_await_codex_job(tmp):
           "failed" in body and "cancelled" in body)
 
 
+def test_leg_cmd():
+    """leg-cmd.sh must reject each spelling that was actually got wrong.
+
+    Not hypothetical: every one of these four was composed by a lead in the
+    2026-09-08 session, and each is contradicted by data/launch.json.
+    """
+    script = SCRIPTS / "leg-cmd.sh"
+    check("leg-cmd: script exists", script.is_file())
+    if not script.is_file():
+        return
+
+    cases = [
+        (["agy", "review", "--model", "gemini-3.8-flash-medium",
+          "--effort", "medium", "--target", "/tmp/x"],
+         "MODEL NAME", "agy effort belongs in the model name"),
+        (["codex", "review", "--model", "gpt-5.6-terra",
+          "--base", "abc", "--effort", "medium"],
+         "no effort control", "codex review path has no effort knob"),
+        (["opencode", "review", "--model", "opencode/x"],
+         "needs --effort", "opencode needs --variant"),
+        (["cursor", "review", "--model", "kimi-k3-high", "--effort", "medium"],
+         "MODEL NAME", "cursor effort belongs in the model name"),
+    ]
+    for argv, needle, label in cases:
+        r = subprocess.run([str(script), *argv], capture_output=True, text=True)
+        check(f"leg-cmd: refuses -- {label}", r.returncode != 0,
+              f"accepted {argv}")
+        check(f"leg-cmd: explains why -- {label}", needle in r.stderr,
+              f"stderr={r.stderr!r}")
+
+    r = subprocess.run([str(script), "agy", "review", "--model",
+                        "gemini-3.8-flash-medium", "--target", "/tmp/x"],
+                       capture_output=True, text=True)
+    check("leg-cmd: renders the correct agy spelling", r.returncode == 0, r.stderr)
+    check("leg-cmd: model reaches the command",
+          "--model gemini-3.8-flash-medium" in r.stdout, r.stdout)
+    check("leg-cmd: does not emit a flag the adapter rejects",
+          "--effort" not in r.stdout, r.stdout)
+
+
 def main():
     for script in ("freeze-target.sh", "verify-target.sh", "snapshot-refs.sh",
                    "await-codex-job.sh"):
@@ -1780,6 +1820,7 @@ def main():
 
     print("lint.py check_delegate_audit_trails")
     test_lint_delegate_audit_trails()
+    test_leg_cmd()
 
     print("lint.py check_version")
     with tempfile.TemporaryDirectory() as td:

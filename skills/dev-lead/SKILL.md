@@ -142,6 +142,36 @@ generator that bloats every brief with speculative hardening.
 
 ## Phase 1 — Dispatch
 
+**Compose every launch command with the suite's `leg-cmd.sh`, never from recall.**
+
+```bash
+"$DEV_LEAD/scripts/leg-cmd.sh" <adapter> <role> --model <model> \
+    [--effort <e>] [--target <dir>] [--base <ref>]
+```
+
+(`$DEV_LEAD` is resolved by the same snippet Phase 2 uses for
+`freeze-target.sh` — the suite's scripts never resolve against the target
+repo's cwd.)
+
+It reads [`data/launch.json`](../../data/launch.json), prints the exact command on stdout and the
+adapter's gotchas on stderr, and **refuses the spellings that are actually
+got wrong** — an `--effort` flag for a family that puts effort in the model
+name, an `--effort` for codex's review path which has no effort control at
+all, a missing `--variant` for opencode. Every one of those refusals is a
+mistake measured in a single session (2026-09-08).
+
+Run it once per leg at dispatch and paste what it prints.
+
+Two reasons it is a script and not one more paragraph. First, the paragraph
+already existed: each leg skill opens by telling you to read its runtime
+file, and the wrong commands were composed anyway. Second, and this is the
+one prose cannot fix — **the skill text in your context is frozen at whatever
+plugin version was loaded, while a script reads the current file from disk.**
+The same session that produced those five wrong launches had been given an
+old copy of these skills; the corrected text existed in the repo and was not
+what the lead was holding. A launch fact you read out of your context window
+is only as fresh as the copy you were handed.
+
 **Probe availability first, cheaply.** Each family's runtime file has its
 probe: agy has an AUTH_OK one-liner (stale logs describe past runs; the probe
 is the only current answer); codex has no reliable quota API, so attempt and

@@ -816,6 +816,64 @@ def check_delegate_audit_trails():
             err(rel(path), "--effort/AGY_EFFORT is redundant — the model suffix IS the effort (fad0ef0)")
 
 
+# ---- launch: the prose must not contradict data/launch.json ----
+def check_launch():
+    """Hold the skills' launch prose to the declared launch mechanics.
+
+    Measured 2026-09-08: five wrong launch commands in one session, every one
+    contradicted by a line already in this repo. The lead had been told, in
+    each leg's opening section, to read the runtime file first. Another
+    paragraph does not fix that, so the launch command now comes out of
+    data/launch.json via scripts/leg-cmd.sh -- and this rule keeps the prose
+    from drifting away from that file underneath it.
+    """
+    path = ROOT / "data" / "launch.json"
+    if not path.is_file():
+        err("data/launch.json", "missing (launch mechanics scripts/leg-cmd.sh reads)")
+        return
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as e:
+        err(rel(path), f"invalid JSON: {e}")
+        return
+
+    declared = {k for k in data if not k.startswith("_")}
+
+    # 1. the same adapter set as the accounting model -- a family you can
+    #    dispatch must be a family you can compose a launch command for
+    if declared != set(FAMILIES):
+        err(rel(path), f"adapters {sorted(declared)} != skills on disk {sorted(FAMILIES)}")
+
+    for name in sorted(declared & set(FAMILIES)):
+        spec = data[name]
+        for field in ("cli", "role", "effort", "verified"):
+            if field not in spec:
+                err(rel(path), f"adapter '{name}' has no '{field}'")
+        eff = spec.get("effort", {})
+        mech = eff.get("mechanism")
+        if mech not in ("model_suffix", "flag", "config_only", "none"):
+            err(rel(path), f"adapter '{name}' has unknown effort mechanism {mech!r}")
+        if mech == "flag" and not eff.get("flag"):
+            err(rel(path), f"adapter '{name}' declares a flag mechanism but names no flag")
+
+        # 2. the drift-catcher. An adapter whose effort is NOT a bare --effort
+        #    flag must not show one in a launch block: that spelling is either
+        #    rejected by the CLI or silently ignored, and it is what leads copy.
+        if mech in ("model_suffix", "config_only", "none"):
+            skill = ROOT / "skills" / f"{name}-adversarial-review" / "SKILL.md"
+            if skill.is_file():
+                for i, line in enumerate(skill.read_text(encoding="utf-8").splitlines(), 1):
+                    stripped = line.strip()
+                    if stripped.startswith(("--effort", "-e ")) or " --effort " in line:
+                        # a line that TALKS about the flag is fine; a launch
+                        # line that PASSES it is the drift
+                        if stripped.startswith(("--effort", "-e ")) or line.startswith("    "):
+                            err(f"{rel(skill)}:{i}",
+                                f"passes --effort, but data/launch.json says {name} "
+                                f"uses effort mechanism '{mech}' -- "
+                                f"run scripts/leg-cmd.sh to see the correct spelling")
+
+
 # ---- families: the accounting model must match what is on disk ----
 def check_families():
     path = ROOT / "data" / "families.json"
@@ -886,7 +944,7 @@ def main():
                   check_tracked, check_helper_args, check_sentinels, check_frozen_target,
                   check_delegate_guardrails,
                   check_delegate_audit_trails,
-                  check_families):
+                  check_families, check_launch):
         check()
     if NOTES:
         # Before the verdict, not after: a note that scrolls past the word

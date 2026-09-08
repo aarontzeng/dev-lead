@@ -1,0 +1,292 @@
+{
+  "_comment": [
+    "Launch mechanics per adapter, machine-readable so scripts/leg-cmd.sh can",
+    "emit an exact command and scripts/lint.py can hold the prose to it.",
+    "",
+    "Why this file exists: every launch fact in it was already documented in",
+    "some SKILL.md or references/*-runtime.md, and leads kept composing launch",
+    "commands from memory anyway -- measured 2026-09-08, five wrong launches in",
+    "one session, every one of them contradicted by a line already in the repo.",
+    "Another paragraph telling the lead to read the runtime file does not fix",
+    "that; the lead had already been told, in each leg's opening section.",
+    "So: the command comes out of a script, not out of recall.",
+    "",
+    "Like data/families.json this file DECLARES. It generates no documentation.",
+    "The lint rule only checks that the prose does not CONTRADICT it.",
+    "",
+    "effort.mechanism is the field that keeps being got wrong, because all four",
+    "commonly-used adapters spell it differently:",
+    "  model_suffix -- the effort is part of the model string (agy, cursor)",
+    "  flag         -- a dedicated flag (grok --effort, opencode --variant)",
+    "  config_only  -- no per-call control at all (codex review path)",
+    "  none         -- the adapter has no effort concept (claude)"
+  ],
+  "agy": {
+    "cli": "agy",
+    "role": {
+      "review": {
+        "argv": [
+          "-p",
+          "{PROMPT}",
+          "--model",
+          "{MODEL}",
+          "--mode",
+          "plan",
+          "--sandbox",
+          "--add-dir",
+          "{TARGET}",
+          "--print-timeout",
+          "15m0s"
+        ],
+        "prompt_delivery": "argv"
+      },
+      "implement": {
+        "argv": [
+          "-p",
+          "{PROMPT}",
+          "--model",
+          "{MODEL}",
+          "--sandbox",
+          "--add-dir",
+          "{TARGET}",
+          "--print-timeout",
+          "15m0s"
+        ],
+        "prompt_delivery": "argv"
+      }
+    },
+    "effort": {
+      "mechanism": "model_suffix",
+      "examples": [
+        "gemini-3.8-flash-medium",
+        "gemini-3.8-flash-high",
+        "gemini-3.8-flash-low"
+      ],
+      "note": "A bare tier name is REJECTED: `--model gemini-3.8-flash` errors with `requires --effort (available: low, medium, high)`. `--model gemini-3.8-flash --effort medium` also works, but the suffixed form is self-contained and cannot disagree with a flag. Verified 2026-09-08 by running all three spellings."
+    },
+    "not_flags": [],
+    "gotchas": [
+      "`--disable-slash-commands` makes `--mode plan` a no-op -- the CLI warns `--mode plan has no effect while slash command expansion is disabled`. Pick one; for a review leg keep plan mode.",
+      "`--add-dir` is mandatory: the headless workspace root is agy's own scratch dir, not your cwd."
+    ],
+    "verified": "2026-09-08"
+  },
+  "codex": {
+    "cli": "node \"$(ls -d \"$HOME\"/.claude/plugins/cache/openai-codex/codex/*/scripts/codex-companion.mjs | sort -V | tail -1)\"",
+    "role": {
+      "review": {
+        "argv": [
+          "adversarial-review",
+          "--wait",
+          "--base",
+          "{BASE}",
+          "--scope",
+          "branch",
+          "--model",
+          "{MODEL}",
+          "{PROMPT}"
+        ],
+        "prompt_delivery": "argv"
+      },
+      "implement": {
+        "argv": [
+          "task",
+          "--background",
+          "--model",
+          "{MODEL}",
+          "--effort",
+          "{EFFORT}",
+          "{PROMPT}"
+        ],
+        "prompt_delivery": "argv"
+      }
+    },
+    "effort": {
+      "mechanism": "config_only",
+      "applies_to_role": "review",
+      "config_key": "model_reasoning_effort",
+      "config_file": "~/.codex/config.toml",
+      "note": "The review path has NO effort flag. Source of truth: codex-companion.mjs `handleReviewCommand` parses valueOptions [\"base\",\"scope\",\"model\",\"cwd\"]; only `handleTask` parses `effort`. So a review leg's depth is whatever the config file says at launch time -- read it and report the value, do not assert one. To make it explicit instead of inherited, bypass the companion with `codex exec -c model_reasoning_effort=<x>`, at the cost of the companion's job tracking and read-only sandbox. Verified 2026-09-08 by reading the script.",
+      "implement_note": "The `task` role DOES take `--effort` (none|minimal|low|medium|high|xhigh)."
+    },
+    "not_flags": [
+      "--help",
+      "--effort"
+    ],
+    "gotchas": [
+      "`--help` is not a flag on `adversarial-review`; it is parsed as focus text and runs a real, billed review. Read the script's usage line instead.",
+      "Omitting `--base` reviews the working tree, which is clean right after a commit -- it will report nothing to review."
+    ],
+    "verified": "2026-09-08"
+  },
+  "cursor": {
+    "cli": "cursor-agent",
+    "role": {
+      "review": {
+        "argv": [
+          "-p",
+          "--mode",
+          "ask",
+          "--trust",
+          "--model",
+          "{MODEL}",
+          "--output-format",
+          "json",
+          "{PROMPT}"
+        ],
+        "prompt_delivery": "argv"
+      },
+      "implement": {
+        "argv": [
+          "-p",
+          "--force",
+          "--model",
+          "{MODEL}",
+          "--output-format",
+          "json",
+          "{PROMPT}"
+        ],
+        "prompt_delivery": "argv"
+      }
+    },
+    "effort": {
+      "mechanism": "model_suffix",
+      "examples": [
+        "cursor-grok-4.6-medium",
+        "cursor-grok-4.6-high",
+        "cursor-grok-4.6-xhigh",
+        "kimi-k3-high"
+      ],
+      "note": "Effort is part of the model id; there is no effort flag. Two separate quota pools: the grok tier has low/medium/high/xhigh (each with a `-fast` twin), while `kimi-k3` has only low/high/max -- there is NO kimi medium. Verified 2026-09-08 via `cursor-agent models`."
+    },
+    "not_flags": [
+      "--effort"
+    ],
+    "gotchas": [
+      "`--mode ask` is the only posture that both refuses writes and returns a report; bare `-p` writes files, `--mode plan` returns empty output headless.",
+      "The pinned model decides the family for cross-family accounting; `auto` and `composer-*` satisfy nothing."
+    ],
+    "verified": "2026-09-08"
+  },
+  "opencode": {
+    "cli": "opencode",
+    "role": {
+      "review": {
+        "argv": [
+          "run",
+          "--print-logs",
+          "--log-level",
+          "INFO",
+          "-m",
+          "{MODEL}",
+          "--variant",
+          "{EFFORT}"
+        ],
+        "prompt_delivery": "stdin"
+      },
+      "implement": {
+        "argv": [
+          "run",
+          "--print-logs",
+          "--log-level",
+          "INFO",
+          "-m",
+          "{MODEL}",
+          "--variant",
+          "{EFFORT}"
+        ],
+        "prompt_delivery": "stdin"
+      }
+    },
+    "effort": {
+      "mechanism": "flag",
+      "flag": "--variant",
+      "examples": [
+        "xhigh",
+        "high",
+        "max",
+        "minimal"
+      ],
+      "note": "Values are the provider's, not a fixed set. There is NO reasoningEffort key in opencode.json -- a lead who looks for one silently gets the provider default. `--help` lists `--variant` but it sits below the point a truncated read stops at; that is exactly how it was missed on 2026-09-08. Measured the same day: on an identical brief and frozen commit, xhigh returned 10 findings against the default's 8, including the round's only remote crash."
+    },
+    "not_flags": [],
+    "gotchas": [
+      "The prompt goes on STDIN. An argv prompt over ~1-2 KB hangs before the session is created.",
+      "`tokens.output=0` is a broken counter, not an empty run -- grep the log for your required section headers before discarding it."
+    ],
+    "verified": "2026-09-08"
+  },
+  "grok": {
+    "cli": "grok",
+    "role": {
+      "review": {
+        "argv": [
+          "--prompt-file",
+          "{PROMPT_FILE}",
+          "-m",
+          "{MODEL}",
+          "--effort",
+          "{EFFORT}",
+          "--sandbox",
+          "read-only",
+          "--no-memory",
+          "--disable-web-search",
+          "--verbatim",
+          "--max-turns",
+          "40"
+        ],
+        "prompt_delivery": "prompt_file"
+      }
+    },
+    "effort": {
+      "mechanism": "flag",
+      "flag": "--effort",
+      "examples": [
+        "high",
+        "max"
+      ],
+      "note": "Accepts none..max in principle, but the levels are per-model menus and which ones grok-4.6 advertises is UNVERIFIED. Confirm against the model before relying on a specific level."
+    },
+    "not_flags": [],
+    "gotchas": [
+      "`--no-memory` on every delegate run: this CLI has cross-session memory and a reviewer that remembers last session's premises is contaminated."
+    ],
+    "verified": "unverified -- transcribed from skills/grok-adversarial-review, not re-probed 2026-09-08"
+  },
+  "claude": {
+    "cli": "claude",
+    "role": {
+      "review": {
+        "argv": [
+          "-p",
+          "--permission-mode",
+          "plan",
+          "--model",
+          "{MODEL}"
+        ],
+        "prompt_delivery": "stdin"
+      },
+      "implement": {
+        "argv": [
+          "-p",
+          "--permission-mode",
+          "acceptEdits",
+          "--model",
+          "{MODEL}"
+        ],
+        "prompt_delivery": "stdin"
+      }
+    },
+    "effort": {
+      "mechanism": "none",
+      "note": "No effort concept; `--model` selects the tier and that is the whole depth control."
+    },
+    "not_flags": [
+      "--effort"
+    ],
+    "gotchas": [
+      "Never the cross-family reviewer for Claude-written work."
+    ],
+    "verified": "unverified -- transcribed from skills/claude-adversarial-review, not re-probed 2026-09-08"
+  }
+}
