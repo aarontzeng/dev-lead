@@ -163,6 +163,40 @@ actionable" are calibration data. Verify every finding before you count it.
   of their claims to spend verification time on, and "the blocking half rested
   on the part it flagged as unchecked" is a pattern you will see again.
 
+- **Never mutation-test a check with the mutant you designed it around.** The
+  mutation exists to answer "does this catch the CLASS", and a mutant drawn
+  from the same mental model as the check answers only "does it catch the one
+  I was picturing". Measured 2026-09-08 on a lint rule written to catch a
+  wrong effort flag in a launch block: its author mutated a four-space-indented
+  `--effort high` continuation, watched it turn red, and shipped. A free-pool
+  leg then produced three one-line variants — the flag on the column-0 starter
+  line, `--effort=medium`, `-e high` — every one of which sailed through, and
+  named the reason the author could not see: **every launch block in that repo
+  starts at column 0 and only continuations are indented, so the mutant he
+  chose was the one shape that could not occur naturally.** The rewrite was
+  re-mutated against eight shapes drawn from the leg's list rather than the
+  author's imagination, and it immediately found a live defect nobody had
+  noticed. Rule: enumerate the mutants from the artifact's real shapes — grep
+  what the files actually look like — or have another model enumerate them.
+- **A guardrail nobody adversarially reviews is a guardrail that reports
+  success.** The same release: a script written to stop launch commands being
+  composed from recall was itself composed from recall, and disagreed with its
+  own repo's documentation in nearly every role its author had not personally
+  probed. Reviewing your own guardrail is the case where lead-self-review is
+  worth least — the blind spot that produced the tool produced its checks too.
+  Send the guardrail out cross-family, and brief one leg specifically to ask
+  where the check does nothing.
+- **A brief that demands evidence while forbidding the means to gather it gets
+  a refusal, and the refusal is correct.** Measured 2026-09-08, third
+  brief-authoring error of the same day: the shared header promised an embedded
+  diff, the lead stripped it to fit two legs' argv budgets, and left the header
+  and its `file:line` evidence gate intact alongside a blanket "no other CLI
+  invocation". The GPT leg returned nothing and explained why. **"Read-only"
+  and "do not read" are different instructions and the prose must separate
+  them**: reading files, `git show`, `wc -l` are the leg's job; only writes and
+  recursive delegation are forbidden. Check the evidence gate against the tools
+  you allowed before dispatch, not after a wasted launch.
+
 - **A round that finishes after you vote is not a review; it is a ticket.**
   Findings only change a merge decision while the decision is open. Measured
   2026-09-08: the lead approved a patchset, dispatched a three-leg round on it
