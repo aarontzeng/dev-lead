@@ -4,44 +4,97 @@
 
 **Cross-model delegation & adversarial review for CLI coding agents**
 
-[![lint](https://github.com/aarontzeng/dev-lead/actions/workflows/ci.yml/badge.svg)](https://github.com/aarontzeng/dev-lead/actions/workflows/ci.yml)
+[![ci](https://github.com/aarontzeng/dev-lead/actions/workflows/ci.yml/badge.svg)](https://github.com/aarontzeng/dev-lead/actions/workflows/ci.yml)
+[![release](https://img.shields.io/github/v/tag/aarontzeng/dev-lead?label=release&color=2563eb)](https://github.com/aarontzeng/dev-lead/releases)
+[![skills](https://img.shields.io/badge/skills-13-8A2BE2)](#whats-in-the-box)
+[![adapters](https://img.shields.io/badge/adapters-6-0d9488)](#whats-in-the-box)
+[![Claude Code plugin](https://img.shields.io/badge/Claude_Code-plugin-d97706)](#install)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![skills](https://img.shields.io/badge/skills-9-8A2BE2)](#whats-in-the-box)
 
 One agent leads. Others implement. **No change ever merges reviewed only by
-its own model family.**
+its own model family** — and nothing a delegate says about its own work is
+taken on trust.
 
 </div>
 
 ---
 
 ```mermaid
-flowchart TD
-    LEAD["🎛 dev-lead — orchestration<br/>dispatch · bounded rounds · independent verification · human merge gate"]
-    C["claude<br/>· implement<br/>· adv-review"]
-    X["codex<br/>· implement<br/>· adv-review"]
-    A["agy<br/>· implement<br/>· adv-review"]
-    O["opencode<br/>· implement<br/>· adv-review"]
-    G["grok<br/>· implement<br/>· adv-review"]
-    U["cursor<br/>· implement<br/>· adv-review"]
-    LEAD --> C
-    LEAD --> X
-    LEAD --> A
-    LEAD --> O
-    LEAD --> G
-    LEAD --> U
+%%{init: {"theme": "base", "themeVariables": {"fontFamily": "ui-sans-serif, system-ui, sans-serif", "fontSize": "16px", "primaryTextColor": "#1f2937", "lineColor": "#64748b", "clusterBkg": "#f8fafc", "clusterBorder": "#cbd5e1"}, "flowchart": {"nodeSpacing": 40, "rankSpacing": 60, "padding": 12}}}%%
+flowchart TB
+    LEAD["🎛️ <b>dev-lead — the lead</b><br/>intake · dispatch · bounded rounds<br/>verifies everything itself · holds the merge gate"]
+
+    subgraph ONE["Single-family adapters — the CLI is the family"]
+        direction LR
+        C["<b>claude</b><br/>implement · adv-review<br/><i>Claude</i>"]
+        X["<b>codex</b><br/>implement · adv-review<br/><i>GPT</i>"]
+        G["<b>grok</b><br/>implement · adv-review<br/><i>Grok</i>"]
+    end
+
+    subgraph MANY["Multi-family adapters — the pinned model decides the family"]
+        direction LR
+        A["<b>agy</b><br/>implement · adv-review<br/><i>Gemini · Claude</i>"]
+        U["<b>cursor</b><br/>implement · adv-review<br/><i>GPT · Claude · Grok · Kimi</i>"]
+        O["<b>opencode</b><br/>implement · adv-review<br/><i>free pool: DeepSeek · Nemotron · …</i>"]
+    end
+
+    LEAD --> ONE
+    LEAD --> MANY
+
+    classDef lead fill:#fef3c7,stroke:#d97706,stroke-width:3px,color:#78350f
+    classDef claude fill:#fde8d8,stroke:#ea580c,stroke-width:2px,color:#7c2d12
+    classDef gpt fill:#dcfce7,stroke:#16a34a,stroke-width:2px,color:#14532d
+    classDef grok fill:#e5e7eb,stroke:#374151,stroke-width:2px,color:#111827
+    classDef gemini fill:#dbeafe,stroke:#2563eb,stroke-width:2px,color:#1e3a8a
+    classDef multi fill:#ede9fe,stroke:#7c3aed,stroke-width:2px,color:#4c1d95
+    classDef free fill:#ccfbf1,stroke:#0d9488,stroke-width:2px,color:#134e4a
+    class LEAD lead
+    class C claude
+    class X gpt
+    class G grok
+    class A gemini
+    class U multi
+    class O free
 ```
 
 > [!IMPORTANT]
-> **Adapters are not families.** The six columns are *runtime adapters* —
+> **Adapters are not families.** The six boxes are *runtime adapters* —
 > which CLI you drive. The cross-family rule is accounted in *model
 > families* — whose training produced the output — and one adapter can serve
-> several: agy exposes both Gemini and Claude pools; opencode serves
-> DeepSeek, Nemotron, and stealth models whose family is undisclosed. Every
-> dispatch records the **adapter**, the **model actually served** (some
-> adapters silently substitute — the runtime files show how to verify), and
-> that model's **family**. The family column is the one the review rule
-> reads.
+> several: agy exposes both Gemini and Claude pools; cursor pins whichever
+> model you name; opencode serves DeepSeek, Nemotron, and stealth models
+> whose family is undisclosed. Every dispatch records the **adapter**, the
+> **model actually served** (some adapters silently substitute — the runtime
+> files show how to verify), and that model's **family**. The family column
+> is the one the review rule reads; [`data/families.json`](data/families.json)
+> is the machine-readable version the linter checks the docs against.
+
+## In one minute
+
+```bash
+claude plugin marketplace add aarontzeng/dev-lead
+claude plugin install dev-lead@dev-lead
+```
+
+Then, inside Claude Code, hand the lead a bounded task and say who does what:
+
+```text
+/dev-lead Implement the settings-page consolidation (roadmap item A).
+          Delegate to codex gpt-5.6-terra; review with agy and opencode.
+```
+
+What happens next is the diagram below: the lead premise-checks the task
+against the code, pins a base commit, dispatches into an isolated worktree,
+re-runs the suite itself, watches every new regression test fail before it
+passes, sends the frozen diff to reviewers from *other* families with
+*different* briefs, verifies each finding against the code, and stops at the
+merge gate — which is yours.
+
+| Measured, not asserted | |
+|---|---|
+| **≈0 % overlap** | between the principal findings of parallel reviewers given *different briefs* (sequences / challenge / consistency / staleness) — extra legs pay only when the brief changes |
+| **1 → 17 routes** | what one demand — "give the exact command and how many results it returned" — did to a single leg's enumeration on the same question |
+| **3 readers missed, 1 executor found** | a cross-tenant leak that three reading legs (two of them frontier models) passed and the one executing leg reproduced in one round |
 
 ## Why
 
@@ -60,13 +113,29 @@ cross-family rule structural:
 ## How a run flows
 
 ```mermaid
+%%{init: {"theme": "base", "themeVariables": {"fontFamily": "ui-sans-serif, system-ui, sans-serif", "fontSize": "14px", "primaryTextColor": "#1f2937", "lineColor": "#64748b"}}}%%
 flowchart LR
-    A["Task"] --> B["<b>Phase 0</b><br/>Intake<br/><i>premise-check<br/>risk class</i>"]
+    A["📋 Task"] --> B["<b>Phase 0</b><br/>Intake<br/><i>premise-check<br/>risk class</i>"]
     B --> C["<b>Phase 1</b><br/>Dispatch<br/><i>pinned BASE<br/>isolated worktree</i>"]
     C --> D["<b>Phase 2</b><br/>Rounds, 3 max<br/><i>implement → lead verifies<br/>→ cross-family review</i>"]
     D --> E["<b>Phase 3</b><br/>Merge gate<br/><i>human approves the diff</i>"]
-    E --> F[["<b>Push</b><br/><i>human only</i>"]]
-    D -.->|"stop condition"| G["<b>Report and hold</b><br/><i>worktree preserved<br/>no merge</i>"]
+    E --> F[["🚀 <b>Push</b><br/><i>human only</i>"]]
+    D -.->|"stop condition"| G["🛑 <b>Report and hold</b><br/><i>worktree preserved<br/>no merge</i>"]
+
+    classDef task fill:#f1f5f9,stroke:#64748b,stroke-width:2px,color:#1f2937
+    classDef intake fill:#dbeafe,stroke:#2563eb,stroke-width:2px,color:#1e3a8a
+    classDef dispatch fill:#ccfbf1,stroke:#0d9488,stroke-width:2px,color:#134e4a
+    classDef rounds fill:#fef3c7,stroke:#d97706,stroke-width:2px,color:#78350f
+    classDef gate fill:#ede9fe,stroke:#7c3aed,stroke-width:2px,color:#4c1d95
+    classDef push fill:#dcfce7,stroke:#16a34a,stroke-width:2.5px,color:#14532d
+    classDef hold fill:#ffe4e6,stroke:#e11d48,stroke-width:2px,color:#881337
+    class A task
+    class B intake
+    class C dispatch
+    class D rounds
+    class E gate
+    class F push
+    class G hold
 ```
 
 Each arrow hides a gate that has to be *earned* — a premise checked against
@@ -87,7 +156,7 @@ one of them only by accident).
 | `agy-implement` / `agy-adversarial-review` | Google Antigravity CLI (Gemini + a separate Claude pool) |
 | `opencode-implement` / `opencode-adversarial-review` | OpenCode's free pool (DeepSeek, Nemotron, …) — zero quota cost |
 | `grok-implement` / `grok-adversarial-review` | xAI's Grok Build CLI — a paid pool, tier peer of codex/agy, and a sixth accounting family (integrated 2026-08-13; no field-proven round yet) |
-| `cursor-implement` / `cursor-adversarial-review` | Cursor's CLI (`cursor-agent`) — one paid adapter serving GPT, Claude, Grok, Kimi, Composer, and auto; the pinned model decides the family (integrated 2026-08-13, postures live-probed) |
+| `cursor-implement` / `cursor-adversarial-review` | Cursor's CLI (`cursor-agent`) — one paid adapter serving GPT, Claude, Grok, Kimi, Composer, and auto; the pinned model decides the family (integrated 2026-08-13; field-proven as a standing review leg since 2026-09) |
 
 Each family also carries a **runtime reference**
 (`skills/<family>-adversarial-review/references/<family>-runtime.md`) holding
