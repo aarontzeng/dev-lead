@@ -114,29 +114,42 @@ cross-family rule structural:
 ## How a run flows
 
 ```mermaid
-%%{init: {"theme": "base", "themeVariables": {"fontFamily": "ui-sans-serif, system-ui, sans-serif", "fontSize": "14px", "primaryTextColor": "#1f2937", "lineColor": "#64748b"}}}%%
-flowchart LR
-    A["📋 Task"] --> B["<b>Phase 0</b><br/>Intake<br/><i>premise-check<br/>risk class</i>"]
-    B --> C["<b>Phase 1</b><br/>Dispatch<br/><i>pinned BASE<br/>isolated worktree</i>"]
-    C --> D["<b>Phase 2</b><br/>Rounds, 3 max<br/><i>implement → lead verifies<br/>→ cross-family review</i>"]
-    D --> E["<b>Phase 3</b><br/>Merge gate<br/><i>a person approves<br/>the verdict + diff</i>"]
-    E --> F[["🚀 <b>Merge & push</b><br/><i>the lead, then reports the ref</i>"]]
-    D -.->|"stop condition"| G["🛑 <b>Report and hold</b><br/><i>worktree preserved<br/>no merge</i>"]
+%%{init: {"theme": "base", "themeVariables": {"fontFamily": "ui-sans-serif, system-ui, sans-serif", "fontSize": "16px", "primaryTextColor": "#1f2937", "lineColor": "#64748b", "clusterBkg": "#f8fafc", "clusterBorder": "#cbd5e1"}, "flowchart": {"nodeSpacing": 48, "rankSpacing": 56, "padding": 14, "htmlLabels": true}}}%%
+flowchart TB
+    subgraph RUN["One run — each arrow is a gate the work has to earn"]
+        direction LR
+        T["📋 <b>Task</b>"]
+        P0["<b>Phase 0 · Intake</b><br/>premise-check against the code<br/>risk class decides who implements"]
+        P1["<b>Phase 1 · Dispatch</b><br/>BASE pinned to a SHA<br/>delegate in an isolated worktree"]
+        P2["<b>Phase 2 · Rounds, 3 at most</b><br/>delegate implements → lead re-runs the suite,<br/>mutation-proofs new tests → cross-family review<br/>→ verified findings quoted back as the next round"]
+        T --> P0 --> P1 --> P2
+    end
+
+    subgraph END["How a run ends"]
+        direction LR
+        M["<b>Phase 3 · Merge gate</b><br/>verdict + diff presented<br/>a person approves the result"]
+        F[["🚀 <b>Merge & push</b><br/>the lead, in the same run<br/>then reports the ref"]]
+        H["🛑 <b>Report and hold</b><br/>round cap, fix churn, or a survivor<br/>worktree preserved — no merge"]
+        M --> F
+    end
+
+    P2 -->|"no verified blocking findings"| M
+    P2 -.->|"a stop condition fired"| H
 
     classDef task fill:#f1f5f9,stroke:#64748b,stroke-width:2px,color:#1f2937
     classDef intake fill:#dbeafe,stroke:#2563eb,stroke-width:2px,color:#1e3a8a
     classDef dispatch fill:#ccfbf1,stroke:#0d9488,stroke-width:2px,color:#134e4a
-    classDef rounds fill:#fef3c7,stroke:#d97706,stroke-width:2px,color:#78350f
+    classDef rounds fill:#fef3c7,stroke:#d97706,stroke-width:2.5px,color:#78350f
     classDef gate fill:#ede9fe,stroke:#7c3aed,stroke-width:2px,color:#4c1d95
     classDef push fill:#dcfce7,stroke:#16a34a,stroke-width:2.5px,color:#14532d
     classDef hold fill:#ffe4e6,stroke:#e11d48,stroke-width:2px,color:#881337
-    class A task
-    class B intake
-    class C dispatch
-    class D rounds
-    class E gate
+    class T task
+    class P0 intake
+    class P1 dispatch
+    class P2 rounds
+    class M gate
     class F push
-    class G hold
+    class H hold
 ```
 
 Each arrow hides a gate that has to be *earned* — a premise checked against
