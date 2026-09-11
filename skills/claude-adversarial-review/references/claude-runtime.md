@@ -146,5 +146,6 @@ The pieces you still own, which `claude -p` does not give you:
    non-Claude family, never by another Claude context, and not by a
    stealth model whose family might be Claude.
 4. **Patience calibrated to the work** (see above).
-5. **The merge gate stays human.** Present the diff and verified findings;
-   merge only on explicit approval; never push.
+5. **A person approves the result; the lead lands it.** Present the diff and
+   verified findings; merge and push only on explicit approval, then report
+   the ref. The delegate itself never pushes.

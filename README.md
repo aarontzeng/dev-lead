@@ -88,7 +88,8 @@ against the code, pins a base commit, dispatches into an isolated worktree,
 re-runs the suite itself, watches every new regression test fail before it
 passes, sends the frozen diff to reviewers from *other* families with
 *different* briefs, verifies each finding against the code, and stops at the
-merge gate — which is yours.
+merge gate: you approve the verdict and the diff, the lead merges, pushes,
+and reports the resulting ref.
 
 | Measured, not asserted | |
 |---|---|
@@ -108,7 +109,7 @@ cross-family rule structural:
 | 🚫 **No self-family review** | GPT implemented → Gemini, Claude, or a named free-pool model reviews. HIGH-risk work takes **two** reviewers from two other families |
 | 🔒 **Machine-enforced boundaries** | Read-only permission configs, sandboxes, and allow-lists — not "please don't edit anything" |
 | 🧪 **Nothing trusted on self-report** | The lead re-runs tests itself, mutation-proofs every new regression test, and verifies every review finding before acting |
-| 🙋 **The merge gate is human** | Agents commit locally; pushing is always a person's decision |
+| 🙋 **A person approves the result; the lead lands it** | The verdict and the diff get a human yes — then merging and pushing are the lead's to do, in that run, without a second ask. Delegates never push |
 
 ## How a run flows
 
@@ -118,8 +119,8 @@ flowchart LR
     A["📋 Task"] --> B["<b>Phase 0</b><br/>Intake<br/><i>premise-check<br/>risk class</i>"]
     B --> C["<b>Phase 1</b><br/>Dispatch<br/><i>pinned BASE<br/>isolated worktree</i>"]
     C --> D["<b>Phase 2</b><br/>Rounds, 3 max<br/><i>implement → lead verifies<br/>→ cross-family review</i>"]
-    D --> E["<b>Phase 3</b><br/>Merge gate<br/><i>human approves the diff</i>"]
-    E --> F[["🚀 <b>Push</b><br/><i>human only</i>"]]
+    D --> E["<b>Phase 3</b><br/>Merge gate<br/><i>a person approves<br/>the verdict + diff</i>"]
+    E --> F[["🚀 <b>Merge & push</b><br/><i>the lead, then reports the ref</i>"]]
     D -.->|"stop condition"| G["🛑 <b>Report and hold</b><br/><i>worktree preserved<br/>no merge</i>"]
 
     classDef task fill:#f1f5f9,stroke:#64748b,stroke-width:2px,color:#1f2937
@@ -253,7 +254,10 @@ mean anything. Each family's runtime reference lists its one-time setup
 (permission allow-lists, config schemas). The suite assumes two standing
 rules — adopt them in your own agent instructions if you don't have them:
 
-- **Push is human-only.** Agents commit locally and report the hash.
+- **Delegates never push.** They commit locally and report the hash; the
+  lead pushes only after a person has approved the result, and only to the
+  ref your project's contract names (a review ref, a topic branch, or the
+  target branch where that is allowed).
 - **No AI-authorship trailers** in commit messages (adjust to your team's
   policy).
 

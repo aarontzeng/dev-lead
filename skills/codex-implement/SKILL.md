@@ -204,7 +204,8 @@ gate. High-risk changes take two non-GPT families.
 Verify each finding against code or an executable reproduction. Report the
 verified findings, rejected false positives, test results, exact base SHA,
 and the complete diff scope to the user. Only after the user explicitly
-approves may you fast-forward merge and remove the worktree. Never push.
+approves may you fast-forward merge, push to the ref the project's contract
+names, and remove the worktree; report the ref. The delegate never pushes.
 
 ## Resuming a run that was CUT OFF, not one that was wrong
 

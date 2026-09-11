@@ -26,9 +26,9 @@ flowchart TD
         R5 -->|"yes, and rounds remain"| R1
     end
 
-    R5 -->|"none"| M["<b>Phase 3 · Merge gate</b><br/>verdict assembled from the run log<br/>re-verify branch IDENTITY, not just cleanliness<br/>fast-forward on explicit approval, then tear down"]
+    R5 -->|"none"| M["<b>Phase 3 · Merge gate</b><br/>verdict assembled from the run log<br/>re-verify branch IDENTITY, not just cleanliness<br/>fast-forward on explicit approval, push, then tear down"]
     R5 -->|"a stop condition fired"| S["<b>Report and hold</b><br/>worktree preserved, findings history presented<br/>no merge — the human decides"]
-    M --> P[["<b>Push — human only.</b><br/>The lead prints the command and stops.<br/>Every mode, no exceptions."]]
+    M --> P[["<b>Push — the lead, after the approval.</b><br/>To the ref the project's contract names; reports it at once.<br/>Delegates never push, in any mode."]]
 ```
 
 Two edges in that diagram carry most of the argument:
@@ -88,7 +88,8 @@ sequenceDiagram
         L->>U: verdict + diff stat against $BASE
         U->>L: explicit approval
         L->>W: fast-forward merge, tear down worktree
-        L->>U: prints the push command — the human runs it
+        L->>W: push to the ref the contract names
+        L->>U: reports the ref / change / PR
     end
 ```
 

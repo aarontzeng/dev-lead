@@ -149,9 +149,9 @@ The same lead sequence as every implement skill, none of it optional:
    makes cross-family UNVERIFIABLE — so when family accounting matters,
    either implement with a named model in the first place or take two
    reviewers from two different KNOWN families.
-6. Merge gate: user sees the diff and verified findings; fast-forward and
-   tear down (including the untracked `opencode.json`) only on explicit
-   approval. Push stays human-only, always.
+6. Merge gate: user sees the diff and verified findings; fast-forward, push
+   and tear down (including the untracked `opencode.json`) only on explicit
+   approval, then report the ref. The delegate never pushes.
 
 The fix-round loop (findings quoted verbatim, same worktree, new commit,
 re-verify including new mutations) is `dev-lead` Phase 2 — this skill adds

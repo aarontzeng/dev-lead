@@ -339,12 +339,17 @@ Stop and report (instead of looping) when:
 - the same finding *category* keeps reopening against approximation-shaped
   code (fix the property's boundary, not the code — §5).
 
-## 9. The human merge gate
+## 9. A person approves the result; the lead lands it
 
 The lead assembles a verdict from the run log — rounds, findings and their
-fates, test results, diff stat against `$BASE` — and presents it. Merge
-happens on explicit approval; push is human-only in every mode, with no
-exceptions. Re-verify the target branch's *identity* at the gate, not just
+fates, test results, diff stat against `$BASE` — and presents it. What the
+human approves is that result: the verdict and the diff. Once approved,
+merging and pushing are the lead's to do in the same run, without a second
+ask (changed 2026-09-11 — the per-push question had been answered yes every
+time and protected nothing the verdict did not); the lead pushes only to the
+ref the project's contract names and reports it at once. Delegates never
+push, in every mode — that is a machine-enforced boundary per adapter, not
+a courtesy. Re-verify the target branch's *identity* at the gate, not just
 its cleanliness: humans rebase main checkouts mid-round, merged commits come
 back with new SHAs, and `--ff-only` refusing is the guard working — never
 switch to `--no-ff` to get past it.

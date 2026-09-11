@@ -89,8 +89,9 @@ The same lead sequence as every implement skill, none of it optional:
 4. **Cross-family adversarial review** — Claude implemented, so the reviewer
    is GPT, Gemini, or a named free-pool model. Never another Claude context,
    and not a stealth model whose family might be Claude.
-5. Merge gate: user sees the diff and verified findings; fast-forward and
-   tear down only on explicit approval. Push stays human-only, always.
+5. Merge gate: user sees the diff and verified findings; fast-forward, push
+   and tear down only on explicit approval, then report the ref. The
+   delegate never pushes.
 
 The fix-round loop (findings quoted verbatim, same worktree, new commit,
 re-verify) is `dev-lead` Phase 2 — this skill adds nothing to it.

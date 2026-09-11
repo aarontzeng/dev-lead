@@ -214,7 +214,8 @@ Role-specific choices:
 4. Review — see "The loop" below.
 5. Merge (fast-forward from the worktree branch) and tear down the worktree
    **only after the user has seen the diff and the verified findings and
-   said to proceed**. Push stays human-only, always.
+   said to proceed** — then the lead pushes to the ref the project's
+   contract names and reports it. The delegate never pushes.
 
 ## The loop (implement → review → fix → re-verify)
 

@@ -794,18 +794,28 @@ Rebase the branch onto the moved target and re-run the ff. The human owns the
 main checkout; assume it moves.
 
 - **Default (`merge-gate=user`)**: present the verdict and the diff summary;
-  merge (fast-forward) and tear down the worktree only after the user says
-  proceed. The human approves the diff, not the intention.
+  merge (fast-forward), push, and tear down the worktree only after the user
+  says proceed. The human approves the RESULT — the verdict and the diff —
+  not the intention; once approved, landing it is the lead's job in that
+  same run, with no second "may I push?" (rule changed 2026-09-11: the ask
+  had been answered yes every time and gated nothing the verdict did not).
+  Push to the ref the project's contract names — a review ref, a topic
+  branch, or the target branch where the contract allows it — never a
+  force-push, never someone else's branch — and report the resulting ref,
+  change or PR number immediately.
 - **`auto-merge`** — only when the user explicitly granted it at invocation
-  for this run: on a fully green verdict, merge, tear down, and report what
-  was merged and why it qualified. Any non-green condition falls back to the
-  default gate. The grant is per-run, never remembered.
+  for this run: on a fully green verdict the verdict IS the approval —
+  merge, push, tear down, and report what landed and why it qualified. Any
+  non-green condition falls back to the default gate. The grant is per-run,
+  never remembered.
 - If the session model is not the strongest available, an optional
   independent verdict check: spawn a frontier-tier subagent with the run log
   and the final diff, asking only "does anything here disqualify a merge?" —
   a cheap second judgment exactly at the decision that is hardest to walk
   back.
-- Push is human-only in every mode. No exceptions.
+- Delegates never push, in every mode, no exceptions — that boundary is
+  machine-enforced per adapter. The lead's push above is the only one, and
+  it happens after the approval, never before a green verdict.
 
 ## Run log
 
