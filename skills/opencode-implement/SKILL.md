@@ -5,6 +5,21 @@ description: Delegate a well-scoped implementation to the OpenCode CLI's free mo
 
 # Delegate implementation to opencode, then verify
 
+**Measured 2026-09-12, `muse-spark-1.3` `--variant xhigh`, first implement round
+on this account:** good enough to delegate spec-clear work to, with one
+standing condition — **pair it with a falsifiability review leg**. It gets
+judgement calls right (it reasoned back through a row filter to decide which
+schema fields may be `Optional`), respects an out-of-scope instruction and
+reports the defect instead of fixing it, and — rarest of all — its self-report
+was accurate: six claimed mutants, six confirmed by the lead's own re-run, plus
+unprompted disclosure of an `npm ci` and of pre-existing lint errors the lead's
+own gate summary had swallowed. Its one systematic weakness is that it writes
+tests that pass rather than tests that can fail: every finding from the
+falsifiability leg was that shape, including two repaired fixtures that could
+not go red outside market hours — a guard it had correctly described in
+someone else's test minutes earlier and did not generalise to its own. Full row
+in the runtime file's calibration table.
+
 The free pool's implement niche: **cheapest capable tier for LOW-risk,
 well-specified work** — it costs no quota at all, and it **runs the test
 suite natively** (bash is allowed under the write config; there is no

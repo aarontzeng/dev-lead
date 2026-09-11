@@ -35,7 +35,7 @@ flowchart TB
         direction LR
         A["<b>agy</b><br/>implement · adv-review<br/><i>Gemini · Claude</i>"]
         U["<b>cursor</b><br/>implement · adv-review<br/><i>GPT · Claude · Grok · Kimi</i>"]
-        O["<b>opencode</b><br/>implement · adv-review<br/><i>free pool: DeepSeek · Nemotron · …</i>"]
+        O["<b>opencode</b><br/>implement · adv-review<br/><i>muse-spark · Nemotron · …</i>"]
     end
 
     LEAD --> ONE
@@ -62,7 +62,7 @@ flowchart TB
 > which CLI you drive. The cross-family rule is accounted in *model
 > families* — whose training produced the output — and one adapter can serve
 > several: agy exposes both Gemini and Claude pools; cursor pins whichever
-> model you name; opencode serves DeepSeek, Nemotron, and stealth models
+> model you name; opencode serves muse-spark, Nemotron, and stealth models
 > whose family is undisclosed. Every dispatch records the **adapter**, the
 > **model actually served** (some adapters silently substitute — the runtime
 > files show how to verify), and that model's **family**. The family column
@@ -168,7 +168,7 @@ one of them only by accident).
 | `claude-implement` / `claude-adversarial-review` | Claude Code as a headless delegate (`claude -p`) |
 | `codex-implement` / `codex-adversarial-review` | OpenAI Codex via its Claude Code companion plugin — or the raw CLI |
 | `agy-implement` / `agy-adversarial-review` | Google Antigravity CLI (Gemini + a separate Claude pool) |
-| `opencode-implement` / `opencode-adversarial-review` | OpenCode's free pool (DeepSeek, Nemotron, …) — zero quota cost |
+| `opencode-implement` / `opencode-adversarial-review` | OpenCode's free pool (muse-spark, Nemotron, …) — zero quota cost |
 | `grok-implement` / `grok-adversarial-review` | xAI's Grok Build CLI — a paid pool, tier peer of codex/agy, and a sixth accounting family (integrated 2026-08-13; no field-proven round yet) |
 | `cursor-implement` / `cursor-adversarial-review` | Cursor's CLI (`cursor-agent`) — one paid adapter serving GPT, Claude, Grok, Kimi, Composer, and auto; the pinned model decides the family (integrated 2026-08-13; field-proven as a standing review leg since 2026-09) |
 
