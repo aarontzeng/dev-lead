@@ -1,13 +1,14 @@
 ---
 name: opencode-adversarial-review
-description: Run an adversarial (red-team) review through the OpenCode CLI's free model pool (DeepSeek, Nemotron, stealth models) under a machine-enforced read-only permission config. Use when a HIGH-risk change needs a second cross-family reviewer without spending paid quota, or as the cheap extra pair of eyes beside a primary review.
+description: Run an adversarial (red-team) review through the OpenCode CLI's free model pool (muse-spark, Nemotron, stealth models) under a machine-enforced read-only permission config. Use when a HIGH-risk change needs a second cross-family reviewer without spending paid quota, or as the cheap extra pair of eyes beside a primary review.
 ---
 
 # Adversarial review via `opencode` (free pool)
 
-The value here is an **additional model family at zero quota cost**: DeepSeek
-and Nemotron are neither GPT, Gemini, nor Claude, so this is the cheapest way
-to satisfy the cross-family rule's second reviewer on HIGH-risk work. The
+The value here is an **additional model family at zero quota cost**:
+muse-spark (Meta) and Nemotron are neither GPT, Gemini, nor Claude, so this
+is the cheapest way to satisfy the cross-family rule's second reviewer on
+HIGH-risk work. The
 trade-off is best-effort capacity — congestion is normal, so this leg is the
 *additional* opinion or the unhurried gate, never the time-critical one.
 
@@ -396,6 +397,12 @@ Same contract as every review leg: relay findings faithfully; verify each
 against the code before acting (and record the measured hit rate in your
 calibration journal — it is this family's calibration data); hold rejections
 to the same evidence standard; review-only, no fixes unless asked.
+
+Pairing rule across the suite: the reviewer must come from a different
+model family than whatever implemented the change. This adapter serves
+several DISCLOSED families and the accounting reads the served model's
+family, not the adapter — a stealth model whose family is undisclosed can
+never be the leg that satisfies the rule, however good its findings are.
 
 The standing headline from measurement: **model tier did not predict finding
 yield** — a free leg found the only HIGH on a diff where two paid legs

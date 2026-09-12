@@ -160,7 +160,7 @@ Two things the pilot established before any rule did:
     joint, load-bearing datum the lead's. A grep and a `sort -u` both fail by collapsing; running a second grep
     collapses the same way and confirms the first. What caught each of the four
     was a method that fails differently: a leg's independent enumeration against
-    the lead's grep (9 sites vs 16); a reviewer counting constructor lines
+    the lead's grep (9 sites vs 17); a reviewer counting constructor lines
     against the category noun "quotas" (1 vs 4); a leg reading source against a
     document's stated count of process-local state (5 vs 7); and the lead's grep
     against a peer's command-shape inventory (2 call sites vs 1 shape). This is

@@ -122,3 +122,8 @@ gate. Same discipline as every review leg:
 Relay findings faithfully; verify each against the code before acting;
 record the hit rate in your calibration journal; hold rejections to the same
 evidence standard as findings. Review-only — no fixes unless asked.
+
+Pairing rule across the suite: the reviewer must come from a different
+model family than whatever implemented the change. Claude reviewing
+Claude-implemented work is a fresh context, not model diversity, and
+satisfies nothing at any risk level.

@@ -676,6 +676,77 @@ def check_sentinels():
                 err(rel(skill), f"never points at its runtime reference ({fam}-runtime.md)")
 
 
+# ---- pairing: the prohibition itself, in the skill that has to obey it ----
+# check_sentinels above asks whether an IMPLEMENT skill mentions cross-family
+# review at all.  That is a phrase-presence test, and this file already records
+# (check_frozen_target, below) that a presence test cannot see drift.
+#
+# Measured 2026-09-12, by the codex leg reviewing this repo: the sentinel
+# inspected only implement skills, so THREE of six REVIEW skills stated no
+# prohibition at all.  They used the words "cross-family" while explaining
+# their own accounting, which is exactly what a presence test cannot tell from
+# stating the rule -- a reader could finish claude-, opencode- or
+# cursor-adversarial-review without ever learning it.  Every review skill's
+# description says it can be invoked directly, so that reader is real; this is
+# the same shape as the frozen-target defect, one section over.
+#
+# The reviewer is the role the rule constrains, so the review skill is where
+# the sentence has to survive.  Emphasis and line wrapping are normalised away
+# (agy bolds it and wraps mid-sentence).  Surrounding prose stays free, so a
+# family can still add what is true of itself: grok names Grok-on-Grok, cursor
+# reads the served model's family rather than the adapter's.
+PAIRING_RULE = ("the reviewer must come from a different model family "
+                "than whatever implemented the change")
+
+
+# Emphasis is DELETED, not spaced out.  Measured 2026-09-12 by the codex leg
+# reviewing this check: replacing "*" with a space made `the*reviewer`
+# normalise to `the reviewer`, so a single asterisk inside a word forged the
+# sentence.  Deleting instead yields `thereviewer`, which does not match, while
+# every real emphasis form still does -- **whole sentence**, the **reviewer**,
+# and agy's bolded rule wrapped across two lines.
+#
+# WHAT THIS DELIBERATELY DOES NOT DO, and why it stopped trying.  A second fix
+# round stripped fenced blocks and inline spans first, so a rule quoted as a
+# code SAMPLE would not count as a rule STATED.  Two regexes cannot decide that
+# question, and the same leg broke them three ways in one round: an unclosed
+# fence (CommonMark runs it to EOF; `.*?` never matches), a four-backtick fence
+# wrapping a triple one, and a double-backtick span whose delimiters the
+# single-backtick pattern ate as two empty spans.  Worse than any bypass, that
+# pattern also paired an ESCAPED tick with a later unmatched one and deleted the
+# compliant sentence between them -- a correct skill failing CI, which is how a
+# linter gets switched off.
+#
+# lint.py is stdlib-only, so a real CommonMark parser is not on the table, and
+# methodology.md's bounded-properties rule says an unbounded claim never
+# converges: every round legitimately finds one more case.  The property is
+# bounded here instead.  This asks whether the sentence APPEARS, ignoring
+# emphasis and wrapping.  A skill whose only statement of the rule sits inside a
+# code sample passes -- an accepted gap, not an oversight; it was a constructed
+# counterfeit, never an observed edit, and the defect this check exists for
+# (three review skills stating no prohibition at all) is caught either way.
+# Do not re-add regex code-stripping: it costs a false-alarm class to close a
+# hypothetical one.
+
+
+def normalised_prose(text):
+    """Markdown with emphasis removed and whitespace collapsed, so the rule
+    survives a re-wrap or a bolding.  Code is NOT stripped -- see above."""
+    return " ".join(text.replace("*", "").split())
+
+
+def check_pairing_rule():
+    for fam in FAMILIES:
+        skill = ROOT / "skills" / f"{fam}-adversarial-review" / "SKILL.md"
+        if not skill.is_file():
+            continue                      # already reported by check_structure
+        if PAIRING_RULE not in normalised_prose(
+                skill.read_text(encoding="utf-8")):
+            err(rel(skill), "does not state the pairing rule -- a directly "
+                            "invoked review leg would never learn that "
+                            f"{PAIRING_RULE}")
+
+
 # ---- frozen: one review-target rule, identically worded in all four ----
 # Measured failure: the four review skills were written in one commit with
 # four different formulations of the same rule, and the tested helpers
@@ -1012,7 +1083,8 @@ def main():
                   check_version, check_version_not_published,
                   check_links, check_paths, check_fences, check_mermaid,
                   check_var_order,
-                  check_tracked, check_helper_args, check_sentinels, check_frozen_target,
+                  check_tracked, check_helper_args, check_sentinels, check_pairing_rule,
+                  check_frozen_target,
                   check_delegate_guardrails,
                   check_delegate_audit_trails,
                   check_families, check_launch):

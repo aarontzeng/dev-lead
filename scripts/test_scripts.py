@@ -527,6 +527,114 @@ def test_lint_frozen_target():
           "the shipped review skills disagree")
 
 
+# ------------------------------------------------------------ lint pairing ----
+def test_lint_pairing_rule():
+    """check_pairing_rule(): the prohibition must survive in every REVIEW skill.
+
+    The case that matters is the third one. check_sentinels asks whether the
+    words "cross-family" appear; a skill can carry those words while saying
+    the opposite, and this test pins that the presence check is blind to it
+    and this one is not. Measured 2026-09-12 by the codex leg: three of six
+    review skills stated no prohibition, and nothing failed.
+    """
+    sys.path.insert(0, str(SCRIPTS))
+    import lint
+
+    def run_against(bodies):
+        with tempfile.TemporaryDirectory() as td:
+            fake = Path(td)
+            for fam, body in bodies.items():
+                d = fake / "skills" / f"{fam}-adversarial-review"
+                d.mkdir(parents=True)
+                (d / "SKILL.md").write_text(body, encoding="utf-8")
+            real_root, real_errors = lint.ROOT, lint.ERRORS
+            try:
+                lint.ROOT, lint.ERRORS = fake, []
+                lint.check_pairing_rule()
+                return list(lint.ERRORS)
+            finally:
+                lint.ROOT, lint.ERRORS = real_root, real_errors
+
+    good = f"# review\n\nPairing rule: {lint.PAIRING_RULE}.\n"
+    allsix = {f: good for f in lint.FAMILIES}
+    check("pairing: all six stating the rule pass", run_against(allsix) == [],
+          f"got {run_against(allsix)}")
+
+    gone = dict(allsix); gone["claude"] = "# review\n\nnothing about pairing.\n"
+    got = run_against(gone)
+    check("pairing: flags a review skill that never states it",
+          any("claude" in e and "pairing rule" in e for e in got), f"got {got}")
+
+    # THE case check_sentinels cannot see: the phrase is present, the rule is not
+    inverted = dict(allsix)
+    inverted["opencode"] = ("# review\n\ncross-family review is preferred, but "
+                            "the same family may review when quota is tight.\n")
+    got = run_against(inverted)
+    check("pairing: flags prose that keeps the phrase and drops the rule",
+          any("opencode" in e for e in got), f"got {got}")
+    check("pairing: and the presence-only sentinel is blind to that same prose",
+          lint.CROSS_FAMILY_RE.search(inverted["opencode"]) is not None,
+          "CROSS_FAMILY_RE no longer matches — this test's premise is stale")
+
+    # re-wrapping and emphasis must not fire it
+    rewrapped = dict(allsix)
+    rewrapped["agy"] = ("# review\n\n**the reviewer\nmust  come from a different "
+                        "model family\nthan whatever implemented the change.**\n")
+    check("pairing: a re-wrapped, bolded rule still matches",
+          run_against(rewrapped) == [], f"got {run_against(rewrapped)}")
+
+    # the counterfeit the codex leg landed against the first version: an
+    # asterisk inside a word forged the sentence while "*" became a space
+    split = dict(allsix)
+    split["cursor"] = ("# review\n\nPairing rule: "
+                       + lint.PAIRING_RULE.replace("the reviewer", "the*reviewer")
+                       + ".\n")
+    got = run_against(split)
+    check("pairing: an asterisk inside a word cannot forge the sentence",
+          any("cursor" in e for e in got), f"got {got}")
+
+    # the emphasis forms that MUST keep passing, or the hardening broke the rule
+    for label, body in (
+        ("whole sentence bolded", f"# review\n\n**{lint.PAIRING_RULE}.**\n"),
+        ("one word bolded",
+         "# review\n\nthe **reviewer** must come from a different model family "
+         "than whatever implemented the change.\n"),
+    ):
+        ok = dict(allsix); ok["agy"] = body
+        check(f"pairing: {label} still passes", run_against(ok) == [],
+              f"got {run_against(ok)}")
+
+    # THE FALSE-ALARM REGRESSION. A round of this check stripped inline code
+    # first, and its span pattern paired an escaped tick with a later unmatched
+    # one and deleted the compliant sentence between them -- CI failing a
+    # correct skill, which is how a linter gets switched off. Nothing may
+    # reintroduce that.
+    ticks = dict(allsix)
+    ticks["opencode"] = ("# review\n\nA literal tick may be escaped as \\`; "
+                         + lint.PAIRING_RULE
+                         + ". A final unmatched tick: `\n")
+    check("pairing: escaped and unmatched ticks do not erase a stated rule",
+          run_against(ticks) == [], f"got {run_against(ticks)}")
+
+    # BOUNDARY, pinned deliberately rather than asserted away: a rule that
+    # appears only as a code sample PASSES. Two regexes cannot tell a sample
+    # from a statement -- an unclosed fence, a four-backtick fence and a
+    # double-backtick span each defeated the attempt -- and methodology.md's
+    # bounded-properties rule says to declare the scope instead of chasing
+    # cases. This test exists so the gap stays a decision, not a surprise.
+    sample = dict(allsix)
+    sample["grok"] = f"# review\n\nExample only: `{lint.PAIRING_RULE}.`\n"
+    check("pairing: a code sample counts (accepted gap, see lint.py)",
+          run_against(sample) == [], f"got {run_against(sample)}")
+
+    # and the shipped tree must satisfy it
+    check("pairing: the repo's six review skills all state it",
+          run_against({f: (SCRIPTS.parent / "skills" / f"{f}-adversarial-review"
+                           / "SKILL.md").read_text(encoding="utf-8")
+                       for f in lint.FAMILIES}) == [],
+          "a shipped review skill does not state the pairing rule")
+
+
 # --------------------------------------------------- lint delegate guardrails ----
 def test_lint_delegate_guardrails():
     """check_delegate_guardrails(): dispatch safety must stay fail-closed.
@@ -1857,6 +1965,9 @@ def main():
 
     print("lint.py check_frozen_target")
     test_lint_frozen_target()
+
+    print("lint.py check_pairing_rule")
+    test_lint_pairing_rule()
 
     print("lint.py check_delegate_guardrails")
     test_lint_delegate_guardrails()

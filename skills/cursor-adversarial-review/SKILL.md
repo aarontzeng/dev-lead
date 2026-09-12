@@ -113,7 +113,9 @@ the embedded diff, and the prompt are the complete context.
 
 Treat output as hypotheses; verify every finding against the frozen tree
 before relaying it, and separate host-verified evidence from the reviewer's
-claims. The pairing rule reads the **served model's family**, not this
+claims. Pairing rule across the suite: the reviewer must come from a
+different model family than whatever implemented the change. It reads the
+**served model's family**, not this
 adapter: a cursor-served Claude model must not review Claude-implemented
 work, a cursor-served Grok model must not review the grok adapter's work,
 and so on — cross-family accounting follows the model you pinned. Append
