@@ -2,7 +2,8 @@
 
 # dev-lead
 
-**Cross-model delegation & adversarial review for CLI coding agents**
+**Cross-family delegation & adversarial review for CLI coding agents**
+*Independence of training, not just of context.*
 
 [![ci](https://github.com/aarontzeng/dev-lead/actions/workflows/ci.yml/badge.svg)](https://github.com/aarontzeng/dev-lead/actions/workflows/ci.yml)
 [![release](https://img.shields.io/github/v/tag/aarontzeng/dev-lead?label=release&color=2563eb)](https://github.com/aarontzeng/dev-lead/releases)
@@ -14,6 +15,9 @@
 One agent leads. Others implement. **No change ever merges reviewed only by
 its own model family** — and nothing a delegate says about its own work is
 taken on trust.
+
+A second *context* of your own model is a fresh look. A second *family* is a
+different set of blind spots.
 
 </div>
 
@@ -100,9 +104,12 @@ and reports the resulting ref.
 ## Why
 
 Every coding model has blind spots, and a reviewer that shares the author's
-training shares the author's blind spots. Running a *second context* of the
-same model is a fresh look — not model diversity. This suite makes the
-cross-family rule structural:
+training shares the author's blind spots. A second context lacks the author's
+context bias; it does not lack the author's training. The API this family
+habitually misremembers, the concurrency pattern it always believes is safe,
+the error path it never imagines — a new context changes none of them.
+
+So the rule is structural, not advisory:
 
 | Principle | In practice |
 |---|---|
@@ -110,6 +117,43 @@ cross-family rule structural:
 | 🔒 **Machine-enforced boundaries** | Read-only permission configs, sandboxes, and allow-lists — not "please don't edit anything" |
 | 🧪 **Nothing trusted on self-report** | The lead re-runs tests itself, mutation-proofs every new regression test, and verifies every review finding before acting |
 | 🙋 **A person approves the result; the lead lands it** | The verdict and the diff get a human yes — then merging and pushing are the lead's to do, in that run, without a second ask. Delegates never push |
+
+## If you already fan out in-process
+
+Claude Code has a first-class in-process multi-agent mode: one script spawns
+many subagents — parallel fan-out, pipelines, judge panels, adversarial
+verify, loop-until-dry — each with its own context, brief and tool set. It is
+good at scale, and most of [docs/methodology.md](docs/methodology.md) applies
+to it unchanged. This suite is the same genus: deterministic fan-out, one
+brief per leg, verify-don't-trust, a lead that synthesises and holds the gate.
+It is a different species.
+
+|  | In-process fan-out | dev-lead |
+|---|---|---|
+| **Each leg has its own** | context, brief, tool set, working directory | context, brief, tool set, working directory — **and training** |
+| **Cost per leg** | seconds, inside one process | an external CLI process; 3–15 min is normal, and one measured round ran 176–874 s per leg |
+| **Boundary** | the host's permission model, one policy for every leg | per adapter, machine-enforced where the runtime supports it — and labelled *instruction level* where it does not |
+| **Preamble** | one is correct for every leg, by construction | one **per family**, or legs die silently (below) |
+| **What survives the run** | the script | 13 skills, 6 adapters, six dated runtime references, a calibration journal, [`data/families.json`](data/families.json), and a CI check that fails the build if the pairing sentence stops appearing in any review skill |
+
+The left column describes another product from its own documentation; nothing
+in this repo measures it. Every cell on the right is cited in the files above.
+
+**The experiment that would settle the first row has not been run here.** No
+round in this repo puts four legs of ONE family against the same frozen target
+and the same posed items, so every measurement varies family and process
+together. What the repo can offer instead is the mechanism, in the research
+pilot's own words: *a fan-out whose members search the same way multiplies
+confidence without adding detection.* Measured four separate times, every one
+on the lead's own instruments, and every miss was caught not by a second look
+but by a method that fails differently.
+
+The price is real and cuts the honest way. 2026-09-07: a lead wrote one
+preamble for a four-leg round and copied it into all four briefs. It carried
+one family's proven operating condition, which is wrong for the others. **agy**
+auto-denies an unlisted shell command in headless mode and died in about ninety
+seconds having read nothing. One preamble per family, or the leg is not slow —
+it is gone.
 
 ## How a run flows
 
