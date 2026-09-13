@@ -58,6 +58,23 @@ def test_freeze(tmp):
     old, head = shas[0], shas[-1]
     freeze = SCRIPTS / "freeze-target.sh"
 
+    # A RELATIVE dest, from a cwd that is not the repo. `git -C "$repo" worktree
+    # add` resolves it against $repo while every other line resolves it against
+    # the caller's cwd, so before the fix this planted the worktree INSIDE the
+    # target repository and left it dirty — and the "refusing to touch it" guard
+    # was checking an unrelated path in the cwd, so it never fired. Every other
+    # case here passes an absolute dest, which is why it went unseen.
+    elsewhere = tmp / "cwd"
+    elsewhere.mkdir()
+    r = run(freeze, repo, old, "relframe", cwd=str(elsewhere))
+    check("freeze: a relative dest lands in the CALLER's cwd",
+          (elsewhere / "relframe").is_dir(), r.stderr)
+    check("freeze: ...and does NOT plant a worktree in the target repo",
+          not (repo / "relframe").exists(), "orphan worktree inside the repo")
+    check("freeze: ...leaving the target repo clean",
+          run("git", "-C", repo, "status", "--porcelain=v1").stdout == "",
+          run("git", "-C", repo, "status", "--porcelain=v1").stdout)
+
     dest = tmp / "frozen"
     r = run(freeze, repo, old, dest)
     check("freeze: exits 0 on a valid old commit", r.returncode == 0, r.stderr)
@@ -1935,6 +1952,20 @@ def test_leg_cmd():
         (["cursor", "review", "--model", "kimi-k3-high", "--effort", "medium"],
          "MODEL NAME", "cursor effort belongs in the model name"),
     ]
+    # Not a refusal case: the write posture of an ACCEPTED implement launch.
+    # Measured 2026-09-13 — data/launch.json's codex implement row was missing
+    # --write, and codex-companion.mjs runs `sandbox: request.write ?
+    # "workspace-write" : "read-only"`, so the dispatch path dev-lead makes
+    # mandatory produced a paid delegate that could not edit a file. The needle
+    # table above only covered refusals, and the posture table below omitted
+    # codex implement, so nothing failed.
+    r = subprocess.run([str(script), "codex", "implement", "--model", "x",
+                        "--effort", "high"], capture_output=True, text=True)
+    check("leg-cmd: codex implement asks for a WRITE session",
+          "--write" in r.stdout, f"stdout={r.stdout!r}")
+    check("leg-cmd: codex implement does not resume a prior session",
+          "--fresh" in r.stdout, f"stdout={r.stdout!r}")
+
     for argv, needle, label in cases:
         r = subprocess.run([str(script), *argv], capture_output=True, text=True)
         check(f"leg-cmd: refuses -- {label}", r.returncode != 0,

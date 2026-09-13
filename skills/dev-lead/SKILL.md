@@ -813,9 +813,13 @@ main checkout; assume it moves.
   and the final diff, asking only "does anything here disqualify a merge?" —
   a cheap second judgment exactly at the decision that is hardest to walk
   back.
-- Delegates never push, in every mode, no exceptions — that boundary is
-  machine-enforced per adapter. The lead's push above is the only one, and
-  it happens after the approval, never before a green verdict.
+- Delegates never push, in every mode, no exceptions. How that boundary is
+  held varies: a machine allow-list on agy, a machine config on opencode,
+  and instruction level on claude, codex, grok and cursor — which is why
+  the refs snapshot diffed at handoff is the evidence for four of the six
+  ([workflow.md](../../docs/workflow.md) carries the per-adapter table).
+  The lead's push above is the only one, and it happens after the
+  approval, never before a green verdict.
 
 ## Run log
 

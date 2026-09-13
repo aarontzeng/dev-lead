@@ -51,7 +51,7 @@ Two edges in that diagram carry most of the argument:
 | **Phase 1** | The chosen family probed as available **this run** (stale logs describe past runs) · `$BASE` pinned once to `git merge-base <target> HEAD` · one isolated worktree per delegate · `refs/remotes` snapshotted so an accidental push surfaces as a delta |
 | **A round** | The lead re-ran the suite *itself* · the lead made the checkpoint commit · every new regression test was watched **failing** against the un-fixed code · every finding recorded with its fate, rejections included and evidenced |
 | **Phase 3** | No verified blocking findings open · branch *identity* re-verified at the gate · explicit human approval of the diff |
-| **Always** | Delegates never push, in every mode — machine-enforced per adapter · the lead's push is the only one, and it never precedes a green verdict |
+| **Always** | Delegates never push, in every mode — machine-enforced on two adapters, instruction level on four (table below) · the lead's push is the only one, and it never precedes a green verdict |
 
 ## One round in detail
 

@@ -24,6 +24,18 @@ git -C "$repo" rev-parse --git-dir >/dev/null 2>&1 || die "not a git repo: $repo
 sha=$(git -C "$repo" rev-parse --verify "${committish}^{commit}" 2>/dev/null) \
   || die "cannot resolve '$committish' to a commit in $repo"
 
+# Absolutise the destination BEFORE the guard below touches it. `git -C "$repo"
+# worktree add` resolves a relative path against $repo, while every other line
+# here resolves it against the caller's cwd -- so a relative dest planted the
+# worktree INSIDE the target repository and left it dirty ("?? frozen/"), while
+# the guard below checked an unrelated path in the cwd and passed. Reproduced
+# 2026-09-13: cwd empty, repo carrying an orphan detached worktree, and git's
+# own "fatal:" surfacing with no freeze-target: prefix.
+case "$dest" in
+  /*) ;;
+  *)  dest=$PWD/$dest ;;
+esac
+
 [ -e "$dest" ] && die "destination already exists: $dest (refusing to touch it)"
 
 # --detach: no branch, so nothing can advance this worktree under the reviewer.
