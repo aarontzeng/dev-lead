@@ -171,6 +171,11 @@ Supply focus text with all of the following:
   output of its round — a coverage note ("your tests only cover the A→B
   transition, never A→∅ or ∅→B") that explained why two real defects had
   survived a mutation-tested, fully green suite.
+- Evidence gate with unguessable anchors (per file: line count + verbatim
+  last line; per claim: quoted code; `NOT REACHED` acceptable,
+  HOLDS-without-quote not). A `file:line` alone is not
+  this: a fabricated citation costs a reviewer nothing, which is why the
+  anchor has to be something it could not have guessed without reading.
 - **Tell it to read files with `nl -ba`, not bare `sed -n`.** Measured
   2026-09-06: the same account went from 43/50 citations exact to 35/35 on
   the next round, and the only change was this line in the preamble. Every

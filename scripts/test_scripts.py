@@ -635,6 +635,60 @@ def test_lint_pairing_rule():
           "a shipped review skill does not state the pairing rule")
 
 
+# --------------------------------------------------------------- lint leaf ----
+def test_lint_leaf_rule():
+    """check_leaf_rule(): the leaf paragraph must survive in every REVIEW skill.
+
+    Measured 2026-09-13: it was in four of six. claude and grok carried only
+    the launch half, so a leg dispatched as a subagent through either would end
+    its turn waiting for a notification that never arrives.
+    """
+    sys.path.insert(0, str(SCRIPTS))
+    import lint
+
+    def run_against(bodies):
+        with tempfile.TemporaryDirectory() as td:
+            fake = Path(td)
+            for fam, body in bodies.items():
+                d = fake / "skills" / f"{fam}-adversarial-review"
+                d.mkdir(parents=True)
+                (d / "SKILL.md").write_text(body, encoding="utf-8")
+            real_root, real_errors = lint.ROOT, lint.ERRORS
+            try:
+                lint.ROOT, lint.ERRORS = fake, []
+                lint.check_leaf_rule()
+                return list(lint.ERRORS)
+            finally:
+                lint.ROOT, lint.ERRORS = real_root, real_errors
+
+    good = f"# review\n\n**{lint.LEAF_RULE}**\nThen family-specific prose.\n"
+    allsix = {f: good for f in lint.FAMILIES}
+    check("leaf: all six carrying it pass", run_against(allsix) == [],
+          f"got {run_against(allsix)}")
+
+    gone = dict(allsix); gone["grok"] = "# review\n\nLaunch it in the background.\n"
+    got = run_against(gone)
+    check("leaf: flags a skill carrying only the launch half",
+          any("grok" in e for e in got), f"got {got}")
+
+    # THE case a substring test for "You are a leaf" cannot see
+    reworded = dict(allsix)
+    reworded["agy"] = good.replace('— block, do not "wait".',
+                                   "; block and do not wait.")
+    got = run_against(reworded)
+    check("leaf: flags a reworded rule that still contains 'You are a leaf'",
+          any("agy" in e for e in got), f"got {got}")
+    check("leaf: and the phrase really is still present in that prose",
+          "You are a leaf" in reworded["agy"],
+          "this test's premise is stale")
+
+    check("leaf: the repo's six review skills all carry it",
+          run_against({f: (SCRIPTS.parent / "skills" / f"{f}-adversarial-review"
+                           / "SKILL.md").read_text(encoding="utf-8")
+                       for f in lint.FAMILIES}) == [],
+          "a shipped review skill lost the leaf paragraph")
+
+
 # --------------------------------------------------- lint delegate guardrails ----
 def test_lint_delegate_guardrails():
     """check_delegate_guardrails(): dispatch safety must stay fail-closed.
@@ -1980,6 +2034,9 @@ def main():
 
     print("lint.py check_pairing_rule")
     test_lint_pairing_rule()
+
+    print("lint.py check_leaf_rule")
+    test_lint_leaf_rule()
 
     print("lint.py check_delegate_guardrails")
     test_lint_delegate_guardrails()

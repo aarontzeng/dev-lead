@@ -45,6 +45,12 @@ not trust: no shell tool, no edit tools, no MCP calls, no subagents. The diff
 is embedded in the prompt because a delegate without a shell cannot run git
 (and must not need to).
 
+Pre-launch guard:
+
+```bash
+git diff --stat "$BASE" "$REVIEW_HEAD"  # file list must match the change under review
+```
+
 ```bash
 RUN_DIR=$(mktemp -d "${TMPDIR:-/tmp}/grok-review.XXXXXX")
 # Write the focus prompt to "$RUN_DIR/prompt.md" in its own FOREGROUND step,
@@ -88,6 +94,12 @@ file. Role-specific choices:
   runtime file). On hitting it, re-route the round to another family — do
   not retry into a weekly budget.
 
+**Running this leg as a subagent? You are a leaf — block, do not "wait".**
+Nothing will wake you when `grok --prompt-file` returns; ending your turn on
+"waiting for the notification" abandons the review. Poll to terminal inside a
+single tool call, and issue another such call immediately if it times out
+([dev-lead Phase 2](../dev-lead/SKILL.md)).
+
 Verify the target again after the run:
 
 ```bash
@@ -107,9 +119,13 @@ git -C "$REVIEW_TARGET_DIR" status --porcelain=v1 # must be empty
 Same red-team discipline as every family — first-party pre-merge framing,
 numbered claimed properties with boundaries, falsify-don't-confirm, trigger +
 observable consequence + severity + `file:line` per finding, state fixes
-already made, ask what the tests do not enumerate, forbid praise. Two
-grok-specific lines:
+already made, ask what the tests do not enumerate, forbid praise. The gate,
+then two grok-specific lines:
 
+- Evidence gate with unguessable anchors (per file: line count + verbatim
+  last line; per claim: quoted code; `NOT REACHED` acceptable,
+  HOLDS-without-quote not). The no-shell posture below
+  does not excuse it: a line count and a last line are READ, not executed.
 - Tell it that it has **no shell**: evidence is quoted file content at
   `file:line`, and if confirming a finding would require running something,
   it must name the exact command and expected result for the lead to run.

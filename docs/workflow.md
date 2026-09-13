@@ -1,7 +1,7 @@
 # How a run flows
 
-This is the *what happens*: the shape of a run from a task arriving to a
-human typing `git push`. [methodology.md](methodology.md) carries the *why*
+This is the *what happens*: the shape of a run from a task arriving to the
+lead reporting the ref it landed on. [methodology.md](methodology.md) carries the *why*
 each step is shaped that way, and the `SKILL.md` files carry the executable
 detail — commands, flags, and the traps each CLI hides. Read this one first;
 it is the map the other two assume you already have.
@@ -51,7 +51,7 @@ Two edges in that diagram carry most of the argument:
 | **Phase 1** | The chosen family probed as available **this run** (stale logs describe past runs) · `$BASE` pinned once to `git merge-base <target> HEAD` · one isolated worktree per delegate · `refs/remotes` snapshotted so an accidental push surfaces as a delta |
 | **A round** | The lead re-ran the suite *itself* · the lead made the checkpoint commit · every new regression test was watched **failing** against the un-fixed code · every finding recorded with its fate, rejections included and evidenced |
 | **Phase 3** | No verified blocking findings open · branch *identity* re-verified at the gate · explicit human approval of the diff |
-| **Always** | Push never leaves the human's hands |
+| **Always** | Delegates never push, in every mode — machine-enforced per adapter · the lead's push is the only one, and it never precedes a green verdict |
 
 ## One round in detail
 

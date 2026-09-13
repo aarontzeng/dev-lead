@@ -77,6 +77,12 @@ git -C "$REVIEW_TARGET_DIR" rev-parse HEAD        # before, and again after —
 git -C "$REVIEW_TARGET_DIR" status --porcelain=v1 # -C so it's the TARGET, not your cwd
 ```
 
+**Running this leg as a subagent? You are a leaf — block, do not "wait".**
+Nothing will wake you when `claude -p` returns; ending your turn on "waiting
+for the notification" abandons the review. Poll to terminal inside a single
+tool call, and issue another such call immediately if it times out
+([dev-lead Phase 2](../dev-lead/SKILL.md)).
+
 **Give it a diff or a named file list, never a bare worktree path.** "Review
 this worktree" spends the delegate's first minutes discovering scope — the
 slowest, least valuable thing it can do. Name the commit range and the

@@ -36,7 +36,14 @@ before AND after the run — are in
 [methodology.md](../../docs/methodology.md) §7. Everything below assumes
 `$REVIEW_TARGET_DIR` is that frozen directory and `$REVIEW_HEAD` is the SHA it
 was frozen at.
+
 ## Launch one ask-mode review run
+
+Pre-launch guard:
+
+```bash
+git diff --stat "$BASE" "$REVIEW_HEAD"  # file list must match the change under review
+```
 
 ```bash
 RUN_DIR=$(mktemp -d "${TMPDIR:-/tmp}/cursor-review.XXXXXX")
@@ -103,8 +110,11 @@ git -C "$REVIEW_TARGET_DIR" status --porcelain=v1 # must be empty
 Same red-team discipline as every family — first-party pre-merge framing,
 numbered claimed properties with boundaries, falsify-don't-confirm, trigger +
 observable consequence + severity + `file:line` per finding, state fixes
-already made, ask what the tests do not enumerate, forbid praise. Adapter
-specifics: state that ask mode cannot run or edit anything, so evidence is
+already made, ask what the tests do not enumerate, forbid praise. Include the
+evidence gate with unguessable anchors — per file: line count + verbatim last
+line; per claim: quoted code; `NOT REACHED` acceptable, HOLDS-without-quote
+not. Ask mode can satisfy it: a line count and a last line are READ, not
+executed. Adapter specifics: state that ask mode cannot run or edit anything, so evidence is
 quoted file content, and any confirmation needing execution must be named as
 an exact command for the lead to run; forbid MCP and web tools — the tree,
 the embedded diff, and the prompt are the complete context.

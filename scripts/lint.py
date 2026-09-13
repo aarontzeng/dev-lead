@@ -747,6 +747,36 @@ def check_pairing_rule():
                             f"{PAIRING_RULE}")
 
 
+# ---- leaf: the paragraph that stops a subagent ending its turn on a wait ----
+# Same shape as check_pairing_rule and for the same reason, one rule over. A
+# review leg dispatched as a subagent is a LEAF: nothing wakes it when the
+# delegate finishes, so a turn ended on "waiting for the notification" abandons
+# the round. dev-lead/SKILL.md records the measured cost, and says outright to
+# carry the paragraph into the prompt rather than assume the skills reach a leaf.
+#
+# It was in four of six on 2026-09-13 -- claude and grok carried only the launch
+# half -- and the split is drift, not design: `claude -p` and `grok
+# --prompt-file` are foreground CLIs exactly like `agy -p`, which carries it.
+#
+# The full sentence, not the phrase "You are a leaf". docs/workflow.md states
+# the bar: compare the texts rather than detect the phrase, because they shipped
+# with four different formulations once. Prose after it stays family-specific --
+# each names its own CLI.
+LEAF_RULE = ('Running this leg as a subagent? You are a leaf — block, '
+             'do not "wait".')
+
+
+def check_leaf_rule():
+    for fam in FAMILIES:
+        skill = ROOT / "skills" / f"{fam}-adversarial-review" / "SKILL.md"
+        if not skill.is_file():
+            continue                      # already reported by check_structure
+        if LEAF_RULE not in normalised_prose(skill.read_text(encoding="utf-8")):
+            err(rel(skill), "does not carry the leaf paragraph -- a review leg "
+                            "dispatched as a subagent would end its turn waiting "
+                            "for a notification that never comes")
+
+
 # ---- frozen: one review-target rule, identically worded in all four ----
 # Measured failure: the four review skills were written in one commit with
 # four different formulations of the same rule, and the tested helpers
@@ -1083,7 +1113,7 @@ def main():
                   check_version, check_version_not_published,
                   check_links, check_paths, check_fences, check_mermaid,
                   check_var_order,
-                  check_tracked, check_helper_args, check_sentinels, check_pairing_rule,
+                  check_tracked, check_helper_args, check_sentinels, check_pairing_rule, check_leaf_rule,
                   check_frozen_target,
                   check_delegate_guardrails,
                   check_delegate_audit_trails,
