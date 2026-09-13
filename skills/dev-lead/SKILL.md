@@ -744,7 +744,7 @@ two rounds and would have run a third on no principle at all.
    the mutation standard you hold the delegate's work to, and say in the run
    log which parts of the final diff no leg ever saw.
 
-4. **Route**: no verified blocking findings → merge gate. Verified findings →
+4. **Route**: no verified HIGH findings → merge gate. Verified findings →
    next round. Small, precisely diagnosed defects (a fake test, a stray
    trailer) the lead fixes directly in-place — a delegation round for a
    one-line fix costs more than it protects.
@@ -816,8 +816,8 @@ main checkout; assume it moves.
   back.
 - Delegates never push, in every mode, no exceptions. How that boundary is
   held varies: a machine allow-list on agy, a machine config on opencode,
-  and instruction level on claude, codex, grok and cursor — which is why
-  the refs snapshot diffed at handoff is the evidence for four of the six
+  and instruction level on claude, codex, grok and cursor — which is why all
+  four carry the fail-closed refs snapshot diffed at handoff as the evidence
   ([workflow.md](../../docs/workflow.md) carries the per-adapter table).
   The lead's push above is the only one, and it happens after the
   approval, never before a green verdict.

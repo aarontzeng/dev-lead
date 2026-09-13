@@ -22,7 +22,7 @@ flowchart TD
         R1 --> R2["<b>Lead verifies — its own work too</b><br/>a self-report is never evidence<br/>1 · working tree first, before any ranged diff<br/>2 · re-run the whole suite itself<br/>3 · lead makes the checkpoint commit<br/>4 · mutation-proof every new regression test"]
         R2 --> R3["<b>Adversarial review, cross-family</b><br/>against a FROZEN directory at that commit<br/>evidence gate per leg · a different brief per leg"]
         R3 --> R4["Lead verifies each finding against the code<br/>a rejection carries the same grade of evidence"]
-        R4 --> R5{"Verified blocking<br/>findings left?"}
+        R4 --> R5{"Verified HIGH<br/>findings left?"}
         R5 -->|"yes, and rounds remain"| R1
     end
 
@@ -50,8 +50,8 @@ Two edges in that diagram carry most of the argument:
 | **Phase 0** | Acceptance criteria a machine can check · the files a correct change should touch · a risk class · the task's factual premises checked *against the code*, not taken on trust |
 | **Phase 1** | The chosen family probed as available **this run** (stale logs describe past runs) · `$BASE` pinned once to `git merge-base <target> HEAD` · one isolated worktree per delegate · `refs/remotes` snapshotted so an accidental push surfaces as a delta |
 | **A round** | The lead re-ran the suite *itself* · the lead made the checkpoint commit · every new regression test was watched **failing** against the un-fixed code · every finding recorded with its fate, rejections included and evidenced |
-| **Phase 3** | No verified blocking findings open · branch *identity* re-verified at the gate · explicit human approval of the diff |
-| **Always** | Delegates never push, in every mode — machine-enforced on two adapters, instruction level on four (table below) · the lead's push is the only one, and it never precedes a green verdict |
+| **Phase 3** | No verified HIGH findings open · branch *identity* re-verified at the gate · explicit human approval of the diff |
+| **Always** | Delegates never push, in every mode — machine-enforced on two adapters, instruction level plus a fail-closed refs tripwire on the other four (table below) · the lead's push is the only one, and it never precedes a green verdict |
 
 ## One round in detail
 
@@ -80,7 +80,7 @@ sequenceDiagram
     R-->>L: findings
     Note over L: findings are hypotheses, not verdicts
     L->>L: verify each against the code —<br/>rejections carry refuting evidence
-    alt verified blocking findings, rounds remain
+    alt verified HIGH findings, rounds remain
         L->>D: next round — each finding quoted verbatim,<br/>why it is real, what fix is required
     else a stop condition fired
         L->>U: findings history, worktree preserved<br/>the run ends here — NO merge

@@ -32,10 +32,22 @@ Verify against that exact SHA later — never against a moving branch name.
 RUN_DIR=$(mktemp -d "${TMPDIR:-/tmp}/claude-implement.XXXXXX")
 # Write the task prompt to "$RUN_DIR/task.md" in its own step.
 
+# The helper lives in the SUITE's tree, cwd is the TARGET repo — a bare
+# `scripts/…` resolves against the target and exits 127.
+DEV_LEAD=${DEV_LEAD_ROOT:-$(ls -d "$HOME"/.claude/plugins/cache/dev-lead/dev-lead/* 2>/dev/null | sort -V | tail -1)}
+[ -x "$DEV_LEAD/scripts/snapshot-refs.sh" ] || { echo "dev-lead root unresolved — set DEV_LEAD_ROOT"; exit 1; }
+"$DEV_LEAD/scripts/snapshot-refs.sh" save "$WORKTREE" "$RUN_DIR/remote-refs.before"   # push-detection baseline
+
 cd "$WORKTREE" && claude -p "$(cat "$RUN_DIR/task.md")" \
   --permission-mode acceptEdits --model <tier> \
   > "$RUN_DIR/impl.out" 2>&1
 ```
+
+The snapshot is the no-push evidence on this adapter. workflow.md rates its
+boundary **instruction level** — there is no machine allow-list, so the rule
+is stated in the task prompt and the fail-closed ref check at handoff is what
+proves either way. The two adapters rated weakest were the two shipping
+without it.
 
 Measured properties of this exact shape (runtime file has the detail):
 `acceptEdits` covers file writes and shell/git in one flag — it can `git
@@ -76,20 +88,24 @@ Identical discipline to every implement skill:
 
 The same lead sequence as every implement skill, none of it optional:
 
-1. `git status --short`, `git log "$BASE"..HEAD --oneline`,
+1. `"$DEV_LEAD/scripts/snapshot-refs.sh" check "$WORKTREE" "$RUN_DIR/remote-refs.before" || exit 1` — the remote-ref
+   tripwire, first and fail-closed. The helper exits nonzero on a delta and
+   `|| exit 1` makes that terminal; do not replace it with a second snapshot
+   and a raw `diff`, which can be noticed and accidentally continued past.
+2. `git status --short`, `git log "$BASE"..HEAD --oneline`,
    `git diff "$BASE"...HEAD` — scope verified, not assumed; commit-message
    hygiene checked. (If the delegate left work uncommitted, inspect the
    working tree FIRST — a ranged diff on an uncommitted tree is empty and
    reads as a false green — then the lead stages and makes the checkpoint
    commit.)
-2. **Run the full suite yourself** in the worktree.
-3. **Mutation-proof every new regression test** (commit first; the full
+3. **Run the full suite yourself** in the worktree.
+4. **Mutation-proof every new regression test** (commit first; the full
    mechanics are in
    [`dev-lead/references/mutation-runbook.md`](../dev-lead/references/mutation-runbook.md)).
-4. **Cross-family adversarial review** — Claude implemented, so the reviewer
+5. **Cross-family adversarial review** — Claude implemented, so the reviewer
    is GPT, Gemini, or a named free-pool model. Never another Claude context,
    and not a stealth model whose family might be Claude.
-5. Merge gate: user sees the diff and verified findings; fast-forward, push
+6. Merge gate: user sees the diff and verified findings; fast-forward, push
    and tear down only on explicit approval, then report the ref. The
    delegate never pushes.
 

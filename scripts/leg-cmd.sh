@@ -92,7 +92,12 @@ for tok in r["argv"]:
     for k, v in subst.items():
         if k in tok:
             if not v:
-                missing.add(k.strip("{}").lower())
+                # The accepted spelling is the FLAG, not the placeholder key:
+                # {PROMPT_FILE} -> --prompt-file. Telling the caller to pass
+                # --prompt_file earned them "unknown option: --prompt_file" on
+                # the very next line, and the failure path is where a wrong
+                # instruction costs the most.
+                missing.add(k.strip("{}").lower().replace("_", "-"))
             tok = tok.replace(k, v)
     argv.append(tok)
 if missing:

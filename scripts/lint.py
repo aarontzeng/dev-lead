@@ -854,6 +854,25 @@ DELEGATE_GUARDRAILS = {
         ),
         "forbidden": ("remote-refs.after",),
     },
+    # Added 2026-09-13. These two shipped with NO tripwire at all -- and they
+    # are the two workflow.md rates weakest ("Instruction level only. No machine
+    # allow-list" for claude; "same as claude ... nothing in this suite has
+    # measured the sandbox refusing git push" for codex). The obligation was
+    # already unconditional in Phase 1; only the enforcement was missing.
+    "skills/claude-implement/SKILL.md": {
+        "required": (
+            '"$DEV_LEAD/scripts/snapshot-refs.sh" check "$WORKTREE" '
+            '"$RUN_DIR/remote-refs.before" || exit 1',
+        ),
+        "forbidden": ("remote-refs.after",),
+    },
+    "skills/codex-implement/SKILL.md": {
+        "required": (
+            '"$DEV_LEAD/scripts/snapshot-refs.sh" check "$WORKTREE" '
+            '"$RUN_DIR/remote-refs.before" || exit 1',
+        ),
+        "forbidden": ("remote-refs.after",),
+    },
 }
 
 

@@ -177,7 +177,7 @@ flowchart TB
         M --> F
     end
 
-    P2 -->|"no verified blocking findings"| M
+    P2 -->|"no verified HIGH findings"| M
     P2 -.->|"a stop condition fired"| H
 
     classDef task fill:#f1f5f9,stroke:#64748b,stroke-width:2px,color:#1f2937

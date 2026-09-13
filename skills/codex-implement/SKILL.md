@@ -71,6 +71,12 @@ shared files under `/tmp`:
 
 ```bash
 RUN_DIR=$(mktemp -d "${TMPDIR:-/tmp}/codex-implement.XXXXXX")
+
+# The helper lives in the SUITE's tree, cwd is the TARGET repo — a bare
+# `scripts/…` resolves against the target and exits 127.
+DEV_LEAD=${DEV_LEAD_ROOT:-$(ls -d "$HOME"/.claude/plugins/cache/dev-lead/dev-lead/* 2>/dev/null | sort -V | tail -1)}
+[ -x "$DEV_LEAD/scripts/snapshot-refs.sh" ] || { echo "dev-lead root unresolved — set DEV_LEAD_ROOT"; exit 1; }
+"$DEV_LEAD/scripts/snapshot-refs.sh" save "$WORKTREE" "$RUN_DIR/remote-refs.before"   # push-detection baseline
 TASK_FILE="$RUN_DIR/task.md"
 ```
 
@@ -171,6 +177,7 @@ measured false green.
 
 ```bash
 cd "$WORKTREE"
+"$DEV_LEAD/scripts/snapshot-refs.sh" check "$WORKTREE" "$RUN_DIR/remote-refs.before" || exit 1   # 0. push tripwire, fail-closed
 git status --short          # 1. the actual change set, file by file
 git diff                    # 2. the actual content (HEAD == BASE here)
 # 3. re-run the relevant tests yourself, against this uncommitted state

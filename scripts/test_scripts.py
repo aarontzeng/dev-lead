@@ -706,6 +706,116 @@ def test_lint_leaf_rule():
           "a shipped review skill lost the leaf paragraph")
 
 
+# ------------------------------------------------------------- lint launch ----
+def test_lint_launch():
+    """check_launch(): the drift-catcher, which shipped with no test of its own.
+
+    lint.py's own comment records why it was rewritten: "a four-leg review
+    demonstrated the first version caught only the ONE shape its author had
+    mutation-tested against." The rewrite then shipped untested — grep for
+    check_launch in this file before 2026-09-13 and there are zero hits — so the
+    same failure could recur silently.
+
+    The shapes below are taken from what the shipped skills actually look like
+    (`cd "$WORKTREE" && cli ...`, a bare `cli ... \\` with indented
+    continuations, a `node "$(...)"` wrapper, --effort with a space, --variant),
+    not from what a reader of the checker would imagine — which is the rule
+    calibration-journal.md draws from that incident.
+    """
+    sys.path.insert(0, str(SCRIPTS))
+    import lint
+
+    def run_against(body, adapter, role, eff, cli):
+        with tempfile.TemporaryDirectory() as td:
+            fake = Path(td)
+            d = fake / "skills" / f"{adapter}-{role}"
+            d.mkdir(parents=True)
+            (d / "SKILL.md").write_text(body, encoding="utf-8")
+            real_root, real_errors = lint.ROOT, lint.ERRORS
+            try:
+                lint.ROOT, lint.ERRORS = fake, []
+                for lineno, cmdline in lint._launch_commands(
+                        d / "SKILL.md", cli):
+                    lint._check_effort_spelling(d / "SKILL.md", lineno, cmdline,
+                                                adapter, role, eff)
+                return list(lint.ERRORS)
+            finally:
+                lint.ROOT, lint.ERRORS = real_root, real_errors
+
+    FLAG = {"mechanism": "flag", "flag": "--variant"}
+    SUFFIX = {"mechanism": "model_suffix"}
+    CONFIG = {"mechanism": "config_only", "applies_to_role": "review",
+              "config_key": "k", "config_file": "f"}
+
+    def fence(code):
+        return "# doc\n\n```bash\n" + code + "```\n"
+
+    # 1. the bare-command-with-indented-continuations shape, which is what every
+    #    shipped launch block looks like and the shape the FIRST version missed
+    got = run_against(fence('opencode run --model x \\\n  --print-logs\n'),
+                      "opencode", "implement", FLAG, "opencode")
+    check("launch: flags a continuation-style launch missing its depth knob",
+          any("omits '--variant'" in e for e in got), f"got {got}")
+
+    # 2. `cd "$WORKTREE" && cli ...` — the other shipped shape
+    got = run_against(fence('cd "$WORKTREE" && agy -p "x" --effort high\n'),
+                      "agy", "implement", SUFFIX, "agy")
+    check("launch: flags --effort on a model_suffix adapter behind a cd &&",
+          any("model_suffix" in e for e in got), f"got {got}")
+
+    # 3. the node-wrapper shape
+    got = run_against(fence('node "$(ls -d ...)" task --effort high\n'),
+                      "codex", "review", CONFIG, "node")
+    check("launch: flags --effort on a config_only path",
+          any("no effort flag at all" in e for e in got), f"got {got}")
+
+    # 4. ...and the SAME adapter's other role must NOT fire: config_only is
+    #    role-scoped, and codex's task path really does take --effort
+    got = run_against(fence('node "$(ls -d ...)" task --effort high\n'),
+                      "codex", "implement", CONFIG, "node")
+    check("launch: does not flag --effort on the role the config does not cover",
+          got == [], f"got {got}")
+
+    # 5. carrying a neighbour's knob ALONGSIDE the right one is still wrong —
+    #    the shape a lead produces by copying between legs
+    got = run_against(fence('opencode run --variant xhigh --effort high\n'),
+                      "opencode", "review", FLAG, "opencode")
+    check("launch: flags a neighbouring family's knob even beside the right one",
+          any("wrong-flag-name" in e for e in got), f"got {got}")
+
+    # 6. prose is not a launch. The false-positive direction, and the reason the
+    #    checker parses fences instead of grepping lines. The sentence has to be
+    #    one the fence rule is the ONLY thing saving: a standalone `opencode`
+    #    token plus a wrong knob and no right one, so removing the fence
+    #    restriction makes it fire. An earlier version of this case wrote
+    #    "to opencode;" and passed for the wrong reason — the CLI match needs
+    #    the name space-delimited, so it was never a candidate either way, and
+    #    the mutant that drops the fence check survived it.
+    got = run_against("Do not run opencode with --effort here.\n",
+                      "opencode", "review", FLAG, "opencode")
+    check("launch: prose mentioning a flag is not a launch", got == [], f"got {got}")
+
+    # 7. a fenced block that is not a launch of THIS cli
+    got = run_against(fence('git worktree add -b x ../y "$BASE"\n'),
+                      "opencode", "review", FLAG, "opencode")
+    check("launch: a fenced non-launch is not inspected", got == [], f"got {got}")
+
+    # 8. the correct command must stay silent, or the check is unusable
+    got = run_against(fence('opencode run --model x --variant xhigh\n'),
+                      "opencode", "review", FLAG, "opencode")
+    check("launch: a correct launch produces nothing", got == [], f"got {got}")
+
+    # and the shipped tree must satisfy it
+    real, real_errors = lint.ERRORS, None
+    try:
+        lint.ERRORS = []
+        lint.check_launch()
+        check("launch: the shipped skills pass their own launch rule",
+              lint.ERRORS == [], f"got {lint.ERRORS}")
+    finally:
+        lint.ERRORS = real
+
+
 # --------------------------------------------------- lint delegate guardrails ----
 def test_lint_delegate_guardrails():
     """check_delegate_guardrails(): dispatch safety must stay fail-closed.
@@ -820,11 +930,16 @@ def test_lint_delegate_audit_trails():
     check("audit: complete JSON and tier policy passes", run_against(good) == [],
           f"got {run_against(good)}")
 
+    # The fixture APPENDS to a valid body instead of replacing it. Replacing it
+    # tripped the required-fragments loop three times over (no json, no redirect,
+    # no request_id) and the assertion matched one of THOSE errors, so the text
+    # rule could be deleted with this case still green. Measured 2026-09-13.
     text_output = dict(good)
-    text_output["skills/cursor-adversarial-review/SKILL.md"] = "--output-format text\n"
+    text_output["skills/cursor-adversarial-review/SKILL.md"] = (
+        good["skills/cursor-adversarial-review/SKILL.md"] + "--output-format text\n")
     got = run_against(text_output)
-    check("audit: flags Cursor text output", any("--output-format json" in e for e in got),
-          f"got {got}")
+    check("audit: flags Cursor text output",
+          any("text output drops request_id" in e for e in got), f"got {got}")
 
     merged_streams = dict(good)
     merged_streams["skills/cursor-implement/SKILL.md"] = (
@@ -1922,11 +2037,28 @@ def test_await_codex_job(tmp):
     check("await-codex-job.sh says TIMEOUT rather than failing silently",
           "TIMEOUT" in (r.stderr + r.stdout), (r.stderr + r.stdout)[:120])
 
+    # Exercise the guard instead of grepping for its words. The old assertion
+    # was `"failed" in body and "cancelled" in body` — a search of the SOURCE
+    # TEXT — and a natural typo survives it: drop the spaces from the case
+    # patterns (`*"|failed|"*`) and all four words are still in the file while
+    # the pattern can never match the companion's real `- task-x | failed | ...`
+    # output. Measured 2026-09-13: full suite green against that mutant.
+    for state in ("failed", "cancelled", "error", "completed"):
+        term_home = tmp / f"term-home-{state}"
+        c = term_home / ".claude/plugins/cache/openai-codex/codex/9.9.9/scripts"
+        c.mkdir(parents=True, exist_ok=True)
+        (c / "codex-companion.mjs").write_text(
+            f"console.log('- task-t | {state} | rescue | Codex Task');\n")
+        r = subprocess.run(["bash", str(await_sh), "task-t", str(tmp), "1"],
+                           capture_output=True, text=True, timeout=180,
+                           env=dict(os.environ, HOME=str(term_home)))
+        check(f"await-codex-job.sh treats {state} as terminal",
+              r.returncode == 0 and "TERMINAL" in (r.stdout + r.stderr),
+              f"rc={r.returncode} out={(r.stdout + r.stderr)[:120]}")
+
     body = await_sh.read_text()
     check("await-codex-job.sh resolves the companion under $HOME/.claude",
           "plugins/cache/openai-codex/codex" in body)
-    check("await-codex-job.sh treats failed/cancelled as terminal, not just completed",
-          "failed" in body and "cancelled" in body)
 
 
 def test_leg_cmd():
@@ -2093,6 +2225,9 @@ def main():
 
     print("lint.py check_leaf_rule")
     test_lint_leaf_rule()
+
+    print("lint.py check_launch")
+    test_lint_launch()
 
     print("lint.py check_delegate_guardrails")
     test_lint_delegate_guardrails()
