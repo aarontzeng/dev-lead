@@ -1712,7 +1712,12 @@ def test_release(tmp):
     """
     release = SCRIPTS / "release.sh"
     notes = tmp / "notes.md"
-    notes.write_text("Title line\n\n- a real bullet\n- and another\n")
+    # The '## ' line is load-bearing: `git tag -a -F` defaults to
+    # --cleanup=strip and deletes it, which is how v0.5.1 shipped a release page
+    # with none of its four headings. A fixture without a '#' line cannot fail
+    # the verbatim assertion below, which is why this defect survived.
+    notes.write_text("Title line\n\n## A heading strip would eat\n\n"
+                     "- a real bullet\n- and another\n")
     thin = tmp / "thin.md"
     thin.write_text("just one line\n")
 
@@ -1787,8 +1792,15 @@ def test_release(tmp):
           git(ok, "tag", "-l").stdout)
     check("release: creates an ANNOTATED tag (ci.yml hard-fails on lightweight)",
           git(ok, "cat-file", "-t", "v0.3.41").stdout.strip() == "tag")
+    # Byte-equality, not a substring: the old check looked for one bullet and
+    # passed against an annotation missing every heading.
     check("release: the annotation is the notes file verbatim",
-          "and another" in git(ok, "tag", "-l", "--format=%(contents)", "v0.3.41").stdout)
+          git(ok, "cat-file", "tag", "v0.3.41").stdout.split("\n\n", 1)[1]
+          == notes.read_text(),
+          git(ok, "cat-file", "tag", "v0.3.41").stdout)
+    check("release: a '#' heading survives into the annotation",
+          "## A heading strip would eat"
+          in git(ok, "tag", "-l", "--format=%(contents)", "v0.3.41").stdout)
     check("release: prints an --atomic push and does NOT push it itself",
           "--atomic origin master v0.3.41" in r.stdout, r.stdout)
     check("release: ... so origin still has no such tag",

@@ -94,11 +94,28 @@ git rev-parse -q --verify "refs/tags/$tag" >/dev/null \
 [ -z "$(git ls-remote --tags origin "$tag")" ] \
   || die "$tag is already published on origin"
 
-git tag -a "$tag" -F "$notes"
+# --cleanup=verbatim, and it is not optional. `git tag -a -F` defaults to
+# --cleanup=strip, which DELETES every line beginning with '#' -- and a Markdown
+# heading is a '#' line. ci.yml publishes this annotation verbatim as the release
+# page, so the default silently ships a page with all its headings missing, exit
+# 0, no warning. Measured 2026-09-12: v0.5.1 went out that way, notes written
+# with four '##' sections and a page with none, and it was only found because an
+# audit read this line. The >= 3 non-blank check above counts the FILE, so notes
+# that are mostly headings pass the gate and ship almost nothing.
+git tag -a "$tag" --cleanup=verbatim -F "$notes"
 
 # Verify what we made rather than assuming it: ci.yml hard-fails on a
 # lightweight tag, and that failure is only visible after the push.
 [ "$(git cat-file -t "$tag")" = tag ] || die "$tag is not an annotated tag object"
+
+# ...and verify the CONTENT, not just the type. The type check above passed on
+# every stripped annotation this script ever made. A tag object is five header
+# lines then a blank, so the message starts at line 6. Byte-equality is only a
+# sound assertion because of --cleanup=verbatim; with strip or whitespace it
+# would fail on its own trimming and tell you nothing.
+[ "$(git cat-file tag "$tag" | tail -n +6)" = "$(cat "$notes")" ] \
+  || die "the annotation does not match $notes byte for byte -- refusing to
+       publish a release page that differs from the notes you wrote"
 
 echo "release: $tag is ready on $(git rev-parse --short HEAD)"
 echo
