@@ -100,7 +100,7 @@ at the working tree first, commit second, range third.
 
 ## The adapters, side by side
 
-Four runtime adapters, each usable as an implementer or a reviewer. Specific
+Six runtime adapters, each usable as an implementer or a reviewer. Specific
 model IDs are deliberately absent — catalogues change every few weeks and the
 suite ships *structure*, not somebody else's benchmark (see
 [calibration-journal.md](calibration-journal.md)). The *family* labels below
@@ -188,7 +188,7 @@ round:
   cross-family rule, brief diversity, machine boundaries, evidence gates,
   bounded properties, frozen targets.
 - **How to run one** — [`skills/dev-lead/SKILL.md`](../skills/dev-lead/SKILL.md)
-  is the orchestration layer; the eight family skills under
+  is the orchestration layer; the twelve family skills under
   [`skills/`](../skills) carry each adapter's mechanics.
 - **Mutation-proofing**, the step that most often lies —
   [`skills/dev-lead/references/mutation-runbook.md`](../skills/dev-lead/references/mutation-runbook.md).

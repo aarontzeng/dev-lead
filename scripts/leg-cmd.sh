@@ -127,10 +127,23 @@ if r["prompt_delivery"] == "stdin":
 
 w = sys.stderr
 print("# adapter %s / role %s   (data/launch.json, verified %s)" % (a, role, spec["verified"]), file=w)
-print("# effort: %s -- %s" % (mech, eff.get("note", "").split(".")[0]), file=w)
+# The effort block is ADAPTER-scoped but often describes ONE role: codex
+# declares applies_to_role "review" and carries an implement_note saying the
+# task path DOES take --effort. Printing the review note under implement told
+# the caller that --effort is parsed as prompt text, directly above a command
+# passing --effort. Same accessor the guard at the top already uses.
+applies = role == eff.get("applies_to_role", role)
+note = eff.get("note", "") if applies else eff.get("implement_note", eff.get("note", ""))
+print("# effort: %s -- %s" % (mech, note.split(".")[0]), file=w)
+# ADAPTER-wide, and said so: gotchas carry no role field in launch.json, so
+# some are review-path facts printed under an implement launch. Labelling
+# the scope costs a word; giving them a role costs a data-model change.
 for g in spec.get("gotchas", []):
-    print("# gotcha: %s" % g, file=w)
-if spec.get("not_flags"):
+    print("# gotcha (adapter-wide, may not apply to this role): %s" % g, file=w)
+if spec.get("not_flags") and applies:
+    # Gated on the same accessor: codex's not_flags are review-path facts
+    # ("--help" is prompt text to `adversarial-review`, "--effort" to the review
+    # path), and printing them under implement contradicted the emitted argv.
     print("# NOT flags on this path (they are parsed as prompt text): %s"
           % " ".join(spec["not_flags"]), file=w)
 print(cmd)

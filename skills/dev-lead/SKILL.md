@@ -5,9 +5,10 @@ description: Orchestrate a feature or PR end-to-end as the lead — dispatch imp
 
 # Dev lead: dispatch → implement → adversarial rounds → merge gate
 
-This is the orchestration layer over the eight family skills:
-`{claude,codex,agy,opencode}-implement` and
-`{claude,codex,agy,opencode}-adversarial-review`. It adds no new mechanics —
+This is the orchestration layer over the twelve family skills:
+`{claude,codex,agy,opencode,grok,cursor}-implement` and
+`{claude,codex,agy,opencode,grok,cursor}-adversarial-review`. It adds no new
+mechanics —
 it decides who does what, how many rounds, and when to stop. Read the
 underlying skill before invoking it; every operational gotcha (sandbox
 allow-lists, workspace traps, silent-death modes, status commands that lie)
@@ -834,13 +835,18 @@ preserved worktree is the resume state.
 Record every delegate dispatch as three separate fields, because they
 diverge and the cross-family accounting reads only the last one:
 
-- `runtime_adapter`: claude / codex / agy / opencode — the CLI driven
+- `runtime_adapter`: claude / codex / agy / opencode / grok / cursor — the
+  CLI driven
 - `served_model`: the model that actually answered — VERIFIED per the
   runtime file (some adapters silently substitute tiers), not the id you
   passed
-- `model_family`: Claude / GPT / Gemini / DeepSeek / Nemotron / unknown —
-  what the reviewer-pairing rule is checked against; `unknown` (stealth
-  models) can never satisfy it
+- `model_family`: the value from [`data/families.json`](../../data/families.json)
+  — what the reviewer-pairing rule is checked against. Read it there rather
+  than from a list in this file: a partial roster here once omitted nine
+  accounting-valid families, and a lead logging a legitimate Grok or Kimi leg
+  as `unknown` wrongly concludes a valid cross-family pair is not one, because
+  `unknown` (stealth models, `accounting_valid: false`) can never satisfy the
+  rule
 
 ## What this is not
 

@@ -261,6 +261,30 @@
         ],
         "prompt_delivery": "prompt_file",
         "verified": "transcribed from the matching skill; not probed"
+      },
+      "implement": {
+        "argv": [
+          "--prompt-file",
+          "{PROMPT_FILE}",
+          "-m",
+          "{MODEL}",
+          "--effort",
+          "{EFFORT}",
+          "--permission-mode",
+          "bypassPermissions",
+          "--sandbox",
+          "workspace",
+          "--disallowed-tools",
+          "Agent",
+          "--no-memory",
+          "--verbatim",
+          "--max-turns",
+          "80",
+          "--output-format",
+          "plain"
+        ],
+        "prompt_delivery": "prompt_file",
+        "verified": "transcribed from the matching skill; not probed"
       }
     },
     "effort": {

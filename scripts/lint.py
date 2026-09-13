@@ -971,6 +971,15 @@ def check_launch():
         #    positive because prose is not in a fence.
         for skill in sorted((ROOT / "skills").glob(f"{name}-*/SKILL.md")):
             role = "implement" if skill.parent.name.endswith("-implement") else "review"
+            # A shipped skill with no launch row is a skill the mandated
+            # composition path cannot serve: dev-lead requires every launch to be
+            # composed with leg-cmd.sh, and leg-cmd exits 1 on a missing role.
+            # Measured 2026-09-13: grok-implement shipped that way, so grok could
+            # not be used as an implementer through the only sanctioned path.
+            if role not in spec.get("role", {}):
+                err(rel(skill), f"ships as a {role} leg but data/launch.json has no "
+                                f"{name} role.{role} — `leg-cmd.sh {name} {role}` "
+                                "exits 1, and dev-lead mandates that path")
             for lineno, cmdline in _launch_commands(skill, spec["cli"].split()[0]):
                 _check_effort_spelling(skill, lineno, cmdline, name, role, eff)
 

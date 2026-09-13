@@ -1996,6 +1996,31 @@ def test_leg_cmd():
         check(f"leg-cmd: {argv[2]} metacharacters are inside quotes",
               needle in r.stdout and "'" in r.stdout, r.stdout)
 
+    # The banner must not contradict the command underneath it. codex's effort
+    # block and not_flags are ADAPTER-scoped but describe the review path only
+    # (applies_to_role: "review"), so an implement launch printed "NOT flags on
+    # this path ... --effort" directly above an argv passing --effort high.
+    r = subprocess.run([str(script), "codex", "implement", "--model", "x",
+                        "--effort", "high"], capture_output=True, text=True)
+    check("leg-cmd: implement banner does not disown a flag it emits",
+          "--effort" not in r.stderr.split("NOT flags")[-1]
+          or "NOT flags" not in r.stderr,
+          f"stderr={r.stderr!r}")
+    check("leg-cmd: implement banner states the role's real effort behaviour",
+          "DOES take" in r.stderr, f"stderr={r.stderr!r}")
+    r2 = subprocess.run([str(script), "codex", "review", "--model", "x",
+                         "--base", "abc"], capture_output=True, text=True)
+    check("leg-cmd: ...and the review path keeps its warning",
+          "NOT flags" in r2.stderr, f"stderr={r2.stderr!r}")
+
+    # Every shipped skill must be launchable through the mandated path.
+    r = subprocess.run([str(script), "grok", "implement", "--model", "grok-4.6",
+                        "--effort", "medium", "--prompt-file", "/tmp/p.md"],
+                       capture_output=True, text=True)
+    check("leg-cmd: grok implement composes (it had no launch row)",
+          r.returncode == 0 and "--sandbox workspace" in r.stdout,
+          f"rc={r.returncode} out={r.stdout!r} err={r.stderr!r}")
+
     # A value the template never consumes used to be dropped in silence. For
     # --target that is a freeze-discipline hole: the caller believes the run is
     # pinned to a frozen worktree and it runs in their cwd.
