@@ -14,6 +14,42 @@ install). Read it before the first `agy` run of a session.
 
 ## Permission model — one-time setup per machine (required)
 
+> [!warning] `--sandbox` is NOT the boundary. The allow-list is — and its
+> scoping is only as good as its entries.
+>
+> Measured on two hosts, 2026-09-15, both agy 1.2.2, both in the documented
+> review posture (`--mode plan --sandbox --add-dir <frozen target>`):
+>
+> - **ps-241** — a leg asked to `cat /etc/hostname` and `ls /home/aaron` did
+>   both, and returned the real contents. Neither path is under `--add-dir`.
+> - **A WSL2 host** — a leg read `/etc/hostname` AND created a file in `/tmp`,
+>   verified from a separate shell rather than taken from the leg's own report.
+>
+> The two hosts differ only in WHICH commands their allow-lists permit, not in
+> whether `--sandbox` contains them. On ps-241 a probe asking for `uname -sr`
+> died with zero output because no rule permits it; `cat` and `ls` are
+> permitted and reached anywhere on the filesystem. So the flag does not
+> confine reads or writes to `--add-dir` on either machine, and a leg's
+> read-only posture rests entirely on the allow-list.
+>
+> **The practical hole**: `read_file(...)` entries ARE path-scoped, and bare
+> `command(cat)` / `command(sed)` / `command(ls)` entries are NOT — so any
+> allow-listed shell reader bypasses the path scoping of the entry beside it.
+> If a machine's list has both, the scoped entry is decoration. Scope the
+> command entries too, or accept that the leg can read the whole filesystem.
+>
+> This does not make agy unusable as a reviewer; it makes the flag's NAME
+> unreliable. Freeze the target with file permissions and verify it afterwards
+> ([`materializing-evidence.md`](../../../docs/materializing-evidence.md),
+> `freeze-target.sh` / `verify-target.sh`) —
+> that is what actually holds, and it is now the only mechanism here with
+> evidence behind it.
+>
+> Scope of the measurement, stated because it bounds the claim: review role
+> only, and a handful of commands. The implement role uses a different mode and
+> was not probed.
+
+
 Headless `--sandbox` runs auto-deny any tool needing "unsandboxed"
 permission, and **git needs it — measured: even read-only `git log` in a
 trusted, `--add-dir`ed directory is denied, and the whole run dies with zero

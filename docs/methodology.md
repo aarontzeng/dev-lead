@@ -124,6 +124,40 @@ where they can be checked against that family's runtime note. When a question
 genuinely needs measuring, building the measurement yourself and handing the
 leg the tool plus its output is usually cheaper than granting anyone anything.
 
+**Check which mechanism is actually holding, because a flag named `--sandbox`
+may not be one.** Measured on two hosts, 2026-09-15: an agy review leg launched
+exactly as this suite prescribes (`--mode plan --sandbox --add-dir <frozen>`)
+read `/etc/hostname` and listed a home directory on one, and on the other also
+WROTE a file into `/tmp` — all outside `--add-dir`, the write confirmed from a
+separate shell rather than from the leg's own account. The two machines
+differed only in which commands their allow-lists permitted. So on this family
+the boundary is the **allow-list**, not the sandbox flag, and it is only as
+tight as its entries: a path-scoped `read_file(<worktree>/**)` sitting beside
+an unscoped `command(cat)` is decoration. The first bullet above says reviewers
+"deny shell except whitelisted git reads" — true where the list says so, and
+this is the reminder to verify that rather than infer it from a flag name. What
+did hold on both hosts is the frozen target plus the before/after bracket, the
+mechanism §7 already requires.
+
+**A delegate's account of its OWN constraints is not evidence either — and it
+is the most convincing wrong answer you will get.** §6 says nothing a delegate
+self-reports about its WORK is evidence; this is the same rule one level down,
+about what it says it is allowed to do. Measured 2026-09-15: a cursor leg given
+identical flags and an identical brief minutes apart executed a shell command
+once — returning a host string it could not have guessed — and the next time
+declined, writing "Ask mode cannot execute shell" and helpfully adding that no
+permission error had occurred because nothing had been attempted. Both runs
+reported success. The second answer was a model demurring while phrasing it as
+a fact about the runtime, and it was on its way into a data file as a measured
+capability.
+
+So: fill a capability claim only from OBSERVED EXECUTION — the command visible
+in stderr, a permission decision in the log, or output obtainable no other way
+— never from asking the delegate what it can do. And probe a cell until it is
+stable, because instability is itself the answer: a capability that appears
+half the time is not "available", and recording either half would be a
+measurement of one run rather than of the runtime.
+
 Where a machine boundary has a deliberate hole (e.g. allowing a test runner
 that executes repo-supplied code), *say so honestly* in the skill, state what
 residual risk it creates, and make that risk observable — snapshot
@@ -320,6 +354,23 @@ the next person reads the checkmarks and not the caveat.
   the real diff.
 - Before launching: `git diff --stat "$BASE" HEAD` — the file list must match
   the change under review.
+
+### A grep hit is where a STRING is, not where a PROBLEM is
+
+Measured 2026-09-15, owned by the session that made it: a proposal named three
+line numbers as defective. Two of them were already correct — they matched the
+grep because the searched string appears in a data column there, not because
+anything on those lines was wrong. The actual defect was in a SUMMARY sentence
+that the grep also hit, and in a second sentence that a reader would have to
+notice by meaning rather than by string.
+
+Two consequences, and the second is the expensive one. A grep-seeded audit
+tends to report its hits as its findings, so correct lines get "fixed". And it
+cannot see the defect that carries no hit at all — a sentence saying "this
+model" instead of naming it. Where the hits and the defects diverge, they
+usually diverge in the same direction: the structured rows are right and the
+prose conclusion is wrong, and **the conclusion is what people remember.** Read
+the hits; then read what is around them for the claim they support.
 
 ### A finding has three states, and "unverified" is one of them
 
