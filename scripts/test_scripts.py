@@ -2183,6 +2183,77 @@ def test_leg_cmd():
               capture_output=True, text=True).stdout)
 
 
+    # The provider guard checks that a provider is PRESENT, not that it is
+    # opencode's. Measured 2026-09-15: the first version tested
+    # startswith("opencode/"), so it refused every openrouter/ and google/ id
+    # the same CLI serves -- 407 of the 414 models on that machine -- and told
+    # the caller to fix it by PREPENDING, yielding `opencode/openrouter/...`,
+    # which exists nowhere. Following that advice cost three launches and
+    # produced the same UnknownError the guard exists to prevent. It also
+    # blocked this account's standing opencode default one day after it was set.
+    r = subprocess.run([str(script), "opencode", "review", "--model",
+                        "openrouter/nvidia/nemotron-3.5-lightning:free",
+                        "--effort", "high"], capture_output=True, text=True)
+    check("leg-cmd: another provider's qualified id is accepted",
+          r.returncode == 0, r.stderr)
+    check("leg-cmd: and reaches the command UNCHANGED",
+          "-m openrouter/nvidia/nemotron-3.5-lightning:free" in r.stdout, r.stdout)
+
+    r = subprocess.run([str(script), "opencode", "review", "--model",
+                        "muse-spark-1.3-contributor-free", "--effort", "xhigh"],
+                       capture_output=True, text=True)
+    check("leg-cmd: a bare model name is still refused", r.returncode != 0, r.stdout)
+    check("leg-cmd: the refusal names what is missing",
+          "provider-qualified" in r.stderr and "no provider segment" in r.stderr,
+          f"stderr={r.stderr!r}")
+
+    # Every adapter reads its brief from a path the caller owns, and they fail
+    # asymmetrically when it is empty: agy and cursor refuse loudly, opencode's
+    # redirect dies before an output file exists, and codex RUNS -- its review
+    # path has --base/--scope to work from, so it returns a plausible review
+    # carrying none of the lens asked for. That is the false green the four-leg
+    # method exists to prevent, and one assertion blocks all four.
+    r = subprocess.run([str(script), "opencode", "review", "--model",
+                        "opencode/x", "--effort", "high",
+                        "--run-dir", "/tmp/leg-cmd-test"],
+                       capture_output=True, text=True)
+    lines = [l for l in r.stdout.splitlines() if l.strip()]
+    check("leg-cmd: --run-dir emits an export the caller can eval",
+          bool(lines) and lines[0] == "export RUN_DIR=/tmp/leg-cmd-test", r.stdout)
+    check("leg-cmd: the brief assertion sits between export and command",
+          len(lines) >= 3 and lines[1].startswith("test -s")
+          and lines[2].startswith("opencode run"), r.stdout)
+    # && rather than `exit 1`: this output is documented for `eval "$(...)"`,
+    # and an exit inside eval kills the CALLER's interactive shell.
+    check("leg-cmd: the assertion cannot kill the caller's shell",
+          "exit 1" not in r.stdout and lines[1].rstrip().endswith("&&"), r.stdout)
+
+    r = subprocess.run([str(script), "opencode", "review", "--model",
+                        "opencode/x", "--effort", "high"],
+                       capture_output=True, text=True)
+    check("leg-cmd: warns that RUN_DIR must be exported, not prefix-assigned",
+          "prefix assignment" in r.stderr, f"stderr={r.stderr!r}")
+
+    # Chain SEMANTICS, executed -- an assertion that cannot block is decoration.
+    with tempfile.TemporaryDirectory() as td:
+        emitted = subprocess.run(
+            [str(script), "opencode", "review", "--model", "opencode/x",
+             "--effort", "high", "--run-dir", td],
+            capture_output=True, text=True).stdout.splitlines()
+        probe = "\n".join(emitted[:-1] + ["echo RAN"])
+        brief = Path(td) / "prompt.md"
+        for label, content, should_run in (("missing brief", None, False),
+                                           ("empty brief", "", False),
+                                           ("real brief", "lens\n", True)):
+            if content is None:
+                brief.unlink(missing_ok=True)
+            else:
+                brief.write_text(content)
+            out = subprocess.run(["bash", "-c", probe], capture_output=True, text=True)
+            check("leg-cmd: %s -> leg %s" % (label, "runs" if should_run else "blocked"),
+                  ("RAN" in out.stdout) == should_run,
+                  f"stdout={out.stdout!r} stderr={out.stderr!r}")
+
 def main():
     for script in ("freeze-target.sh", "verify-target.sh", "snapshot-refs.sh",
                    "await-codex-job.sh"):

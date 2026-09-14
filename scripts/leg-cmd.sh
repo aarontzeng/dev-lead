@@ -10,7 +10,7 @@
 #
 # Usage:
 #   leg-cmd.sh <adapter> <role> --model <model> [--effort <e>] [--target <dir>]
-#              [--base <ref>] [--prompt-file <f>] [--check]
+#              [--base <ref>] [--prompt-file <f>] [--run-dir <dir>] [--check]
 #
 # Prints the command on stdout and the adapter's gotchas on stderr, so
 #   eval "$(leg-cmd.sh agy review --model gemini-3.8-flash-medium --target "$T")"
@@ -23,10 +23,10 @@ HERE=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 DATA="$HERE/../data/launch.json"
 [ -f "$DATA" ] || die "cannot find data/launch.json at $DATA"
 
-[ $# -ge 2 ] || die "usage: leg-cmd.sh <adapter> <role> --model <model> [--effort <e>] [--target <dir>] [--base <ref>] [--prompt-file <f>] [--check]"
+[ $# -ge 2 ] || die "usage: leg-cmd.sh <adapter> <role> --model <model> [--effort <e>] [--target <dir>] [--base <ref>] [--prompt-file <f>] [--run-dir <dir>] [--check]"
 ADAPTER=$1; ROLE=$2; shift 2
 
-MODEL=""; EFFORT=""; TARGET=""; BASE=""; PROMPT_FILE=""; CHECK=0
+MODEL=""; EFFORT=""; TARGET=""; BASE=""; PROMPT_FILE=""; RUN_DIR_ARG=""; CHECK=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --model)       MODEL=${2:-}; shift 2 ;;
@@ -34,6 +34,7 @@ while [ $# -gt 0 ]; do
     --target)      TARGET=${2:-}; shift 2 ;;
     --base)        BASE=${2:-}; shift 2 ;;
     --prompt-file) PROMPT_FILE=${2:-}; shift 2 ;;
+    --run-dir)     RUN_DIR_ARG=${2:-}; shift 2 ;;
     --check)       CHECK=1; shift ;;
     *) die "unknown option: $1" ;;
   esac
@@ -41,7 +42,8 @@ done
 [ -n "$MODEL" ] || die "--model is required (there is no safe default; the model IS the cross-family accounting decision)"
 
 ADAPTER="$ADAPTER" ROLE="$ROLE" MODEL="$MODEL" EFFORT="$EFFORT" TARGET="$TARGET" \
-BASE="$BASE" PROMPT_FILE="$PROMPT_FILE" CHECK="$CHECK" DATA="$DATA" python3 - <<'PY'
+BASE="$BASE" PROMPT_FILE="$PROMPT_FILE" RUN_DIR_ARG="$RUN_DIR_ARG" \
+CHECK="$CHECK" DATA="$DATA" python3 - <<'PY'
 import json, os, shlex, sys
 
 d = json.load(open(os.environ["DATA"]))
@@ -86,14 +88,32 @@ elif mech not in ("model_suffix", "flag", "config_only", "none"):
 # on 2026-09-14: the leg was declared dead, retried, declared a pool outage,
 # substituted with another family, and written up in the journal as a provider
 # failure. The identical model worked with no -m at all (it was the default).
+#
+# What this checks is that a provider is PRESENT, not that it is the default
+# one. The first version tested `startswith(model_prefix)`, which treated
+# `opencode/` as the ONLY legal provider -- so it refused every id from every
+# other provider the same CLI serves (measured 2026-09-15: `opencode models`
+# lists 369 openrouter ids, 38 google, 7 opencode -- the guard rejected 98% of
+# the catalogue), and it told the caller to fix it by PREPENDING, which yields
+# `opencode/openrouter/nvidia/...` -- an id that exists nowhere. Following that
+# advice cost three launches and produced exactly the `UnknownError` this guard
+# was written to prevent: it manufactured an instance of the failure it exists
+# to remove. It also blocked this account's own standing default
+# (`openrouter/nvidia/nemotron-3.5-lightning:free`, set 2026-09-14) one day
+# after that default was chosen. model_prefix is now only the provider
+# SUGGESTED when the id carries no provider at all.
 prefix = spec.get("model_prefix")
-if prefix and not os.environ["MODEL"].startswith(prefix):
-    sys.exit("leg-cmd: %s needs a provider-qualified model id.\n"
-             "  you passed %r; use %r\n"
+if prefix and "/" not in os.environ["MODEL"]:
+    sys.exit("leg-cmd: %s needs a provider-qualified model id "
+             "(<provider>/<model>).\n"
+             "  you passed %r -- it has no provider segment.\n"
+             "  e.g. %r, or any id `%s models` lists; ids from other providers "
+             "(openrouter/..., google/...) are passed through unchanged.\n"
              "  a bare name is accepted by the CLI and fails server-side as "
              "UnknownError with step=0, which reads like an outage, not like a "
              "bad argument."
-             % (a, os.environ["MODEL"], prefix + os.environ["MODEL"]))
+             % (a, os.environ["MODEL"], prefix + os.environ["MODEL"],
+                spec["cli"]))
 
 r = spec["role"][role]
 subst = {"{MODEL}": os.environ["MODEL"], "{EFFORT}": effort,
@@ -166,6 +186,40 @@ if spec.get("not_flags") and applies:
     # path), and printing them under implement contradicted the emitted argv.
     print("# NOT flags on this path (they are parsed as prompt text): %s"
           % " ".join(spec["not_flags"]), file=w)
+
+# The emitted command reads the brief from a path the CALLER owns, and the four
+# adapters fail differently when it is empty or missing: agy says `error: empty
+# prompt` and cursor `No prompt provided`, both loud; opencode's redirect dies
+# before an output file exists, which reads as a path bug; and codex RUNS
+# ANYWAY -- its review path has --base/--scope branch to work from, so an empty
+# brief returns a plausible general review carrying none of the lens the lead
+# asked for. That last one is the expensive shape: a leg that looks like it
+# worked is the false green the four-leg method exists to prevent. One assertion
+# in front of the command blocks all four mechanically.
+#
+# Chained with && rather than `exit 1` on purpose: this output is documented for
+# `eval "$(leg-cmd.sh ...)"`, and an `exit` inside eval kills the CALLER's
+# interactive shell.
+delivery = r["prompt_delivery"]
+brief = (shlex.quote(os.environ["PROMPT_FILE"]) if delivery == "prompt_file"
+         else '"$RUN_DIR/prompt.md"')
+
+pre = []
+if delivery != "prompt_file":
+    run_dir = os.environ.get("RUN_DIR_ARG", "")
+    if run_dir:
+        pre.append("export RUN_DIR=%s" % shlex.quote(run_dir))
+    else:
+        # Measured 2026-09-14: a prefix assignment LOOKS right and is not.
+        print("# RUN_DIR must be exported on its own line before this command. "
+              "A prefix assignment (`RUN_DIR=/p cmd \"$(cat \"$RUN_DIR/...\")\"`) "
+              "expands the argument BEFORE the assignment takes effect, so the "
+              "leg reads /prompt.md and the failure looks like a path bug in "
+              "this script. Pass --run-dir to have the export emitted for you.",
+              file=w)
+pre.append("test -s %s || { echo 'leg-cmd: brief is empty or missing:' %s >&2; "
+           "false; } &&" % (brief, brief))
+print("\n".join(pre))
 print(cmd)
 
 if os.environ.get("CHECK") == "1":
