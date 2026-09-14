@@ -329,7 +329,9 @@ first — none of them matters.
 
 [`leg-cmd.sh`](../../../scripts/leg-cmd.sh) now refuses a bare opencode model
 id for this reason, and [`launch.json`](../../../data/launch.json) carries the
-prefix as `model_prefix`. Check `step=` before
+prefix as `model_prefix` — which is the provider SUGGESTED when an id carries
+none, not a required one: ids from any other provider (`openrouter/...`,
+`google/...`) pass through untouched. Check `step=` before
 blaming the pool: a run that read nothing did nothing, and on this adapter that
 is far more likely to be the argument than the provider.
 

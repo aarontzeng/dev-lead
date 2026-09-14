@@ -2221,8 +2221,9 @@ def test_leg_cmd():
     check("leg-cmd: --run-dir emits an export the caller can eval",
           bool(lines) and lines[0] == "export RUN_DIR=/tmp/leg-cmd-test", r.stdout)
     check("leg-cmd: the brief assertion sits between export and command",
-          len(lines) >= 3 and lines[1].startswith("test -s")
-          and lines[2].startswith("opencode run"), r.stdout)
+          len(lines) >= 3 and lines[1].startswith("test ")
+          and "test -s" in lines[1] and lines[2].startswith("opencode run"),
+          r.stdout)
     # && rather than `exit 1`: this output is documented for `eval "$(...)"`,
     # and an exit inside eval kills the CALLER's interactive shell.
     check("leg-cmd: the assertion cannot kill the caller's shell",
@@ -2233,6 +2234,40 @@ def test_leg_cmd():
                        capture_output=True, text=True)
     check("leg-cmd: warns that RUN_DIR must be exported, not prefix-assigned",
           "prefix assignment" in r.stderr, f"stderr={r.stderr!r}")
+
+    # An id with an empty path segment contains "/" and is still nonsense. The
+    # first spelling of this guard asked only whether a slash was present, so
+    # `opencode/`, `/x` and `a//b` all sailed through -- named by a review leg,
+    # 2026-09-15.
+    for bad in ("opencode/", "/x", "a//b"):
+        r = subprocess.run([str(script), "opencode", "review", "--model", bad,
+                            "--effort", "high"], capture_output=True, text=True)
+        check("leg-cmd: refuses the malformed id %r" % bad, r.returncode != 0, r.stdout)
+        check("leg-cmd: and says it is the empty segment, not a missing provider",
+              "EMPTY path segment" in r.stderr, f"stderr={r.stderr!r}")
+    r = subprocess.run([str(script), "opencode", "review", "--model",
+                        "openrouter/nvidia/x:free", "--effort", "high"],
+                       capture_output=True, text=True)
+    check("leg-cmd: a well-formed two-segment provider id is still accepted",
+          r.returncode == 0, r.stderr)
+
+    # --run-dir has no placeholder in any template, so the loop that refuses a
+    # silently-dropped --target/--base/--prompt-file could not see it. A review
+    # leg caught the omission 2026-09-15: grok reads its brief from
+    # --prompt-file, so a --run-dir passed there vanished with exit 0.
+    r = subprocess.run([str(script), "grok", "review", "--model", "grok-4.6",
+                        "--effort", "high", "--prompt-file", "/tmp/b.md",
+                        "--run-dir", "/tmp/ignored"],
+                       capture_output=True, text=True)
+    check("leg-cmd: --run-dir is refused where the brief comes from --prompt-file",
+          r.returncode != 0, f"stdout={r.stdout!r}")
+    check("leg-cmd: and the refusal says it would have been dropped",
+          "silently dropped" in r.stderr, f"stderr={r.stderr!r}")
+    r = subprocess.run([str(script), "grok", "review", "--model", "grok-4.6",
+                        "--effort", "high", "--prompt-file", "/tmp/b.md"],
+                       capture_output=True, text=True)
+    check("leg-cmd: the same adapter without --run-dir is still emitted",
+          r.returncode == 0 and "test -s /tmp/b.md" in r.stdout, r.stdout)
 
     # Chain SEMANTICS, executed -- an assertion that cannot block is decoration.
     with tempfile.TemporaryDirectory() as td:
@@ -2251,6 +2286,74 @@ def test_leg_cmd():
                 brief.write_text(content)
             out = subprocess.run(["bash", "-c", probe], capture_output=True, text=True)
             check("leg-cmd: %s -> leg %s" % (label, "runs" if should_run else "blocked"),
+                  ("RAN" in out.stdout) == should_run,
+                  f"stdout={out.stdout!r} stderr={out.stderr!r}")
+
+        # Under `set -e`, through `eval` -- which is the DOCUMENTED usage and
+        # the only spelling that answers the question. Two review legs said an
+        # errexit caller aborts here; the author "disproved" it by inlining the
+        # chain in a script, where errexit exempts an && / || list, and so
+        # measured a construct nobody runs. Through eval the legs are right:
+        # eval is a simple command, errexit sees its status, the caller stops.
+        # Pinned in BOTH directions so the next person cannot re-derive the
+        # wrong half: no errexit -> the shell survives; errexit -> it stops,
+        # which is what a script should do when its brief is missing.
+        brief.unlink(missing_ok=True)
+        emit = "bash %s opencode review --model opencode/x --effort high --run-dir %s 2>/dev/null" % (script, td)
+        for flags, label, sentinel_expected in ((["-c"], "no errexit", True),
+                                                (["-c"], "errexit", False)):
+            pre = "set -e; " if label == "errexit" else ""
+            out = subprocess.run(["bash", *flags, '%seval "$(%s)"; echo SENTINEL' % (pre, emit)],
+                                 capture_output=True, text=True)
+            check("leg-cmd: eval under %s -> caller %s" % (label, "continues" if sentinel_expected else "stops"),
+                  ("SENTINEL" in out.stdout) == sentinel_expected,
+                  f"stdout={out.stdout!r} stderr={out.stderr!r}")
+
+    # RUN_DIR UNSET is the case the warning alone did not cover: the assertion
+    # would read `test -s /prompt.md`, which PASSES if that file happens to
+    # exist, and the leg then runs against a brief nobody wrote.
+    #
+    # Asserted on the EMITTED TEXT, deliberately. The first version of this
+    # check executed the chain with RUN_DIR unset in a temp dir -- and proved
+    # nothing: `$RUN_DIR/prompt.md` with RUN_DIR empty is the absolute path
+    # /prompt.md, so cd-ing somewhere writable cannot influence it, and the
+    # check stayed green with the guard deleted. Mutation caught it. Planting a
+    # real /prompt.md needs root and does not belong in a test suite, and the
+    # script's actual product IS the emitted string, so that is what to assert.
+    r = subprocess.run([str(script), "opencode", "review", "--model",
+                        "opencode/x", "--effort", "high", "--run-dir", "/tmp/x"],
+                       capture_output=True, text=True)
+    guard_line = [l for l in r.stdout.splitlines() if l.startswith("test ")][0]
+    check("leg-cmd: the guard requires RUN_DIR itself, not only the file",
+          'test -n "$RUN_DIR"' in guard_line, guard_line)
+    # ...and prompt_file delivery must NOT carry that clause: it has no RUN_DIR.
+    r = subprocess.run([str(script), "grok", "review", "--model", "grok-4.6",
+                        "--effort", "high", "--prompt-file", "/tmp/b.md"],
+                       capture_output=True, text=True)
+    guard_line = [l for l in r.stdout.splitlines() if l.startswith("test ")][0]
+    check("leg-cmd: prompt_file delivery does not test RUN_DIR",
+          "RUN_DIR" not in guard_line, guard_line)
+
+    # The executing coverage above is all opencode, i.e. stdin delivery through
+    # $RUN_DIR. The prompt_file branch builds a DIFFERENT assertion target and
+    # had no executing test at all until a review leg said so.
+    with tempfile.TemporaryDirectory() as td:
+        bf = Path(td) / "brief.md"
+        emitted = subprocess.run(
+            [str(script), "grok", "review", "--model", "grok-4.6",
+             "--effort", "high", "--prompt-file", str(bf)],
+            capture_output=True, text=True).stdout.splitlines()
+        probe = "\n".join(emitted[:-1] + ["echo RAN"])
+        for label, content, should_run in (("missing", None, False),
+                                           ("empty", "", False),
+                                           ("real", "lens\n", True)):
+            if content is None:
+                bf.unlink(missing_ok=True)
+            else:
+                bf.write_text(content)
+            out = subprocess.run(["bash", "-c", probe], capture_output=True, text=True)
+            check("leg-cmd: prompt_file brief %s -> leg %s"
+                  % (label, "runs" if should_run else "blocked"),
                   ("RAN" in out.stdout) == should_run,
                   f"stdout={out.stdout!r} stderr={out.stderr!r}")
 

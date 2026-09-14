@@ -103,17 +103,19 @@ elif mech not in ("model_suffix", "flag", "config_only", "none"):
 # after that default was chosen. model_prefix is now only the provider
 # SUGGESTED when the id carries no provider at all.
 prefix = spec.get("model_prefix")
-if prefix and "/" not in os.environ["MODEL"]:
+_m = os.environ["MODEL"]
+if prefix and ("/" not in _m or not all(_m.split("/"))):
+    _why = ("it has no provider segment" if "/" not in _m
+            else "it has an EMPTY path segment (%r)" % _m)
     sys.exit("leg-cmd: %s needs a provider-qualified model id "
              "(<provider>/<model>).\n"
-             "  you passed %r -- it has no provider segment.\n"
+             "  you passed %r -- %s.\n"
              "  e.g. %r, or any id `%s models` lists; ids from other providers "
              "(openrouter/..., google/...) are passed through unchanged.\n"
              "  a bare name is accepted by the CLI and fails server-side as "
              "UnknownError with step=0, which reads like an outage, not like a "
              "bad argument."
-             % (a, os.environ["MODEL"], prefix + os.environ["MODEL"],
-                spec["cli"]))
+             % (a, _m, _why, prefix + _m, spec["cli"]))
 
 r = spec["role"][role]
 subst = {"{MODEL}": os.environ["MODEL"], "{EFFORT}": effort,
@@ -153,6 +155,19 @@ for flag, ph in (("target", "{TARGET}"), ("base", "{BASE}"),
                  "  this adapter runs in the CALLER's cwd -- cd into the frozen "
                  "worktree yourself and assert HEAD before launching."
                  % (flag, a, role, ph))
+
+# Same rule as the loop above, different shape: --run-dir has no placeholder to
+# look for, because it is consumed only when the brief actually travels through
+# $RUN_DIR. An adapter whose prompt_delivery is "prompt_file" reads its brief
+# from --prompt-file, so a --run-dir passed there is precisely the silent drop
+# that loop exists to refuse. Found by a review leg 2026-09-15, and the shape is
+# worth naming: the rule was already here, and the new flag simply was not added
+# to it -- the same sibling-miss that put this whole change in review.
+if os.environ.get("RUN_DIR_ARG") and r["prompt_delivery"] == "prompt_file":
+    sys.exit("leg-cmd: --run-dir was given but %s/%s reads its brief from "
+             "--prompt-file, so RUN_DIR would be silently dropped.\n"
+             "  give this adapter the brief with --prompt-file instead."
+             % (a, role))
 
 # Quote EVERYTHING the caller supplied. The output is documented for
 # `eval "$(leg-cmd.sh ...)"`, so a token carrying a backtick, $(), ; or |
@@ -198,8 +213,18 @@ if spec.get("not_flags") and applies:
 # in front of the command blocks all four mechanically.
 #
 # Chained with && rather than `exit 1` on purpose: this output is documented for
-# `eval "$(leg-cmd.sh ...)"`, and an `exit` inside eval kills the CALLER's
-# interactive shell.
+# `eval "$(leg-cmd.sh ...)"`, and an `exit` inside eval kills the caller's shell
+# unconditionally. The chain does not.
+#
+# Stated exactly, because two review legs caught the author over-claiming it
+# (2026-09-15): a blocked brief yields status 1 without exiting, so an ordinary
+# interactive shell survives -- but a caller running under `set -e` DOES abort,
+# since `eval` is a simple command and errexit sees its non-zero status. (The
+# exemption errexit grants to && / || lists does not apply here: it protects the
+# list when it is written inline, not an eval whose status is the list's.) That
+# is deliberate and correct: in a script, stopping is what a missing brief
+# should do. What `exit 1` would have added is killing the shell of the
+# interactive caller too, and that is the case this chain exists to avoid.
 delivery = r["prompt_delivery"]
 brief = (shlex.quote(os.environ["PROMPT_FILE"]) if delivery == "prompt_file"
          else '"$RUN_DIR/prompt.md"')
@@ -217,8 +242,16 @@ if delivery != "prompt_file":
               "leg reads /prompt.md and the failure looks like a path bug in "
               "this script. Pass --run-dir to have the export emitted for you.",
               file=w)
-pre.append("test -s %s || { echo 'leg-cmd: brief is empty or missing:' %s >&2; "
-           "false; } &&" % (brief, brief))
+# An UNSET RUN_DIR makes the assertion read `test -s /prompt.md`, which passes
+# if that file happens to exist -- the leg then reads the wrong brief and the
+# assertion has certified it. Named by a review leg, 2026-09-15. So require the
+# variable itself, not only the file.
+if delivery == "prompt_file":
+    guard, why = "test -s %s" % brief, "brief is empty or missing:"
+else:
+    guard = 'test -n "$RUN_DIR" && test -s %s' % brief
+    why = "RUN_DIR unset, or brief empty/missing:"
+pre.append("%s || { echo 'leg-cmd: %s' %s >&2; false; } &&" % (guard, why, brief))
 print("\n".join(pre))
 print(cmd)
 
