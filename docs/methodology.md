@@ -236,8 +236,18 @@ workspace ends. It re-ran in the real dispatch posture and only then had a
 result.
 
 So a negative needs two things the positive does not: the **exact posture you
-actually launch with**, and a **positive control in the same run** showing the
-thing still works where it should. The session's re-run did both — denied
+actually launch with**, and a **positive control** showing the thing still
+works where it should.
+
+Refined 2026-09-15 by a session that followed this rule and was still misled:
+the control must be in the same *conditions*, NOT in the same prompt. It put
+the in-scope and out-of-scope actions in one brief; the out-of-scope one was
+denied, the denial killed the run, and it attributed the failure to the
+in-scope action. The runtime prints one generic sentence for both (`a tool
+required the "read_file" permission … auto-denied`) and never names which
+action tripped it. **A signal that cannot distinguish the two cases is not
+evidence for either** — which is the same defect as a discarded stderr or a
+pipeline reporting `head`'s status. Run the control as its own round. The session's re-run did both — denied
 outside, and inside it read the file, ran `git log`, and reported a function's
 line range from a thousand-line source. Without the second half a "secure"
 configuration and a broken one look identical.

@@ -44,6 +44,40 @@ install). Read it before the first `agy` run of a session.
 > unix user can, and make the target physically unwritable rather than
 > asking it not to.
 >
+> A fourth host produced the same class of result from a run with NO write
+> intent at all: a 463 KB language-server schema appeared in `/tmp` inside the
+> window of a `--mode plan` run whose prompt only asked it to read and report.
+> That session was careful to say what it had NOT separated — whether agy wrote
+> it or a process agy started did — and for the isolation question the answer is
+> the same either way: a file appeared outside `--add-dir` because of that run.
+>
+> **So do this, and treat it as required rather than prudent:**
+>
+>     DEV_LEAD=${DEV_LEAD_ROOT:-$(ls -d "$HOME"/.claude/plugins/cache/dev-lead/dev-lead/* \
+>                2>/dev/null | sort -V | tail -1)}
+>     bash "$DEV_LEAD/scripts/freeze-target.sh" <repo> <sha> <dir>
+>     chmod -R a-w <dir>            # the only thing that actually holds
+>     ...run the legs...
+>     bash "$DEV_LEAD/scripts/verify-target.sh" <dir> <sha>
+>     chmod -R u+w <dir>            # MUST precede the removal
+>     git worktree remove --force <dir>
+>
+> Measured on ps-241 2026-09-15: every git operation a review leg uses —
+> `log`, `diff`, `show`, `rev-parse`, and `status --porcelain=v1` — works fine
+> on a read-only tree, so this costs the leg nothing. And the `chmod -R u+w`
+> before teardown is not optional: `git worktree remove --force` on a read-only
+> tree fails with `Permission denied` and leaves the WORST state — registration
+> gone, directory still on disk, so the next `remove` says "is not a working
+> tree" while the files sit there. (The run that established this also produced
+> a small lesson of its own: the failure was masked by `… | head -3 && echo
+> "removed cleanly"`, which reports head's status. Minutes after this suite
+> documented that exact trap.)
+>
+> Audited elsewhere and worth repeating: a session checked its own past frozen
+> targets and found them clean — and `drwxrwxr-x`. Nothing had written to them,
+> and nothing had been stopping it. "It did not happen" is not "it was
+> prevented".
+>
 > Not yet known: whether any setting governs `write_to_file` at all. Three
 > configurations and one explicit deny rule did not.
 
