@@ -305,6 +305,23 @@ Measured at peak: `[503] The request queue is full` (the pool's own
 gateway), `[502] Upstream error … ResourceExhausted`. Off-peak the same
 models answered in seconds.
 
+**A fifth terminal shape, measured 2026-09-14: an exit-0 run that never
+started.** Two consecutive launches, same brief, same frozen target, minutes
+apart, both ended with
+
+```
+Error: {"name":"UnknownError","data":{"message":"Unexpected server error. Check server logs for details.","ref":"err_<hex>"}}
+```
+
+4187 bytes of log, `step=0`, zero files read, and `exit 0` — so an exit-status
+check calls it a success and the four existing greps (`auto-rejecting`,
+`50[0-9]]`, `certificate verification`, `tokens.output=`) are all clean. The
+`ref` differs per attempt, which is what distinguishes it from a cached
+failure. Treat `step=0` as the decisive signal: a run that read nothing did
+nothing, whatever its exit status says. Retrying inside the same window
+reproduced it exactly; the fix was to route the leg to another FAMILY, not
+another free model.
+
 Congestion after bootstrap is SLOW rather than fatal: a measured review run
 read all its files, went silent 10+ minutes inside the final generation,
 resumed, and exited 0 with a full report at ~31 minutes. Budget 40m+ for a
