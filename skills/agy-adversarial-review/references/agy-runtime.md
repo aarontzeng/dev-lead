@@ -29,10 +29,17 @@ install). Read it before the first `agy` run of a session.
 > |---|---|---|
 > | ps-241 (Linux) | **reached** `/etc/hostname` via a bare `cat` | reached it too, until the flag was set false |
 > | second Linux host | **reached**, and wrote a file into `/tmp` | not separately probed |
-> | a macOS host | **denied**, even with an unscoped `unsandboxed(head)` allowed — something below the allow-list is enforcing paths there | **reached** `~/.zshrc`, flag `true` |
+> | a macOS host (as measured 07:00; its owner closed the flag at 07:15, so this row is history, not its current state) | **denied**, even with an unscoped `unsandboxed(head)` allowed — Seatbelt is enforcing paths below the allow-list | **reached** `~/.zshrc`, flag `true` |
 >
 > So on Linux the shell was the hole and the file tool was fixable; on macOS it
-> is the reverse. A sentence saying "`--sandbox` provides no path isolation"
+> is the reverse — and there the mechanism is now fully accounted for. That host
+> runs `toolPermission: proceed-in-sandbox` with `agentMode: accept-edits`, so an
+> unlisted command RUNS **but runs inside the sandbox**. That makes
+> `command(X)` entries nearly inert and `unsandboxed(X)` the only escape ticket
+> — and the measurement showed even the escape ticket cannot cross a path
+> boundary there. Axes 1 and 2 are therefore overridden by a layer beneath them,
+> and `allowNonWorkspaceAccess` is the single real hole. The exact inverse of
+> ps-241, where axis 1 is the whole game. A sentence saying "`--sandbox` provides no path isolation"
 > is false on macOS for the shell route, and a sentence saying it protects you
 > is false on Linux. Ask the three questions below on the machine in front of
 > you.

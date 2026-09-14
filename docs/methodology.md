@@ -225,6 +225,49 @@ unverifiable? What would a reader who stops at section N wrongly conclude?
 Which claim is the author's own inference rather than a citation? Keep the
 unguessable anchor either way.
 
+### A refusal is not evidence until you know WHY it refused
+
+"It was denied" and "the boundary I am testing denied it" are different
+claims, and the first is what the run actually shows you. Measured 2026-09-15:
+a session probing whether a delegate could read outside its workspace got a
+clean denial — from a launch that had omitted the very flag that DECLARES the
+workspace. With no workspace at all, a denial proves nothing about where the
+workspace ends. It re-ran in the real dispatch posture and only then had a
+result.
+
+So a negative needs two things the positive does not: the **exact posture you
+actually launch with**, and a **positive control in the same run** showing the
+thing still works where it should. The session's re-run did both — denied
+outside, and inside it read the file, ran `git log`, and reported a function's
+line range from a thousand-line source. Without the second half a "secure"
+configuration and a broken one look identical.
+
+Same family as "test whether it can FAIL" in §6, one step earlier: there the
+question is whether a test can go red, here it is whether a red means what you
+think.
+
+### A suppressed error makes a failed query look like an empty answer
+
+Measured 2026-09-15, and it cost a false report to three people. A session
+checked whether releases existed upstream with
+`git fetch origin --tags --quiet 2>/dev/null`, read the refs afterwards, saw an
+old tag, and reported the releases missing. The fetch had failed — intermittent
+DNS — and `2>/dev/null` had thrown away the only sentence that said so. A
+failed lookup and a successful lookup that found nothing produced byte-identical
+evidence.
+
+The same run carried the smaller version of it: `... | head -15; echo exit=$?`
+reports `head`'s status, not the command's, with no `pipefail` set. (The
+opencode review flow has its own instance of this — a digest that survived a
+missing file because `sha256sum`'s failure exited through a pipe.)
+
+**Never discard stderr on a command whose SILENCE you intend to interpret**,
+and read the exit status of the thing you actually care about. A query that did
+not happen is the most convincing possible "nothing there": it has no error to
+argue with. When the answer matters, ask the authoritative source directly —
+here, `git ls-remote <full URL>`, or a throwaway clone — rather than reading
+your own side's cache and calling it the world.
+
 ## 5. Bounded properties
 
 An unbounded review property cannot converge. Measured: four rounds on a
