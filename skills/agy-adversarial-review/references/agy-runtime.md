@@ -14,8 +14,41 @@ install). Read it before the first `agy` run of a session.
 
 ## Permission model — one-time setup per machine (required)
 
-> [!warning] What a leg can reach is decided by THREE settings plus the
-> platform — not by `--sandbox`. Measure it per host; the answer differs.
+> [!caution] **WRITES ARE NOT GOVERNED BY ANY OF THIS.** agy's own
+> `write_to_file` tool wrote a file outside `--add-dir` under every
+> configuration tested, on two hosts. Measured on ps-241 2026-09-15 and
+> independently reported on a second host:
+>
+> | configuration | result |
+> |---|---|
+> | ps-241 live config: deny-by-default, `allowNonWorkspaceAccess` off, `write_file` scoped to one project glob | **wrote `/tmp/agy-ESCAPED-*`** |
+> | ps-241 review profile: `trustedWorkspaces: []`, NO `read_file`/`write_file`/`mcp(` entries at all | **wrote it again** |
+> | second host: deny-by-default, `allowNonWorkspaceAccess` false, plus explicit `permissions.deny` on `write_to_file(/tmp/**)` and `write_file(/tmp/**)` | **wrote it** |
+>
+> Every one verified by `ls`/`cat` from a separate shell, never from the leg's
+> own report. The leg names the tool itself when asked: `METHOD: write_to_file`
+> — note the name. The allow/deny examples everywhere say `write_file`, which
+> may be why scoping or denying it changes nothing.
+>
+> `--mode plan` does not stop it either. These runs carried an EFFECTIVE plan
+> mode (the review row does not pass `--disable-slash-commands`, and no
+> "`--mode plan` has no effect" warning appeared in any log), and the write
+> still happened. Plan mode restricts the agent's editing flow, not this tool.
+>
+> **Consequence, and it changes a posture this suite has been stating:**
+> freezing the target with file permissions and bracketing it before and after
+> ([`materializing-evidence.md`](../../../docs/materializing-evidence.md),
+> `freeze-target.sh` / `verify-target.sh`) is **not** belt-and-braces beside a
+> configured boundary. For writes it is the ONLY mechanism, because no
+> configured boundary was found. Treat an agy leg as able to write anywhere the
+> unix user can, and make the target physically unwritable rather than
+> asking it not to.
+>
+> Not yet known: whether any setting governs `write_to_file` at all. Three
+> configurations and one explicit deny rule did not.
+
+> [!warning] What a leg can reach by READING is decided by THREE settings plus
+> the platform — not by `--sandbox`. Measure it per host; the answer differs.
 >
 > The one claim that held on every host measured:
 > **`--sandbox` does not govern agy's OWN file tool. Only
@@ -112,6 +145,61 @@ install). Read it before the first `agy` run of a session.
 >
 > Scope: review role, agy 1.2.2, two hosts, a handful of commands. The
 > implement role needs `write_file` and was not re-probed after the change.
+
+### A review-only profile, via `HOME` — measured, and what it does not buy
+
+agy has no `--config` flag, but it resolves its settings under `$HOME`, so a
+per-ROLE profile is possible. This matters because review and implement want
+opposite things from one file: review wants "read the frozen target, run git
+read-only, refuse everything else"; implement must write, and run npm/pytest.
+One shared settings file can only be as tight as the looser role, which is why
+the live one is as open as it is.
+
+Build it (credentials SYMLINKED, never copied):
+
+    PR=<profile dir>
+    mkdir -p $PR/.gemini/antigravity-cli
+    ln -s ~/.gemini/antigravity-cli/antigravity-oauth-token \
+          $PR/.gemini/antigravity-cli/antigravity-oauth-token
+    # plus ~/.gemini/{oauth_creds.json,google_accounts.json,installation_id}
+
+`$PR/.gemini/antigravity-cli/settings.json`:
+
+```json
+{
+  "allowNonWorkspaceAccess": false,
+  "permissions": { "allow": [
+    "unsandboxed(git status)", "unsandboxed(git log)",
+    "unsandboxed(git diff)",   "unsandboxed(git show)",
+    "unsandboxed(git rev-parse)"
+  ]},
+  "trustedWorkspaces": []
+}
+```
+
+Then `HOME=$PR agy -p ... --mode plan --sandbox --add-dir <frozen target>`.
+
+Measured on ps-241 2026-09-15, both directions in the real posture:
+
+| | result |
+|---|---|
+| read the `--add-dir` target, run `git log --oneline` | **works** — the positive control, so the leg is alive |
+| read `/etc/hostname`, list `/home/aaron` | auto-denied |
+| call an MCP tool the LIVE config allows (`redmine_request`) | refused — the profile declares no `mcp(` entries |
+| read its own `$HOME/.gemini/antigravity-cli/decoy.txt` | **auto-denied**, zero output |
+| **write outside `--add-dir` with `write_to_file`** | **succeeds — see the caution above. The profile does not close this.** |
+
+That fourth row answers the question the profile itself raises: the OAuth token
+is symlinked INTO the leg's own `$HOME`, so it sits inside the tree the leg
+must read to start. A decoy file placed beside it was auto-denied, machine-
+enforced with zero output, so the directory is not readable by the leg. Worth
+noting how that was established: asked for the TOKEN the model answered
+"REFUSED" in prose, which is a self-report and not evidence; the decoy is what
+produced a machine denial. Ask for something you can safely see.
+
+So the profile closes out-of-scope reads and the whole MCP surface, and buys
+nothing against writes. Use it together with a physically unwritable frozen
+target, not instead of one.
 
 Headless `--sandbox` runs auto-deny any tool needing "unsandboxed"
 permission, and **git needs it — measured: even read-only `git log` in a
