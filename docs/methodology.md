@@ -131,16 +131,23 @@ read `/etc/hostname` and listed a home directory on one, and on the other also
 WROTE a file into `/tmp` — all outside `--add-dir`, the write confirmed from a
 separate shell rather than from the leg's own account.
 
-Two mechanisms, and it is worth keeping them apart, because conflating them
-produces a fix that does not work. WHICH COMMANDS a leg may run is the host's
-allow-list, and that genuinely differs per machine. WHETHER FILE ACCESS STAYS
-INSIDE `--add-dir` is not the allow-list at all — an allow-list names commands,
-never paths, so one permitted `cat` reaches everything. That second answer came
-out identical on two machines with opposite permission postures, which makes it
-a property of the flag rather than of a host: tightening the list does not buy
-path confinement back, and neither does moving to another machine. A path-scoped
-`read_file(<worktree>/**)` sitting beside an unscoped `command(cat)` is
-decoration. The first bullet above says reviewers
+Confinement turned out to be obtainable, and it takes two settings rather than
+the one the first write-up named. The file tool is governed by
+`allowNonWorkspaceAccess`, which was simply set true here; turning it off denies
+the out-of-scope read while the in-scope one still works. That alone is not
+enough, because an allow-list entry names a COMMAND and never a path, so a bare
+`command(cat)` walks past it and reaches the whole filesystem — a path-scoped
+`read_file(<worktree>/**)` sitting beside one is decoration. With the unscoped
+readers removed as well, every out-of-scope route tried came back denied,
+including the write that had succeeded on the other host, and the leg still read
+its target and ran `git log`.
+
+The lesson is not about one CLI's flag. It is that a boundary has to be
+**demonstrated on this machine, in the posture you actually launch with** —
+both directions, the denial and the still-works — because the first two
+write-ups of this were each internally coherent and each wrong: one blamed the
+platform, one concluded nothing enforced it at all and implicitly told the
+reader not to try. The first bullet above says reviewers
 "deny shell except whitelisted git reads" — true where the list says so, and
 this is the reminder to verify that rather than infer it from a flag name. What
 did hold on both hosts is the frozen target plus the before/after bracket, the

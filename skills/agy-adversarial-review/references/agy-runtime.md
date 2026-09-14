@@ -14,61 +14,59 @@ install). Read it before the first `agy` run of a session.
 
 ## Permission model — one-time setup per machine (required)
 
-> [!warning] `--sandbox` is NOT the boundary. The allow-list is — and its
-> scoping is only as good as its entries.
+> [!warning] `--sandbox` is not the mechanism — but confinement IS obtainable,
+> and it takes TWO settings, not one.
 >
-> Measured on two hosts, 2026-09-15, both agy 1.2.2, both in the documented
-> review posture (`--mode plan --sandbox --add-dir <frozen target>`):
+> Two earlier versions of this note got the remedy wrong, so the measurements
+> are laid out in order.
 >
-> - **ps-241** — a leg asked to `cat /etc/hostname` and `ls /home/aaron` did
->   both, and returned the real contents. Neither path is under `--add-dir`.
-> - **A WSL2 host** — a leg read `/etc/hostname` AND created a file in `/tmp`,
->   verified from a separate shell rather than taken from the leg's own report.
+> **What was observed.** A leg launched exactly as this suite prescribes
+> (`--mode plan --sandbox --add-dir <frozen target>`, agy 1.2.2) read
+> `/etc/hostname` and listed a home directory on ps-241, and on a second host
+> also created a file in `/tmp` — the write confirmed from a separate shell,
+> not from the leg's own report. Both outside `--add-dir`.
 >
-> **Two separate questions, and only one of them is about the host.** An
-> earlier version of this note ran them together and drew the wrong conclusion
-> from it.
+> **What actually governs it**, measured on ps-241 2026-09-15 by changing one
+> thing at a time:
 >
-> *Which commands run at all* is the host's permission allow-list. That does
-> differ: ps-241 white-lists a handful (`cat`, `ls`, `sed`, some `git`), so a
-> probe asking for `uname -sr` died with zero output; the other host gates
-> nothing and ran it. This is also why the 2026-09-07 zero-output record is
-> live rather than stale — a command absent from the list, not a dead CLI.
+> 1. `allowNonWorkspaceAccess` in `~/.gemini/antigravity-cli/settings.json`
+>    was **true**. Setting it false confines the FILE TOOL: the in-scope read
+>    still worked, `/etc/hostname` came back auto-denied.
+> 2. That alone is not enough. With the flag false, a leg told to use a shell
+>    command still printed `/etc/hostname`, because the allow-list carried
+>    bare `command(cat)` / `unsandboxed(cat)` and friends. An allow-list entry
+>    names a COMMAND, never a path, so one permitted reader reaches the whole
+>    filesystem and walks straight past the flag.
+> 3. Removing the unscoped readers (`cat sed ls grep head nl wc tail`, in both
+>    the `command(...)` and `unsandboxed(...)` forms) closed it. After both
+>    changes: the out-of-scope read is denied, the `/tmp` write that succeeded
+>    on the other host is denied and verified absent from a separate shell, and
+>    a review leg still reads its `--add-dir` target and runs `git log`.
 >
-> *Whether file access stays inside `--add-dir`* is *not* the allow-list at
-> all: an allow-list names COMMANDS, never PATHS. Once `cat` is permitted it
-> reaches the whole filesystem. And this is the answer that came out THE SAME
-> on two machines with opposite permission postures — which makes it a property
-> of the flag, not of a host. Do not read it as platform-dependent and expect
-> another machine to behave.
+> **Path-scoping the command entries is not a working middle ground.** A rule
+> spelled `command(cat /tmp/<prefix>/**)` did deny the out-of-scope read — and
+> also failed to match the IN-scope invocation, so the leg lost the capability
+> anyway. Remove the readers rather than trying to scope them.
 >
-> So confinement to `--add-dir` is not enforced by anything here. Tightening
-> the allow-list does not restore it, short of permitting no file-reading
-> command at all.
+> So the correction to the two previous versions: `--sandbox` is still not what
+> holds, and the 2026-09-07 zero-output record still stands (a command absent
+> from the list, not a dead CLI). But "nothing enforces confinement" and "no
+> machine is exempt" were wrong, and they told the reader not to bother. Two
+> settings enforce it, and a machine that sets both is confined.
 >
-> (`--help` in 1.2.2 says "Run in a sandbox with terminal restrictions
-> enabled". It is arguable that "terminal restrictions" never promised
-> filesystem isolation — in which case the flag is not broken, its name simply
-> invites the reading everyone gives it. Either way what goes in the launch
-> data is the same.)
+> The allow-list half is per-host and genuinely differs — ps-241 white-lists a
+> handful, the second host gates nothing, which is why the same probe died with
+> zero output on one and ran on the other.
 >
-> **The practical hole**: `read_file(...)` entries ARE path-scoped, and bare
-> `command(cat)` / `command(sed)` / `command(ls)` entries are NOT — so any
-> allow-listed shell reader bypasses the path scoping of the entry beside it.
-> If a machine's list has both, the scoped entry is decoration. Scope the
-> command entries too, or accept that the leg can read the whole filesystem.
->
-> This does not make agy unusable as a reviewer; it makes the flag's NAME
-> unreliable. Freeze the target with file permissions and verify it afterwards
+> Residual, stated rather than assumed: `unsandboxed(git ...)` is itself
+> unscoped, so `git -C <elsewhere> log` remains a read path. Narrower, but real.
+> And freezing the target with file permissions plus the before/after bracket
 > ([`materializing-evidence.md`](../../../docs/materializing-evidence.md),
-> `freeze-target.sh` / `verify-target.sh`) —
-> that is what actually holds, and it is now the only mechanism here with
-> evidence behind it.
+> `freeze-target.sh` / `verify-target.sh`) is still the mechanism that does not
+> depend on any of this being configured right.
 >
-> Scope of the measurement, stated because it bounds the claim: review role
-> only, and a handful of commands. The implement role uses a different mode and
-> was not probed.
-
+> Scope: review role, agy 1.2.2, a handful of reader commands. The implement
+> role needs `write_file` and was not re-probed after the change.
 
 Headless `--sandbox` runs auto-deny any tool needing "unsandboxed"
 permission, and **git needs it — measured: even read-only `git log` in a
