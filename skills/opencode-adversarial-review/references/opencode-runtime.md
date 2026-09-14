@@ -94,7 +94,7 @@ computation.
 |---|---|---|---|---|
 | 2026-08-28 | `opencode/big-pickle` | unknown | review (n=2 total) | HIT again — same exact-citation style, ~7s |
 | 2026-08-28 | `opencode/nemotron-3-ultra-free` | Nemotron | review (n=2 total) | HIT again — mid-run recovered on its own from one upstream `[502] Service temporarily overloaded`, then answered correctly on retry |
-| 2026-08-28 | `opencode/nemotron-3.5-lightning-free` | Nemotron | review | UNTESTABLE again, and with a DIFFERENT error this time: `AI_APICallError: [404] Provider returned error` (round 1 was `[400]`) on every retry. Two failed attempts, two different HTTP codes, same day — reads as this specific model route being broken upstream right now, not one-off congestion. Do not route real work through `nemotron-3.5-lightning-free` until it clears on a later probe; `nemotron-3-ultra-free` (same family, same pool) is unaffected and fine to use meanwhile. |
+| 2026-08-28 | `opencode/nemotron-3.5-lightning-free` | Nemotron | review | UNTESTABLE again, and with a DIFFERENT error this time: `AI_APICallError: [404] Provider returned error` (round 1 was `[400]`) on every retry. Two failed attempts, two different HTTP codes, same day — reads as this specific model route being broken upstream right now, not one-off congestion. Do not route real work through `opencode/nemotron-3.5-lightning-free` until it clears on a later probe (the OpenRouter route to the same name is NOT covered by this row); `opencode/nemotron-3-ultra-free` (same family, same pool) is unaffected and fine to use meanwhile. |
 | 2026-08-28 | `opencode/mimo-v2.5-free` | Xiaomi | review (n=2 total) | HIT again |
 | 2026-08-28 | `opencode/hy3-free` | Tencent | review (n=2 total) | HIT again |
 | 2026-08-28 | `opencode/muse-spark-1.2-contributor-free` | Meta | review (n=2 total) | HIT again — again cited the test's own concrete fixture values rather than describing them abstractly |
@@ -102,10 +102,14 @@ computation.
 Five of six are now 2/2 on two structurally different bug shapes in one day —
 past the single-anecdote stage this file otherwise warns about, though still
 short of a full calibration-journal promotion (that wants dated rows over
-multiple sessions/weeks, not two runs in one). `nemotron-3.5-lightning-free`
-is 0/2 with two different transport error codes; treat it as currently
-unavailable rather than untested, and prefer `nemotron-3-ultra-free` for
-Nemotron-family free-pool work until it's re-probed clean.
+multiple sessions/weeks, not two runs in one).
+`opencode/nemotron-3.5-lightning-free` is 0/2 with two different transport
+error codes; treat it as currently unavailable rather than untested, and prefer
+`opencode/nemotron-3-ultra-free` for Nemotron-family free-pool work until it's
+re-probed clean. **That verdict covers the NATIVE route only.** The
+same-sounding `openrouter/nvidia/nemotron-3.5-lightning:free` is a different
+route, is not bound by it, and is this account's standing default since
+2026-09-14 — see "Two routes, one name" below.
 
 **Family identification matters here more than the hit rate.** `hy3`,
 `mimo-v2.5`, and `muse-spark-1.2-contributor` all resolve to disclosed
@@ -131,7 +135,7 @@ hits above (which ran up to 4-5 minutes) — a first data point, not yet a
 claimed structural difference between the two pools; the OpenRouter probe
 task was also a longer, class-based diff rather than this one's single
 function-and-deferral-comment scenario, so latency is not comparable as-is. Run each hit
-again, and probe `nemotron-3.5-lightning-free` again on a different day
+again, and probe `opencode/nemotron-3.5-lightning-free` again on a different day
 before writing it off — one 400-error run under load is not a verdict either
 way.
 
@@ -337,6 +341,92 @@ is far more likely to be the argument than the provider.
 > misreported the exit status as 0; the wrapper's `echo ... $?` was what
 > exited 0. The journal's own rule — n=1 proves nothing, run the arm twice and
 > prefer a sweep to a pair of anecdotes — is the rule that would have caught it.
+
+## Two routes, one name — the catalogue collides on purpose
+
+`opencode models` lists the same model family under two providers, and the two
+names differ only by punctuation nobody reads:
+
+    opencode/nemotron-3.5-lightning-free           <- native pool
+    openrouter/nvidia/nemotron-3.5-lightning:free  <- OpenRouter, needs the key
+
+It is not one unlucky pair: `opencode/nemotron-3-ultra-free` sits beside
+`openrouter/nvidia/nemotron-3-ultra-550b-a55b:free`, and
+`opencode/muse-spark-1.3-contributor-free` beside
+`openrouter/meta/muse-spark-1.3-contributor`. The prefix guard closed the
+"forgot the provider entirely" case, which fails loudly. This is the other one:
+a provider IS present and it is the wrong one, and that fails **silently** —
+the run completes normally against a different pool, on different quota, and
+possibly different served weights.
+
+Two costs follow, and both have been paid here. A verdict filed under a bare
+name gets applied to a route it never tested — which is exactly what happened
+to `nemotron-3.5-lightning` in the table above, where a native-route outage
+read as a blanket "do not use" over the OpenRouter route that became this
+account's default. And [`data/families.json`](../../../data/families.json)
+accounting can be credited to the
+wrong route.
+
+**Always write the route, never the model**, in journals as well as commands.
+Confirm which one you actually got from the `> build ·` line, which prints the
+SERVED id:
+
+    > build · nvidia/nemotron-3.5-lightning:free   <- OpenRouter route
+    > build · nemotron-3.5-lightning-free          <- native route
+
+The two pools queue independently, so native congestion says nothing about the
+OpenRouter route or the reverse: "the free pool is busy" is a claim about one
+route, never about free models in general.
+
+### This account's standing opencode leg (owner's instruction, 2026-09-14)
+
+    -m openrouter/nvidia/nemotron-3.5-lightning:free --variant high
+
+replacing `opencode/muse-spark-1.3-contributor-free --variant xhigh`. Two
+preconditions travel with it that did NOT apply to the old default:
+
+- **It needs the OpenRouter API key** in opencode's auth (the carve-out at the
+  top of this file); the native pool needed no credential at all. A machine
+  without that key fails a leg that used to work, so the precondition moves
+  with the roster. Measured 2026-09-15 on ps-241: `opencode auth list` reports
+  OpenRouter present, one credential.
+- **There is no calibration data for it.** It has been probed *available*, not
+  scored. No `outcome` row goes in the journal until it has run scored rounds
+  whose findings someone verified — an availability probe is not a hit rate,
+  and writing one in would be data this account has not earned.
+
+Family accounting is unchanged: Nemotron is NVIDIA, so the leg still counts as
+cross-family against GPT, Gemini and Claude on either route.
+
+## `--variant` is write-only: unverifiable, and an invalid value is not refused
+
+Measured 2026-09-15, six arms, `openrouter/nvidia/nemotron-3.5-lightning:free`
+except where noted:
+
+| arm | result |
+|---|---|
+| `--variant high` (control) | exit 0, `step=1`, 43 s |
+| `--variant bogusvariant`, twice | exit 0, `step=1`, 38 s and 16 s |
+| `--variant zzz9` | exit 0, `step=1`, 9 s |
+| no `--variant` at all | exit 0, `step=1`, 8 s |
+| native route, `--variant bogusvariant` | exit 0, `step=1`, 10 s |
+
+Nothing errored, nothing hung, and nothing in the log names the variant that
+was applied. So an invalid value is not refused, and a completed run is **not**
+evidence that the effort you asked for is the effort you got. That is the same
+blind spot that let every opencode *implement* leg on this account run at the
+provider default until 2026-09-08, when the flag turned out to be absent from
+the launch block entirely and nothing had ever said so. Use values you have
+seen work, and never infer the applied effort from a successful run.
+
+> [!note] A proposal this sweep did not support
+> A session reported (n=1) that `--variant bogusvariant` HANGS — no error,
+> `step=0`, killed by a 120 s timeout — and proposed a sixth terminal shape for
+> it. It does not reproduce: five arms here, two of them that exact spelling,
+> all finished in 9-38 s. The observation was real; the attribution to the
+> variant is what did not survive, and ordinary free-pool congestion explains a
+> stalled run without a new mechanism. This is the same n=1 trap as the 更正
+> above, which is why the rule is to run the arm twice before naming a cause.
 
 Congestion after bootstrap is SLOW rather than fatal: a measured review run
 read all its files, went silent 10+ minutes inside the final generation,

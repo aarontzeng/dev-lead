@@ -318,6 +318,22 @@ rules — adopt them in your own agent instructions if you don't have them:
 - **No AI-authorship trailers** in commit messages (adjust to your team's
   policy).
 
+### A session reads the skill text it loaded, not the version you installed
+
+Skill bodies are injected into a session when it starts and stay frozen there,
+so upgrading the plugin mid-session changes nothing a running lead can see.
+Measured 2026-09-15: a session was working from the 0.4.11 skill text while
+0.5.3 was installed, and `scripts/leg-cmd.sh` arrived in 0.5.2 — so that lead
+could not have known the script existed, and went on composing launch commands
+by hand, which is the exact failure the script was added to end.
+
+There is no fix inside the plugin: it cannot reach into a session that already
+loaded it. What works is a pointer in the account's own persistent memory
+("launch commands come from `scripts/leg-cmd.sh`"), which is re-read every
+session and survives the freeze. Start a fresh session after upgrading if you
+want the new text, and treat a long-running session's idea of this suite as
+dated.
+
 ## Portability
 
 | Tier | Agents | What you get |

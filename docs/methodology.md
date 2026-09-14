@@ -321,6 +321,31 @@ the next person reads the checkmarks and not the caveat.
 - Before launching: `git diff --stat "$BASE" HEAD` — the file list must match
   the change under review.
 
+### A finding has three states, and "unverified" is one of them
+
+The rule above runs one way: nothing enters the plan unverified. It has to run
+the other way too — **nothing is recorded as FALSE unverified either.** Every
+synthesis is three-state:
+
+| state | means |
+|---|---|
+| `confirmed` | the lead reproduced it against the code |
+| `falsified` | the lead reproduced the *rebuttal* against the code |
+| `unverified` | nobody checked — say why: quota, timeout, a dead leg |
+
+Measured 2026-09-15 on another repo: a synthesis step computed survival as
+`falsified === 0 && holds >= 2`, so when the verifier legs never ran at all —
+quota — **228 findings with zero votes each came out as `survives: false`**,
+their `why` arrays empty, and the report read as "reviewed, none stood up"
+when the truth was "not reviewed". Nothing in the tooling lied; the two-state
+bucket had no cell for *unknown*, so unknown fell into the nearest one.
+
+This is the repo's own recurring failure — unknown treated as settled — and it
+is worth naming here because the two-state shape is the natural one to write.
+An `unverified` count belongs in its own paragraph of the report, never folded
+into either verdict, and a round whose verifiers did not run is reported as a
+round that did not verify, whatever its findings table looks like.
+
 ## 8. Bounded rounds and stop conditions
 
 Iteration is where quality comes from, but unbounded iteration is where
@@ -338,6 +363,19 @@ Stop and report (instead of looping) when:
   transmit it — fix it directly);
 - the same finding *category* keeps reopening against approximation-shaped
   code (fix the property's boundary, not the code — §5).
+
+**A free-pool leg that dies gets one retry, then a different model.** Free legs
+fail often enough to need a stated policy rather than a judgement call each
+time: measured 2026-09-14, `opencode/muse-spark-1.3-contributor-free` returned
+0 bytes twice in one round (first a rate-limit error, then silence), leaving
+that round with three legs; 2026-09-15, an OpenRouter Nemotron leg returned a
+server error. Retry once — transient congestion is the common case and a
+plain rerun usually clears it. If it fails again, switch to another free model
+rather than spending the round's wall-clock on one queue, and **keep the family
+label honest**: swapping model changes the model, not the cross-family
+accounting, so say in the report which leg was substituted, by what, and why.
+A round that finishes with three legs is a three-leg round and is reported as
+one.
 
 ## 9. A person approves the result; the lead lands it
 
