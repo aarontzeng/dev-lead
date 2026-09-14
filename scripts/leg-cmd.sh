@@ -80,6 +80,21 @@ elif mech not in ("model_suffix", "flag", "config_only", "none"):
     sys.exit("leg-cmd: %s declares unknown effort mechanism %r -- refusing to "
              "emit an unvalidated command" % (a, mech))
 
+# A model id whose provider prefix is missing is accepted by the CLI and then
+# fails SERVER-side -- `UnknownError: Unexpected server error`, step=0, nothing
+# read. That is indistinguishable from an outage, and it cost a live 4-leg round
+# on 2026-09-14: the leg was declared dead, retried, declared a pool outage,
+# substituted with another family, and written up in the journal as a provider
+# failure. The identical model worked with no -m at all (it was the default).
+prefix = spec.get("model_prefix")
+if prefix and not os.environ["MODEL"].startswith(prefix):
+    sys.exit("leg-cmd: %s needs a provider-qualified model id.\n"
+             "  you passed %r; use %r\n"
+             "  a bare name is accepted by the CLI and fails server-side as "
+             "UnknownError with step=0, which reads like an outage, not like a "
+             "bad argument."
+             % (a, os.environ["MODEL"], prefix + os.environ["MODEL"]))
+
 r = spec["role"][role]
 subst = {"{MODEL}": os.environ["MODEL"], "{EFFORT}": effort,
          "{TARGET}": os.environ.get("TARGET", ""), "{BASE}": os.environ.get("BASE", ""),

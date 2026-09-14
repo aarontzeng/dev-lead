@@ -227,10 +227,12 @@
     },
     "not_flags": [],
     "gotchas": [
+      "`-m` needs the PROVIDER-QUALIFIED id (`opencode/<model>`). A bare model name is accepted by the CLI and then fails server-side with `UnknownError: Unexpected server error`, step=0, nothing read, exit 1 -- it reads exactly like a provider outage. Measured 2026-09-14: the identical model works with no `-m` at all (it is the default) and with `-m opencode/<model>`, and fails every time with `-m <model>`.",
       "The prompt goes on STDIN. An argv prompt over ~1-2 KB hangs before the session is created.",
       "`tokens.output=0` is a broken counter, not an empty run -- grep the log for your required section headers before discarding it."
     ],
-    "verified": "review probed 2026-09-08; other roles transcribed"
+    "verified": "review probed 2026-09-08; other roles transcribed",
+    "model_prefix": "opencode/"
   },
   "grok": {
     "cli": "grok",

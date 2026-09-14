@@ -305,22 +305,38 @@ Measured at peak: `[503] The request queue is full` (the pool's own
 gateway), `[502] Upstream error … ResourceExhausted`. Off-peak the same
 models answered in seconds.
 
-**A fifth terminal shape, measured 2026-09-14: an exit-0 run that never
-started.** Two consecutive launches, same brief, same frozen target, minutes
-apart, both ended with
+**A fifth terminal shape, measured 2026-09-14: a bare model id that reads as an
+outage.** `-m` needs the PROVIDER-QUALIFIED id (`opencode/<model>`). Pass the
+bare name and the CLI accepts it, then the run dies server-side with
 
 ```
 Error: {"name":"UnknownError","data":{"message":"Unexpected server error. Check server logs for details.","ref":"err_<hex>"}}
 ```
 
-4187 bytes of log, `step=0`, zero files read, and `exit 0` — so an exit-status
-check calls it a success and the four existing greps (`auto-rejecting`,
-`50[0-9]]`, `certificate verification`, `tokens.output=`) are all clean. The
-`ref` differs per attempt, which is what distinguishes it from a cached
-failure. Treat `step=0` as the decisive signal: a run that read nothing did
-nothing, whatever its exit status says. Retrying inside the same window
-reproduced it exactly; the fix was to route the leg to another FAMILY, not
-another free model.
+4188 bytes of log, `step=0`, zero files read, exit 1, and all four greps above
+clean. The `ref` differs per attempt, so it looks like a live server fault
+rather than a cached rejection.
+
+It is not one. Measured by elimination on the same machine, minutes apart: the
+identical model succeeds with **no `-m` at all** (it is the default) and with
+`-m opencode/<model>`; it fails every single time with `-m <model>`. Prompt
+size, `--variant`, and the read-only `opencode.json` were each eliminated
+first — none of them matters.
+
+[`leg-cmd.sh`](../../../scripts/leg-cmd.sh) now refuses a bare opencode model
+id for this reason, and [`launch.json`](../../../data/launch.json) carries the
+prefix as `model_prefix`. Check `step=` before
+blaming the pool: a run that read nothing did nothing, and on this adapter that
+is far more likely to be the argument than the provider.
+
+> [!note] 更正 2026-09-14
+> An earlier version of this section attributed the same fingerprint to a
+> provider outage and told the reader to route to another family. That was
+> wrong on the cause and wrong on the remedy, and it was written from two
+> observations inside one ten-minute window with no elimination pass. It also
+> misreported the exit status as 0; the wrapper's `echo ... $?` was what
+> exited 0. The journal's own rule — n=1 proves nothing, run the arm twice and
+> prefer a sweep to a pair of anecdotes — is the rule that would have caught it.
 
 Congestion after bootstrap is SLOW rather than fatal: a measured review run
 read all its files, went silent 10+ minutes inside the final generation,
