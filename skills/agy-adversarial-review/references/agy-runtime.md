@@ -25,12 +25,32 @@ install). Read it before the first `agy` run of a session.
 > - **A WSL2 host** — a leg read `/etc/hostname` AND created a file in `/tmp`,
 >   verified from a separate shell rather than taken from the leg's own report.
 >
-> The two hosts differ only in WHICH commands their allow-lists permit, not in
-> whether `--sandbox` contains them. On ps-241 a probe asking for `uname -sr`
-> died with zero output because no rule permits it; `cat` and `ls` are
-> permitted and reached anywhere on the filesystem. So the flag does not
-> confine reads or writes to `--add-dir` on either machine, and a leg's
-> read-only posture rests entirely on the allow-list.
+> **Two separate questions, and only one of them is about the host.** An
+> earlier version of this note ran them together and drew the wrong conclusion
+> from it.
+>
+> *Which commands run at all* is the host's permission allow-list. That does
+> differ: ps-241 white-lists a handful (`cat`, `ls`, `sed`, some `git`), so a
+> probe asking for `uname -sr` died with zero output; the other host gates
+> nothing and ran it. This is also why the 2026-09-07 zero-output record is
+> live rather than stale — a command absent from the list, not a dead CLI.
+>
+> *Whether file access stays inside `--add-dir`* is *not* the allow-list at
+> all: an allow-list names COMMANDS, never PATHS. Once `cat` is permitted it
+> reaches the whole filesystem. And this is the answer that came out THE SAME
+> on two machines with opposite permission postures — which makes it a property
+> of the flag, not of a host. Do not read it as platform-dependent and expect
+> another machine to behave.
+>
+> So confinement to `--add-dir` is not enforced by anything here. Tightening
+> the allow-list does not restore it, short of permitting no file-reading
+> command at all.
+>
+> (`--help` in 1.2.2 says "Run in a sandbox with terminal restrictions
+> enabled". It is arguable that "terminal restrictions" never promised
+> filesystem isolation — in which case the flag is not broken, its name simply
+> invites the reading everyone gives it. Either way what goes in the launch
+> data is the same.)
 >
 > **The practical hole**: `read_file(...)` entries ARE path-scoped, and bare
 > `command(cat)` / `command(sed)` / `command(ls)` entries are NOT — so any

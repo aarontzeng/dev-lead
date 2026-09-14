@@ -129,11 +129,18 @@ may not be one.** Measured on two hosts, 2026-09-15: an agy review leg launched
 exactly as this suite prescribes (`--mode plan --sandbox --add-dir <frozen>`)
 read `/etc/hostname` and listed a home directory on one, and on the other also
 WROTE a file into `/tmp` — all outside `--add-dir`, the write confirmed from a
-separate shell rather than from the leg's own account. The two machines
-differed only in which commands their allow-lists permitted. So on this family
-the boundary is the **allow-list**, not the sandbox flag, and it is only as
-tight as its entries: a path-scoped `read_file(<worktree>/**)` sitting beside
-an unscoped `command(cat)` is decoration. The first bullet above says reviewers
+separate shell rather than from the leg's own account.
+
+Two mechanisms, and it is worth keeping them apart, because conflating them
+produces a fix that does not work. WHICH COMMANDS a leg may run is the host's
+allow-list, and that genuinely differs per machine. WHETHER FILE ACCESS STAYS
+INSIDE `--add-dir` is not the allow-list at all — an allow-list names commands,
+never paths, so one permitted `cat` reaches everything. That second answer came
+out identical on two machines with opposite permission postures, which makes it
+a property of the flag rather than of a host: tightening the list does not buy
+path confinement back, and neither does moving to another machine. A path-scoped
+`read_file(<worktree>/**)` sitting beside an unscoped `command(cat)` is
+decoration. The first bullet above says reviewers
 "deny shell except whitelisted git reads" — true where the list says so, and
 this is the reminder to verify that rather than infer it from a flag name. What
 did hold on both hosts is the frozen target plus the before/after bracket, the
