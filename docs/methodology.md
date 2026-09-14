@@ -267,7 +267,19 @@ failed lookup and a successful lookup that found nothing produced byte-identical
 evidence.
 
 The same run carried the smaller version of it: `... | head -15; echo exit=$?`
-reports `head`'s status, not the command's, with no `pipefail` set. (The
+reports `head`'s status, not the command's, with no `pipefail` set.
+
+**Stated generally, because it happened three times in one day to three
+different people:** after `cmd | filter`, both `&&` and `$?` read the FILTER's
+status, never `cmd`'s — and `head`, `tail` and `grep -q` are exactly what we
+reach for to keep output short, so the trap rides along with the habit. The
+three, all 2026-09-15: a `git worktree remove` that failed with Permission
+denied while `… | head -3 && echo "removed cleanly"` printed success — written
+by the author of this very rule, hours after writing it; a
+`python3 -m venv … | tail -2 && pip install … && echo "INSTALL_OK"` that
+printed INSTALL_OK on a host with no `ensurepip`, where neither `pip` nor the
+package binary existed; and the fetch above. Set `pipefail`, or put the status
+check on the command rather than after the pipe. (The
 opencode review flow has its own instance of this — a digest that survived a
 missing file because `sha256sum`'s failure exited through a pipe.)
 

@@ -60,7 +60,7 @@ install). Read it before the first `agy` run of a session.
 >     ...run the legs...
 >     bash "$DEV_LEAD/scripts/verify-target.sh" <dir> <sha>
 >     chmod -R u+w <dir>            # MUST precede the removal
->     git worktree remove --force <dir>
+>     git worktree remove --force <dir>     # or `rm -rf <dir>` for a clone
 >
 > Measured on ps-241 2026-09-15: every git operation a review leg uses —
 > `log`, `diff`, `show`, `rev-parse`, and `status --porcelain=v1` — works fine
@@ -72,6 +72,14 @@ install). Read it before the first `agy` run of a session.
 > a small lesson of its own: the failure was masked by `… | head -3 && echo
 > "removed cleanly"`, which reports head's status. Minutes after this suite
 > documented that exact trap.)
+>
+> **The `u+w` matters just as much when the target is a CLONE rather than a
+> worktree**, which is the usual shape for agy. `chmod -R a-w` clears write on
+> the DIRECTORIES too, and unlink needs write on the parent directory, so
+> `rm -rf` fails the same way `git worktree remove` does. Measured here by
+> accident: a cleanup `rm -rf` silently failed against a read-only leftover and
+> polluted the next experiment, which is a worse outcome than a loud failure
+> because the second run then measures a state nobody set up.
 >
 > Audited elsewhere and worth repeating: a session checked its own past frozen
 > targets and found them clean — and `drwxrwxr-x`. Nothing had written to them,
