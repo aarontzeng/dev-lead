@@ -369,6 +369,31 @@ the next person reads the checkmarks and not the caveat.
 - Before launching: `git diff --stat "$BASE" HEAD` — the file list must match
   the change under review.
 
+### A new parameter inherits every rule the old parameters already had
+
+Three times on one change, in one day: a rule existed, something new was added
+beside it, and the rule was not extended to cover it.
+
+- 0.5.3 added a guard requiring a provider prefix, and wrote it as "starts with
+  THE prefix" — correct for the one provider in front of the author.
+- The fix for that added `--run-dir`, and the script's existing rule *refuse a
+  caller value this template will never consume* was not applied to it, so
+  `--run-dir` vanished silently on the adapters that read their brief another
+  way. A review leg found it.
+- The test written for the new guard was then checked only for the case it was
+  written for, and a mutant survived.
+
+The reflex that fails here is testing the new thing: "does `--run-dir` work?"
+Yes, it did. Nobody asked the other question, which is cheap and mechanical:
+**list the rules that already apply to the parameters beside this one, and walk
+them.** Refusal on an unconsumed value; quoting; a per-delivery-mode branch;
+a place in the emitted order. Each existing parameter is a worked example of
+what the new one owes.
+
+This is the same shape as the sibling-defect rule in §6 — fixing `by_repo` and
+missing `by_tag` — and the same remedy applies: where you find yourself adding
+a fourth branch, prefer one shared helper that cannot be half-applied.
+
 ### A grep hit is where a STRING is, not where a PROBLEM is
 
 Measured 2026-09-15, owned by the session that made it: a proposal named three

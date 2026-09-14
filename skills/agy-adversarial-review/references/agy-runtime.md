@@ -14,59 +14,97 @@ install). Read it before the first `agy` run of a session.
 
 ## Permission model — one-time setup per machine (required)
 
-> [!warning] `--sandbox` is not the mechanism — but confinement IS obtainable,
-> and it takes TWO settings, not one.
+> [!warning] What a leg can reach is decided by THREE settings plus the
+> platform — not by `--sandbox`. Measure it per host; the answer differs.
 >
-> Two earlier versions of this note got the remedy wrong, so the measurements
-> are laid out in order.
+> The one claim that held on every host measured:
+> **`--sandbox` does not govern agy's OWN file tool. Only
+> `allowNonWorkspaceAccess` does.** Whether the SHELL route is confined is
+> platform-dependent and has to be measured — do not generalise either way.
 >
-> **What was observed.** A leg launched exactly as this suite prescribes
-> (`--mode plan --sandbox --add-dir <frozen target>`, agy 1.2.2) read
-> `/etc/hostname` and listed a home directory on ps-241, and on a second host
-> also created a file in `/tmp` — the write confirmed from a separate shell,
-> not from the leg's own report. Both outside `--add-dir`.
+> Measured 2026-09-15, agy 1.2.2, in the documented review posture
+> (`--mode plan --sandbox --add-dir <frozen target>`), on four hosts:
 >
-> **What actually governs it**, measured on ps-241 2026-09-15 by changing one
-> thing at a time:
+> | host | shell route, outside the workspace | file tool, outside the workspace |
+> |---|---|---|
+> | ps-241 (Linux) | **reached** `/etc/hostname` via a bare `cat` | reached it too, until the flag was set false |
+> | second Linux host | **reached**, and wrote a file into `/tmp` | not separately probed |
+> | a macOS host | **denied**, even with an unscoped `unsandboxed(head)` allowed — something below the allow-list is enforcing paths there | **reached** `~/.zshrc`, flag `true` |
 >
-> 1. `allowNonWorkspaceAccess` in `~/.gemini/antigravity-cli/settings.json`
->    was **true**. Setting it false confines the FILE TOOL: the in-scope read
->    still worked, `/etc/hostname` came back auto-denied.
-> 2. That alone is not enough. With the flag false, a leg told to use a shell
->    command still printed `/etc/hostname`, because the allow-list carried
->    bare `command(cat)` / `unsandboxed(cat)` and friends. An allow-list entry
->    names a COMMAND, never a path, so one permitted reader reaches the whole
->    filesystem and walks straight past the flag.
-> 3. Removing the unscoped readers (`cat sed ls grep head nl wc tail`, in both
->    the `command(...)` and `unsandboxed(...)` forms) closed it. After both
->    changes: the out-of-scope read is denied, the `/tmp` write that succeeded
->    on the other host is denied and verified absent from a separate shell, and
->    a review leg still reads its `--add-dir` target and runs `git log`.
+> So on Linux the shell was the hole and the file tool was fixable; on macOS it
+> is the reverse. A sentence saying "`--sandbox` provides no path isolation"
+> is false on macOS for the shell route, and a sentence saying it protects you
+> is false on Linux. Ask the three questions below on the machine in front of
+> you.
 >
-> **Path-scoping the command entries is not a working middle ground.** A rule
-> spelled `command(cat /tmp/<prefix>/**)` did deny the out-of-scope read — and
-> also failed to match the IN-scope invocation, so the leg lost the capability
-> anyway. Remove the readers rather than trying to scope them.
+> **1. What happens to a command that is NOT on the allow-list?**
+> `toolPermission` in `~/.gemini/antigravity-cli/settings.json`. This is the
+> load-bearing one, and it is the one that differs between machines:
 >
-> So the correction to the two previous versions: `--sandbox` is still not what
-> holds, and the 2026-09-07 zero-output record still stands (a command absent
-> from the list, not a dead CLI). But "nothing enforces confinement" and "no
-> machine is exempt" were wrong, and they told the reader not to bother. Two
-> settings enforce it, and a machine that sets both is confined.
+> | | ps-241 | second host |
+> |---|---|---|
+> | key | absent → default `request-review` | `"proceed-in-sandbox"` |
+> | unlisted command | auto-denied, run dies with zero output | **runs** |
+> | what the allow-list then decides | everything | almost nothing |
 >
-> The allow-list half is per-host and genuinely differs — ps-241 white-lists a
-> handful, the second host gates nothing, which is why the same probe died with
-> zero output on one and ran on the other.
+> Measured both ways: on ps-241 a probe for `uname -sr` (unlisted) died with
+> zero output; on the second host `seq 3` (verified absent from a 116-entry
+> list) returned `1 2 3` with no prompt and no denial. **On a
+> `proceed-in-sandbox` host, editing the allow-list buys nothing** — the
+> prescription below is for deny-by-default machines only. Check this first or
+> you will "tighten" a list that was never the gate.
+>
+> **2. Which listed commands are there, and what do they name?**
+> `permissions.allow`. Decisive only when (1) denies. `command(...)` and
+> `unsandboxed(...)` entries name a COMMAND and never a path, so a bare
+> `command(cat)` reaches the whole filesystem and walks past setting (3).
+> `read_file(...)` / `write_file(...)` entries do take paths.
+>
+> **3. What counts as "the workspace" for the file tool?**
+> `allowNonWorkspaceAccess` (ps-241 had it `true`) plus `trustedWorkspaces`.
+> With it true, the file tool reached `/etc/hostname` despite `read_file` being
+> scoped to one project glob. False confines it.
+>
+> A bounded note on (3): `trustedWorkspaces` on ps-241 contains `/home/aaron`,
+> so the flag looks weaker than it is — but measured, with the flag false, a
+> leg was denied both a listing of `/home/aaron` and a read of
+> `/home/aaron/.bashrc`. Being a trusted workspace did not by itself grant
+> reads here. That is one host with deny-by-default; do not carry it to a
+> `proceed-in-sandbox` machine.
+>
+> **What fixed ps-241** (owner's explicit instruction; backup kept beside the
+> file): `allowNonWorkspaceAccess` false, and the unscoped readers
+> (`cat sed ls grep head nl wc tail`, in both `command(...)` and
+> `unsandboxed(...)` forms) removed. After that: out-of-scope reads denied on
+> every route tried, the `/tmp` write that SUCCEEDED on the second host denied
+> and verified absent from a separate shell, and a review leg still reads its
+> `--add-dir` target and runs `git log`.
+>
+> **Path-scoping the command entries is not a middle ground.** A rule spelled
+> `command(cat /tmp/<prefix>/**)` denied the out-of-scope read *and* failed to
+> match the in-scope invocation, so the capability is lost either way.
+>
+> **The CLI rewrites this file and drops keys whose value is the default.**
+> `allowNonWorkspaceAccess: false` was written explicitly, verified present,
+> and was gone after the next few runs — with the allow-list edits intact.
+> Behaviour was unchanged (absent behaves as false), but the file stops
+> recording the intent, so re-read it before believing a past edit still reads
+> the way you left it.
+>
+> **Consequence for briefs on a fixed host:** agy there can no longer run
+> `cat`/`wc`/`nl`/`sed`/`head`/`tail`/`ls`/`grep`. A brief demanding
+> shell-produced evidence ("report the line count with `wc -l`") now kills the
+> run with zero output. Ask it to read with its own tool and report.
 >
 > Residual, stated rather than assumed: `unsandboxed(git ...)` is itself
-> unscoped, so `git -C <elsewhere> log` remains a read path. Narrower, but real.
-> And freezing the target with file permissions plus the before/after bracket
+> unscoped, so `git -C <elsewhere> log` remains a read path. Freezing the
+> target with file permissions and bracketing it
 > ([`materializing-evidence.md`](../../../docs/materializing-evidence.md),
 > `freeze-target.sh` / `verify-target.sh`) is still the mechanism that does not
 > depend on any of this being configured right.
 >
-> Scope: review role, agy 1.2.2, a handful of reader commands. The implement
-> role needs `write_file` and was not re-probed after the change.
+> Scope: review role, agy 1.2.2, two hosts, a handful of commands. The
+> implement role needs `write_file` and was not re-probed after the change.
 
 Headless `--sandbox` runs auto-deny any tool needing "unsandboxed"
 permission, and **git needs it — measured: even read-only `git log` in a
