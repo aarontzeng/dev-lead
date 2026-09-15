@@ -344,6 +344,60 @@ is far more likely to be the argument than the provider.
 > exited 0. The journal's own rule — n=1 proves nothing, run the arm twice and
 > prefer a sweep to a pair of anecdotes — is the rule that would have caught it.
 
+## `opencode-go/` pool — first-probe results (2026-09-15)
+
+The owner enabled opencode's paid **go** plan, which adds a third provider
+prefix beside `opencode/` and `openrouter/`. `leg-cmd.sh` accepts it as-is —
+its check is that a provider segment is PRESENT, not that it equals the
+default (see the script header) — verified by running the emitter and by
+reading its source; a full review leg driven end-to-end through `opencode-go/`
+has NOT yet been run on this account. All 27 listed models were sent one throwaway
+prompt each; this is callability, measured, and nothing more.
+
+| Family | Callable | Note |
+|---|---|---|
+| Zhipu GLM | `glm-5.3` `glm-5.2` `glm-5.1` | new family. **`glm-5.3-flash` answers with an EMPTY string, 3/3, zero errors** — see below |
+| Moonshot | `kimi-k3` `kimi-k2.7-code` `kimi-k2.6` | new family (also reachable via cursor) |
+| Alibaba Qwen | `qwen3.8-max` `qwen3.7-max` `qwen3.8-flash` `qwen3.7-plus` `qwen3.6-plus` | new family |
+| MiniMax | `minimax-m3` `minimax-m2.7` | new family |
+| Xiaomi MiMo | `mimo-v2.5-pro` `mimo-v2.5` | new family (the free `mimo-v2.5-free` is above) |
+| Tencent Hunyuan | `hy4-preview` `hy3` | new family |
+| Meituan | `longcat-2.0` | new family |
+| DeepSeek | `deepseek-v4-flash-vision-exp` | the other three DeepSeek are policy-blocked, below |
+| xAI | `grok-4.6` | **same family as cursor's `cursor-grok-4.6` — not a new leg** (methodology §1) |
+| OpenAI | `gpt-5.6-luna` | **same family as codex's `gpt-5.6-terra` — not a new leg** (methodology §1) |
+
+Latency 4–13 s. **22 callable, 5 blocked by the owner's workspace switches,
+not by the pool**: `deepseek-v4-pro` / `v4-flash` / `v4.1-flash` want explicit
+consent to hosting in mainland China, and the two paid
+`muse-spark-*-contributor` want consent to training on request data. Both
+switches are deliberately OFF on this account. That is a decision, not a
+defect — do not "fix" it by flipping the switch. The 7-model free pool is
+unaffected, including the standing `opencode/muse-spark-1.3-contributor-free`
+leg (to which the paid contributor variant adds NO family — same Meta model).
+
+**None of the 22 has a calibration row.** Each returned one `READY`. A
+callable model is not yet a review leg; the calibration journal is where a
+model earns that, against a review problem with a known answer.
+
+**A new silent-death shape: the truly empty run.** `opencode-go/glm-5.3-flash`
+returned an empty string three times with nothing in the log — no
+`auto-rejecting`, no 5xx, no TLS line, and no counter to consult. This is NOT
+the `tokens.output=0` case documented below (a broken counter on a run that
+produced a full report). It is a run that produced nothing and left no signal
+that it had. The only defence is the one-shot probe before dispatch: a model
+that will not answer `READY` will not answer a review brief either.
+
+**The catalogue does not reflect permission state — probe by CALLING.** After
+the training-consent switch was turned off, `opencode models` still listed all
+27 `opencode-go/` entries and both muse-spark contributor models; calling them
+failed with `This model collects data ... requires explicit opt in`. An
+availability probe built on the listing returns a false green. This is the
+positive-side twin of methodology §4's "a refusal is not evidence until you
+know why it refused": **a success is not evidence until you know which layer
+produced it** — and a listing is produced by the catalogue, not by the
+permission layer that gates the run.
+
 ## Two routes, one name — the catalogue collides on purpose
 
 `opencode models` lists the same model family under two providers, and the two

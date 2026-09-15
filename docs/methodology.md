@@ -32,6 +32,17 @@ Corollaries:
   silently substitute the tier you asked for. Account the rule against the
   *verified served model's* family — the run log records adapter, served
   model, and family as three separate fields.
+  The rule cuts the other way too: **the same family reached by a different
+  provider path is still the same family, not a new leg.** `opencode-go/grok-4.6`
+  is xAI exactly as cursor's `cursor-grok-4.6` is; `opencode-go/gpt-5.6-luna`
+  shares GPT's blind spots with codex's `gpt-5.6-terra`; the paid
+  `opencode-go/muse-spark-*-contributor` is the same Meta model as the free
+  `opencode/muse-spark-*-contributor-free`. Because these arrive through a
+  different CLI, a different provider and a different price list, they are
+  easy to book as a third family at accounting time. They are not. Family is
+  the model lineage; the path it came down is irrelevant. (Measured 2026-09-15
+  on the opencode go plan, where two of the 22 newly callable models were
+  exactly these look-alikes.)
 - A model whose family is deliberately undisclosed (stealth models in free
   pools) can never *satisfy* the rule — it might secretly share any family.
   Fine as an additional pair of eyes; never the accounting leg.
@@ -255,6 +266,24 @@ configuration and a broken one look identical.
 Same family as "test whether it can FAIL" in §6, one step earlier: there the
 question is whether a test can go red, here it is whether a red means what you
 think.
+
+### A success is not evidence until you know which LAYER produced it
+
+The positive-side twin of the rule above, measured the same day. A lead
+probing model availability read `opencode models`: all 27 `opencode-go/`
+entries listed, two muse-spark contributor models among them. Every call to
+those two then failed — `This model collects data ... requires explicit opt
+in` — because the workspace's training-consent switch was off. The listing
+was true; it was produced by the catalogue, which does not consult the
+permission layer that gates a run. So the green came from a layer that could
+not have known the answer.
+
+The negative rule asks for the exact posture and a positive control. The
+positive rule asks one question: **which layer said yes, and is it the layer
+that decides?** A catalogue says "exists"; a permission check says "allowed";
+only a completed call says "runs". Probe at the layer whose answer you need
+— for availability, that is one real call — and never read a lower layer's
+yes as the higher layer's.
 
 ### A suppressed error makes a failed query look like an empty answer
 

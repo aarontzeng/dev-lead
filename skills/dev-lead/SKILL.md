@@ -183,12 +183,21 @@ lead was holding.
 > auto-memory, so the four-leg default and the effort spellings live there too.
 > Treat that as the load-bearing copy and this file as the explanation.
 
-**Probe availability first, cheaply.** Each family's runtime file has its
-probe: agy has an AUTH_OK one-liner (stale logs describe past runs; the probe
-is the only current answer); codex has no reliable quota API, so attempt and
-treat a quota error as "unavailable this run"; opencode needs no credential,
-but congestion is its availability axis — a cheap one-liner answering in
-seconds means go.
+**Probe availability first, cheaply — and "cheap" means one real call, never
+a listing.** Each family's runtime file has its probe: agy has an AUTH_OK
+one-liner (stale logs describe past runs; the probe is the only current
+answer); codex has no reliable quota API, so attempt and treat a quota error
+as "unavailable this run"; opencode needs no credential, but congestion is its
+availability axis — a cheap one-liner answering in seconds means go. A
+catalogue is not a probe: `opencode models` kept listing all 27 `opencode-go/`
+models, two muse-spark entries included, after the workspace's
+data-for-training switch was turned off — and every call to those two then
+failed with "requires explicit opt in" (measured 2026-09-15). The listing
+reflects what exists, not what your permissions let you run; a lead who probes
+by enumerating gets a green that the first dispatch turns red. Send one
+throwaway prompt and read the reply. The same probe catches the model that
+answers with an empty string and no error (`opencode-go/glm-5.3-flash`, three
+for three that day) — a listing cannot.
 
 Implementer selection (adapt the tiers to your account's catalogue and your
 calibration journal — see
