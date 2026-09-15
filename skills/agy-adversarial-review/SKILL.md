@@ -56,7 +56,36 @@ auto-denied (`permission check failed for read_file ".../.git"`) and the whole
 run dies with that single line as its output. Every other family in this
 suite reads worktrees fine; agy's sandbox is the one that cannot. Freeze for
 agy with a local clone instead, then verify and bracket exactly as the helper
-flow would:
+flow would.
+
+> [!note] That rule did not reproduce on 2026-09-15, and the original record is
+> missing the field that would settle it.
+>
+> A four-leg round that day ran the agy leg against a `freeze-target.sh`
+> WORKTREE on ps-241 — `.git` a 79-byte pointer file, exactly the shape above —
+> and the leg completed normally: 15 KB of report, an evidence table with line
+> counts and verbatim last lines for seven files, and **zero** occurrences of
+> `permission check failed`, `auto-denied`, or any `.git` read in its log.
+>
+> Settings do not explain the difference, and this is the part that makes it
+> worth recording: ps-241 is STRICTER on the axis that would matter — its
+> `toolPermission` key is absent (deny by default) and `read_file` is scoped to
+> one project glob, so a `.git` pointer read should have been denied there.
+> It was never attempted. If the mechanism above still held, that leg should
+> have died; it did not.
+>
+> The remaining variable is the agy version at the time of the original
+> measurement, and **the 2026-08-26 entry does not state one** — so there is no
+> way to tell "the behaviour changed" from "it was never general". Treat that
+> as the lesson for this file: a measurement record of a CLI's behaviour needs
+> the version it was taken on, or it cannot be retired later.
+>
+> The clone remains the documented path until someone deliberately tests this.
+> One counter-observation, from a run set up for something else, is not a
+> decision. What it does mean is that anyone paying the cost of a full clone
+> per review has grounds to check whether they still need to.
+
+Then:
 
 ```bash
 git clone --quiet "$REPO" "$REVIEW_TARGET_DIR"
