@@ -68,6 +68,26 @@ git -C "$REVIEW_TARGET_DIR" checkout --quiet "$SHA"
 A clone's `.git` is a real directory inside `--add-dir`, so nothing escapes
 the sandbox. The same before/after HEAD + porcelain bracket still applies.
 
+**One guarantee on this path is not ours, and nothing here used to say so.**
+The bracket proves the target did not CHANGE; it cannot prove the target is the
+one this round created. What prevents a half-deleted leftover from being
+adopted as a fresh frozen target is a refusal — and the refusal lives in a
+different place on each path:
+
+| freeze path | what refuses a polluted destination |
+|---|---|
+| `freeze-target.sh` (worktree) | its own check: `destination already exists … (refusing to touch it)`, rc 1 |
+| the clone above | **`git clone` itself**: `destination path … already exists and is not an empty directory`, rc 128 |
+| the before/after bracket | nothing — it compares the target to itself |
+
+The second row is the one to notice: that guarantee is git's behaviour, not
+this suite's. No test here covers it, no review would flag its loss, and
+rewriting the line as `git init && git fetch` — a reasonable-looking change for
+a shallow or sparse setup — removes it while every bracket keeps passing.
+If you change how the target is created, re-establish the refusal explicitly.
+(Raised and measured by a session whose agy targets are clones, 2026-09-15;
+both refusals confirmed, both leaving the leftover untouched.)
+
 ## Run it
 
 ```bash

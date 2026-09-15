@@ -279,7 +279,18 @@ by the author of this very rule, hours after writing it; a
 `python3 -m venv … | tail -2 && pip install … && echo "INSTALL_OK"` that
 printed INSTALL_OK on a host with no `ensurepip`, where neither `pip` nor the
 package binary existed; and the fetch above. Set `pipefail`, or put the status
-check on the command rather than after the pipe. (The
+check on the command rather than after the pipe.
+
+**And note how all of them were actually caught, because it bounds what review
+can do here.** Four instances were logged that day — the three above plus a
+cleanup `rm -rf` that failed against a read-only leftover and silently polluted
+the next experiment — and **not one was spotted by reading the line.** Each
+surfaced downstream as something impossible: an import that failed after a
+green install, a tag present on the remote but missing locally, Permission
+denied printing underneath "removed cleanly", a second run whose output carried
+errors from a state nobody had set up. Looking harder at the pipeline is not
+the countermeasure; `pipefail` is, and so is treating a downstream impossibility
+as a signal about the step before it rather than a puzzle in itself. (The
 opencode review flow has its own instance of this — a digest that survived a
 missing file because `sha256sum`'s failure exited through a pipe.)
 
@@ -518,6 +529,17 @@ Stop and report (instead of looping) when:
   transmit it — fix it directly);
 - the same finding *category* keeps reopening against approximation-shaped
   code (fix the property's boundary, not the code — §5).
+
+**"Nothing to change" is a result, and a run of finds makes it harder to
+report.** Measured as a mood rather than a defect, 2026-09-15: two sessions
+spent a day in which almost every check turned something up, and both noticed
+the same pull — a stretch of real findings manufactures pressure to produce the
+next one, and the cheapest way to satisfy that pressure is to harden something
+that was never broken. The tell is a check with no failure case behind it,
+which is the decorative-guard shape §4 already names; this is where it comes
+from. A concern raised, checked in under a minute, and closed with "the tooling
+already refuses this" is worth saying out loud, precisely because it produces
+no diff to show for it.
 
 **A free-pool leg that dies gets one retry, then a different model.** Free legs
 fail often enough to need a stated policy rather than a judgement call each
