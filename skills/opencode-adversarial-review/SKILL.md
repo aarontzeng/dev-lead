@@ -23,11 +23,13 @@ lines. This file assumes them and covers only the review role.
 
 ## Choosing the model for this leg — by LENS, not a fixed favourite
 
-Guidance, **not a roster default**: the roster is the owner's and lives in
-their `CLAUDE.md`. What follows is what the measurements support when a leg is
-being chosen for a round. (Proposed by a peer session 2026-09-16 and recorded
-after review; the earlier attempt to write a single model in as "the default"
-was retracted in 0.6.8.)
+**The owner ruled this on 2026-09-16 and it now lives in their `CLAUDE.md`**,
+which is the roster; what follows is the same rule with the numbers behind it,
+and this file is where those numbers belong. The division is now explicit in
+both directions — the roster names which leg, dev-lead holds prices, buckets
+and calibration rows. (The earlier attempt to write a single model in here as
+"the default" was mine, on a peer's recommendation, and was retracted in
+0.6.8; the rule below is the owner's, not a plugin preference.)
 
 | lens | model | why |
 |---|---|---|
@@ -39,12 +41,15 @@ was retracted in 0.6.8.)
 reasoning tokens bill as output. So `xhigh` on a cheap model is nearly free
 and `xhigh` on a dear one can double the leg.
 
-**Owner's decision, still open — and it is about TERMS, not money.** Both
+**The terms question, and how it was settled.** Both
 `muse-spark-*-contributor` variants, free and paid, put the prompt into a
-training set. A review leg is handed the frozen tree: source, design
-documents, sometimes a spec. If that is not acceptable for this material,
-muse-spark is out of the roster entirely and `glm-5.3` becomes the cheapest
-independent family. **Do not decide this inside the plugin** — surface it.
+training set, and a review leg is handed the frozen tree: source, design
+documents, sometimes a spec. That is a disclosure decision, not a cost one,
+so it went to the owner rather than being settled here. **Ruled 2026-09-16:
+accepted for review legs — with the exception carried per change.** If a
+change carries material that must not reach a training set, say so and run
+the fourth leg on `opencode-go/glm-5.3` instead. The judgement stays with
+whoever knows what is in the diff; the default no longer has to be guessed.
 
 ## Establish an immutable review target
 
