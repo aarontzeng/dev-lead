@@ -18,6 +18,25 @@ the ones you measured on your own account, your own repos, your own weeks.
 Keep one table per family, in that family's runtime reference file, appended —
 never rewritten — one row per run:
 
+**So THIS file holds no rows, by design — it is the method. The data lives
+here**, and a reader who greps this file for a model and finds nothing has
+learned nothing about whether that model has been measured:
+
+| family | table |
+|---|---|
+| Gemini | `skills/agy-adversarial-review/references/agy-runtime.md` |
+| GPT | `skills/codex-adversarial-review/references/codex-runtime.md` |
+| Claude | `skills/claude-adversarial-review/references/claude-runtime.md` |
+| cursor's pools | `skills/cursor-adversarial-review/references/cursor-runtime.md` |
+| opencode free + `opencode-go/` paid | `skills/opencode-adversarial-review/references/opencode-runtime.md` |
+
+This index exists because the absence was read as missing data twice in one
+day (2026-09-16): one session grepped this file for `opencode-go` and
+reported the pool uncalibrated, and the maintainer — who had just written a
+row into the right file — assumed rows belonged here too and shipped a
+release whose edit silently did nothing. The format sentence above was
+already correct; nothing pointed at the actual files.
+
 ```markdown
 | date | model | role | outcome |
 |---|---|---|---|
