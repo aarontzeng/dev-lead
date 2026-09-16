@@ -51,6 +51,47 @@ change carries material that must not reach a training set, say so and run
 the fourth leg on `opencode-go/glm-5.3` instead. The judgement stays with
 whoever knows what is in the diff; the default no longer has to be guessed.
 
+**And the owner delegated the judgement itself to this layer (2026-09-16):
+dev-lead decides what may go to a contributor tier.** So it needs criteria
+that can be CHECKED, not a feeling. Three rules:
+
+**1. Decide per REPOSITORY, once, and write it down — not per change.** A
+repo's disclosure class is stable; a change's is not knowable at a glance,
+and a judgement re-made every round is one that decays exactly like a STOP
+rule that keeps firing on benign causes. Record the class beside the repo's
+other dispatch facts. Re-open it only when the repo gains a new kind of
+content, not when a change looks unusual.
+
+**2. The stop classes.** A repo is NOT eligible for a contributor tier if its
+tracked tree carries any of: credential material of any kind; a customer's or
+third party's confidential material; personal data beyond work identifiers;
+or specifications for an unannounced product. Everything else — this
+account's own infrastructure code, its ADRs, its tooling — is eligible.
+
+**3. Screen the frozen target before the first dispatch, not from memory.**
+The tree is what the leg receives, so look at it:
+
+```bash
+git ls-files | wc -l; git ls-files -z | xargs -0 cat | wc -c   # what is actually handed over
+grep -rlEi 'BEGIN (RSA|OPENSSH|EC) PRIVATE KEY|api[_-]?key *= *["'"'"'][A-Za-z0-9]{16}' .
+grep -rhoE '[A-Za-z][A-Za-z.]+@[a-z]+\.com' . | sort -u      # people, not roles
+```
+
+Measured on `quanta-mcp-gateway` 2026-09-16: no credential material; 153
+files and 6.7 MB handed to each leg; colleague work addresses and internal
+project codenames (`RTD16XX`, `Swarm-Matrix`, `AeroGuided`) present. That is
+the residual the owner accepted — **named, not assumed absent.** Eligible.
+
+**The brief is a prompt too.** The claims file and lens text are authored by
+the lead and go to the model with the tree, so they can disclose material the
+repo does not contain — an audit excerpt with real actor ids, a quoted mail,
+a customer's words from a ticket. Screen what you WRITE by the same rules;
+this is the half no check on the repository can see.
+
+When any of this trips, the fourth leg runs on `opencode-go/glm-5.3` and the
+report says why. A leg not run is always available too: three legs and a
+stated reason beat four legs and a disclosure nobody decided.
+
 ## Establish an immutable review target
 
 **One frozen directory per reviewer, at the exact commit, that nothing else
