@@ -21,6 +21,31 @@ family-unknown caveat, the two silent permission traps (zero-commit project
 binding, last-match-wins ordering), congestion behavior, and the audit log
 lines. This file assumes them and covers only the review role.
 
+## Choosing the model for this leg — by LENS, not a fixed favourite
+
+Guidance, **not a roster default**: the roster is the owner's and lives in
+their `CLAUDE.md`. What follows is what the measurements support when a leg is
+being chosen for a round. (Proposed by a peer session 2026-09-16 and recorded
+after review; the earlier attempt to write a single model in as "the default"
+was retracted in 0.6.8.)
+
+| lens | model | why |
+|---|---|---|
+| mechanical — consistency, is-it-still-true, convention, falsifiability | `opencode/muse-spark-1.3-contributor-free`, switching to `opencode-go/muse-spark-1.3-contributor` only when the free pool is congested | measured strong on fact-checking and line accuracy; the Go twin is ~$0.014 a leg on its own bucket |
+| judgement — challenge, design rulings, sequences | `opencode-go/glm-5.3` | an independent family, ~$0.20 a leg against the large ($12 / 5 h) bucket. **No calibration row yet — treat as unproven until one exists** |
+| top-tier judgement only | `opencode-go/kimi-k3`, `opencode-go/qwen3.8-max` | 1–2 legs per 5-hour window at most, and the buckets are shared across sessions, so probe immediately before dispatch |
+
+**Effort follows the lens, never the model.** There is no per-variant price;
+reasoning tokens bill as output. So `xhigh` on a cheap model is nearly free
+and `xhigh` on a dear one can double the leg.
+
+**Owner's decision, still open — and it is about TERMS, not money.** Both
+`muse-spark-*-contributor` variants, free and paid, put the prompt into a
+training set. A review leg is handed the frozen tree: source, design
+documents, sometimes a spec. If that is not acceptable for this material,
+muse-spark is out of the roster entirely and `glm-5.3` becomes the cheapest
+independent family. **Do not decide this inside the plugin** — surface it.
+
 ## Establish an immutable review target
 
 **One frozen directory per reviewer, at the exact commit, that nothing else

@@ -280,6 +280,29 @@ Same family as "test whether it can FAIL" in §6, one step earlier: there the
 question is whether a test can go red, here it is whether a red means what you
 think.
 
+### A release does not reach a reader until their CACHE moves
+
+Measured 2026-09-16, the day this repo shipped four releases. The plugin is
+read from `~/.claude/plugins/cache/dev-lead/dev-lead/<version>/`, one
+directory per version, and a session resolves the newest it happens to have.
+On the maintainer's own host that was 0.6.5 while master was 0.6.9; another
+session was on 0.6.4. The `opencode-go` guidance written that morning had 8
+occurrences in the marketplace checkout and 4 in the cache both sessions were
+actually reading — **half of a day's releases were invisible to everyone,
+including their author.**
+
+The scripts happened to be byte-identical across that gap, so nothing ran
+stale; that was luck, not design. Two consequences worth keeping:
+
+- **Resolve tooling from the git checkout when there is one**, because it is
+  the copy that moves with the release:
+  `DEV_LEAD=${DEV_LEAD_ROOT:-$HOME/.claude/plugins/marketplaces/dev-lead}`,
+  falling back to the newest cache directory only when that path is absent.
+- **A release note is a claim about what readers will see, and it is wrong by
+  default.** Say which version carries a change and that a session must pick
+  up the new cache to see it; do not assume a peer who greps "the plugin" is
+  reading what you just pushed.
+
 ### A guard that fires is worth nothing if the next step does not read it
 
 Measured on this repo 2026-09-16, by its maintainer. A release edit asserted
