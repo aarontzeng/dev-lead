@@ -399,12 +399,48 @@ tokens, so raising it costs most on the models that are already dear**:
 +30 K reasoning tokens is +$0.45 on `kimi-k3` and +$0.13 on `glm-5.3`. Pick
 effort from the LENS, not from the model.
 
-So, for a paid go leg: **default to `opencode-go/glm-5.3`** — a genuinely new
-family against GPT/Gemini/Claude/xAI, on the large bucket. Keep `kimi-k3` and
-`qwen3.8-max` for judgement-shaped lenses (challenge, falsifiability) at one
-or two legs per window. **On `Insufficient balance`, fall back to
+**This is cost information, NOT a roster default.** The roster is the
+owner's and lives in their `CLAUDE.md`; a leg changes only when they say so
+for that round. 0.6.6 of this file wrote "default to `opencode-go/glm-5.3`",
+which took a peer's *recommendation* and shipped it as policy — corrected
+here, and by the peer who proposed it. What the numbers legitimately say: IF
+a paid go leg is named for a round, `glm-5.3` has four times the headroom of
+`kimi-k3` at a third of the cost, and `kimi-k3`/`qwen3.8-max` suit
+judgement-shaped lenses at one or two legs per window.
+
+There is also a reliability argument against any paid go leg as a standing
+default, and it is the finding below: **the buckets are shared across
+sessions**, so a paid leg can be drained by work you did not do, while the
+free pool stayed answerable throughout. Trading a leg that is always there
+for one that depends on what somebody else ran today is a bad trade while the
+capability half has no calibration data.
+
+**On `Insufficient balance`, fall back to
 `opencode/muse-spark-1.3-contributor-free` and do NOT retry the same model**;
 the "use balance after limits" switch does nothing when the Zen balance is 0.
+
+**The go buckets are SHARED ACROSS SESSIONS — availability is time-varying
+and other people move it.** Measured 2026-09-16 by two sessions on two
+machines: this host exhausted `kimi-k3` with one review leg, and a session on
+a different machine, minutes later, got `Insufficient balance` from
+`glm-5.3` and `minimax-m3` while the free pool still answered READY. Same
+key, same buckets. Neither observation proves it alone — "my machine ran out"
+is the obvious reading of either one; only placing them side by side shows
+the buckets are one pool.
+
+Three consequences for dispatch:
+
+1. **Probe immediately before dispatching a go leg**, not because the model
+   might be broken but because **another session may have just emptied the
+   window**. This is the "probe by calling" rule again with a new reason:
+   yesterday's measurement is not evidence about today, and neither is the
+   measurement you took an hour ago.
+2. **A multi-leg round can starve its own later legs** — the early ones spend
+   the window and the rest get `Insufficient balance`, which reads like "this
+   model is down" rather than "the budget is gone".
+3. `Insufficient balance` decodes as: **NOT the model being unavailable, NOT
+   the monthly credit being spent — this model's 5-hour window is full, and
+   it may have been filled by somebody else.**
 
 **The one-character money trap.** Free and paid twins differ by a suffix, and
 choosing wrong raises no error — it silently spends:

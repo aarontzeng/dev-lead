@@ -280,6 +280,25 @@ Same family as "test whether it can FAIL" in §6, one step earlier: there the
 question is whether a test can go red, here it is whether a red means what you
 think.
 
+### A guard that fires is worth nothing if the next step does not read it
+
+Measured on this repo 2026-09-16, by its maintainer. A release edit asserted
+on a document's structure, the assert was correct, it fired, and the edit did
+not apply. The release was then committed with `git add -A` and shipped — so
+a commit message claiming the edit had landed went out over a tree where it
+had not. The guard did its whole job; nothing downstream consulted it.
+
+`git add -A` is what severed the two. It stages *whatever is there*, which
+makes "what I changed" independent of "what I verified" — and the gap is
+invisible precisely when an edit silently did nothing. Stage the paths the
+edit claimed to touch, or check the exit status before staging; and when a
+commit message asserts an outcome, that assertion is a claim like any other
+and belongs to the verify-before-you-say rule, not to the prose.
+
+The correction shipped as its own release naming the false sentence, rather
+than folding the missing row into the next commit quietly. A commit message
+is part of the record: a wrong one gets corrected in the record.
+
 ### A success is not evidence until you know which LAYER produced it
 
 The positive-side twin of the rule above, measured the same day. A lead
