@@ -43,6 +43,19 @@ Corollaries:
   the model lineage; the path it came down is irrelevant. (Measured 2026-09-15
   on the opencode go plan, where two of the 22 newly callable models were
   exactly these look-alikes.)
+- **But family is the model you actually DISPATCHED this round — not the
+  adapter's catalogue either.** The same fact cuts two ways and only one
+  inference is sound. A multi-family adapter can collide with itself (above);
+  it does NOT follow that catalogue overlap is collision. `cursor` alone can
+  serve xAI, OpenAI, Anthropic, Google, Moonshot and Composer, so scoring
+  families by what an adapter *could* serve would mark nearly every candidate
+  as a clash and the rule would collapse into refusing everything. Account the
+  model that ran. Corollary worth saying out loud: **"the cursor leg" and "the
+  grok leg" are shorthand, and they stop being true the moment the model
+  changes** — at accounting time, read the round's model id. (Raised
+  2026-09-16 by a peer, correcting another peer who had read a catalogue
+  overlap as a collision. The wrong reading is the more tempting one because
+  it looks stricter, and a rule that refuses more feels safer.)
 - A model whose family is deliberately undisclosed (stealth models in free
   pools) can never *satisfy* the rule — it might secretly share any family.
   Fine as an additional pair of eyes; never the accounting leg.
