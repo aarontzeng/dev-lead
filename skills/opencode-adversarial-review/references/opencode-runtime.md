@@ -388,12 +388,20 @@ reaction. Two sessions read the same dashboard independently and agree.
 
 | bucket | monthly | 5-hour | models |
 |---|---:|---:|---|
-| small | $15 | **$3** | `kimi-k3`, `qwen3.8-max`, `gpt-5.6-luna` |
-| large | $60 | **$12** | the `glm-5.x` family |
+| small | $15 | **$3** | `kimi-k3`, `qwen3.8-max`, `gpt-5.6-luna`, **`glm-5.3`** |
+| large | $60 | **$12** | `glm-5.1`, `glm-5.2`, `glm-5.3-flash` |
+
+**The split is per MODEL, not per family** — corrected 2026-09-16 after 0.6.6
+of this file put the whole `glm-5.x` family on the large bucket. `glm-5.3` is
+on the small one, which makes it ~10 legs per window rather than the ~60 that
+figure implied. The dashboard reading that settles it: `$0.2454` used showing
+as **8.2 %**, which is only arithmetic against $3.00 — against $12 the same
+spend reads 2.0 %. Sibling version numbers are not a bucket.
 
 Rough cost of one review leg at ~130 K in / 5 K out, from list prices:
 `kimi-k3` ≈ $0.47 (so ~6 legs per window), `qwen3.8-max` ≈ $0.29,
-`glm-5.3` ≈ $0.20 against a bucket four times larger (~60 legs),
+`glm-5.3` ≈ $0.20 but on the SMALL bucket (~10 legs per window);
+`glm-5.2` at the same list price on the large one (~40 legs),
 `minimax-m3` ≈ $0.05, `glm-5.3-flash` ≈ $0.02. **Effort is billed as output
 tokens, so raising it costs most on the models that are already dear**:
 +30 K reasoning tokens is +$0.45 on `kimi-k3` and +$0.13 on `glm-5.3`. Pick
