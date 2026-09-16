@@ -376,6 +376,48 @@ defect — do not "fix" it by flipping the switch. The 7-model free pool is
 unaffected, including the standing `opencode/muse-spark-1.3-contributor-free`
 leg (to which the paid contributor variant adds NO family — same Meta model).
 
+**The go pool is metered per MODEL, in a 5-hour window, and one review leg
+can exhaust it.** Measured 2026-09-16 the hard way: a single `kimi-k3` review
+leg on a plan document consumed **62 % of that model's 5-hour bucket**, and
+four hours later every `opencode-go/` model answered
+`AI_APICallError: Insufficient balance`. That error is **the window, not the
+month** — each model has its own dollar bucket where 5 h = 20 % of the monthly
+cap and a week = 50 % — so it clears on its own and topping up is the wrong
+reaction. Two sessions read the same dashboard independently and agree.
+
+| bucket | monthly | 5-hour | models |
+|---|---:|---:|---|
+| small | $15 | **$3** | `kimi-k3`, `qwen3.8-max`, `gpt-5.6-luna` |
+| large | $60 | **$12** | the `glm-5.x` family |
+
+Rough cost of one review leg at ~130 K in / 5 K out, from list prices:
+`kimi-k3` ≈ $0.47 (so ~6 legs per window), `qwen3.8-max` ≈ $0.29,
+`glm-5.3` ≈ $0.20 against a bucket four times larger (~60 legs),
+`minimax-m3` ≈ $0.05, `glm-5.3-flash` ≈ $0.02. **Effort is billed as output
+tokens, so raising it costs most on the models that are already dear**:
++30 K reasoning tokens is +$0.45 on `kimi-k3` and +$0.13 on `glm-5.3`. Pick
+effort from the LENS, not from the model.
+
+So, for a paid go leg: **default to `opencode-go/glm-5.3`** — a genuinely new
+family against GPT/Gemini/Claude/xAI, on the large bucket. Keep `kimi-k3` and
+`qwen3.8-max` for judgement-shaped lenses (challenge, falsifiability) at one
+or two legs per window. **On `Insufficient balance`, fall back to
+`opencode/muse-spark-1.3-contributor-free` and do NOT retry the same model**;
+the "use balance after limits" switch does nothing when the Zen balance is 0.
+
+**The one-character money trap.** Free and paid twins differ by a suffix, and
+choosing wrong raises no error — it silently spends:
+
+    opencode/muse-spark-1.3-contributor-free     free
+    opencode-go/muse-spark-1.3-contributor       PAID, one suffix apart
+    openrouter/nvidia/nemotron-3.5-lightning:free   free
+    openrouter/nvidia/nemotron-3.5-lightning        PAID
+
+`openrouter/meta/muse-spark-1.3-contributor` is a third copy of the same
+model again. **Write the full id with its provider prefix everywhere — in
+tables AND in prose.** A leg named by a bare name in a summary sentence is
+how the wrong one gets picked, because the summary is what people remember.
+
 **None of the 22 has a calibration row.** Each returned one `READY`. A
 callable model is not yet a review leg; the calibration journal is where a
 model earns that, against a review problem with a known answer.

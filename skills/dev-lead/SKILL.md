@@ -190,7 +190,7 @@ answer); codex has no reliable quota API, so attempt and treat a quota error
 as "unavailable this run"; opencode needs no credential, but congestion is its
 availability axis — a cheap one-liner answering in seconds means go. A
 catalogue is not a probe: `opencode models` kept listing all 27 `opencode-go/`
-models, two muse-spark entries included, after the workspace's
+models, both `opencode-go/muse-spark-*-contributor` entries included, after the workspace's
 data-for-training switch was turned off — and every call to those two then
 failed with "requires explicit opt in" (measured 2026-09-15). The listing
 reflects what exists, not what your permissions let you run; a lead who probes
@@ -334,7 +334,7 @@ strongest tier available:
 |---|---|
 | Gemini family | GPT, Claude, or a named free-pool model |
 | GPT family | Gemini, Claude, or a named free-pool model |
-| named free-pool model (DeepSeek/Nemotron/…) | GPT, Gemini, or Claude — all cross-family by construction |
+| named free-pool model (Nemotron/Meta/…; **NOT DeepSeek** — measured 2026-09-16, it is absent from this account's free pool and consent-gated on the paid one) | GPT, Gemini, or Claude — all cross-family by construction |
 | stealth free-pool model (family undisclosed) | cross-family is UNVERIFIABLE — any reviewer might secretly share its family. Prefer a named-family implementer when accounting matters; otherwise take two reviewers from two different KNOWN families |
 | the lead itself | any family that is not the lead's. Never review the lead's work with the lead's own family — even through a different CLI |
 | HIGH risk, any implementer | **two independent reviewers from two families** — measured: two families independently converging on the same root cause was itself the strongest signal the finding was real |

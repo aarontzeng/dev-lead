@@ -221,6 +221,16 @@ cd "$REVIEW_TARGET_DIR" && \
   minutes later — and a second session on this machine was concurrently
   running `deepseek-v4-flash-free`.
 
+  **That model id no longer resolves** (measured 2026-09-16: zero hits in
+  `opencode models`; this account's free pool is `big-pickle`,
+  `ling-3.0-flash-fin-free`, `mimo-v2.5-free`,
+  `muse-spark-1.2/1.3-contributor-free`, `nemotron-3-ultra-free`,
+  `nemotron-3.5-lightning-free`). The incident above is kept because the
+  FAILURE SHAPE is what matters and it recurs on other models; the id is
+  history, not a dispatch target. Why it left the catalogue is unknown — do
+  not infer it from the workspace switches, which provably do not touch the
+  listing (runtime file).
+
   Check before editing anything, and **in this order** — the error greps
   first, because every one of them names a cause that a model switch would
   only reproduce:

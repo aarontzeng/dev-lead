@@ -271,7 +271,7 @@ think.
 
 The positive-side twin of the rule above, measured the same day. A lead
 probing model availability read `opencode models`: all 27 `opencode-go/`
-entries listed, two muse-spark contributor models among them. Every call to
+entries listed, both `opencode-go/muse-spark-*-contributor` models among them. Every call to
 those two then failed — `This model collects data ... requires explicit opt
 in` — because the workspace's training-consent switch was off. The listing
 was true; it was produced by the catalogue, which does not consult the
