@@ -20,6 +20,17 @@ jobs:
           # would be green and empty. The default shallow fetch brings no tags.
           fetch-depth: 0
       - name: Repo invariants
+        env:
+          # check_version_moves_with_content() holds the tree against the master
+          # a reader could already have installed: a push TO master is held
+          # against that push's `before`; a PR against its base; a tag against
+          # its own commit, because a tag is not a change to master and a re-run
+          # after master moved on must not fail the Release; any other push (a
+          # topic branch) against origin/master -- `before` there is the
+          # branch's own previous tip, which would demand a bump on every push.
+          # An explicit base that does not resolve (a force-pushed master's
+          # vanished `before`) fails the run.
+          LINT_BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || (github.ref == 'refs/heads/master' && github.event.before) || (startsWith(github.ref, 'refs/tags/') && github.sha) || 'origin/master' }}
         run: python3 scripts/lint.py
       - name: Shell helper tests
         run: python3 scripts/test_scripts.py
@@ -41,6 +52,21 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0                         # --notes-from-tag reads the annotation object
+      - name: A Release is cut from master
+        env:
+          TAG: ${{ github.ref_name }}
+        # The lint job holds a tag against its OWN commit (ci.yml's LINT_BASE),
+        # so that a re-run after master moves on does not fail -- which means
+        # nothing there asks whether the tag is on master at all. Readers install
+        # master, so a Release of an off-master commit announces a tree nobody
+        # can install, under a version master may already use. Ancestor, not
+        # tip: master moving on after the tag must not fail a re-run.
+        run: |
+          set -euo pipefail
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/master; then
+            echo "::error::$TAG points at $GITHUB_SHA, which is not on master -- cut Releases from master (scripts/release.sh)"
+            exit 1
+          fi
       - name: Restore the annotated tag object
         env:
           TAG: ${{ github.ref_name }}

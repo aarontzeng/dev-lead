@@ -14,6 +14,10 @@ Every check here guards against a failure this repo has ACTUALLY shipped
   published     `git describe` is reachability-based, so two clones working in
                 parallel each saw their own tags, both bumped to the same
                 version, and both linted green -- this asks origin instead
+  moved         Releases are batched, so a version is no longer tagged the
+                moment it exists -- and a version-keyed plugin cache would hold
+                two different trees under one untagged version without a word:
+                master's content must not change unless its version does
   links         a placeholder link (https://github.com/ with no repo) shipped once
   paths         a skill runs with the TARGET repo as cwd, so a bare `scripts/…`
                 or `docs/…` points at the user's project: freeze-target.sh
@@ -43,6 +47,7 @@ Every check here guards against a failure this repo has ACTUALLY shipped
                 fact that makes adapter != family)
 """
 import json
+import os
 import re
 import subprocess
 import sys
@@ -194,8 +199,13 @@ VERSION_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
 
 
 def _semver(text):
-    """(major, minor, patch), or None if `text` is not exactly X.Y.Z."""
-    m = VERSION_RE.match(text or "")
+    """(major, minor, patch), or None if `text` is not exactly X.Y.Z.
+
+    A non-string is None too, not a TypeError: a manifest can say
+    `"version": 7`, and every caller treats None as "not a version"."""
+    if not isinstance(text, str):
+        return None
+    m = VERSION_RE.match(text)
     return tuple(int(g) for g in m.groups()) if m else None
 
 
@@ -400,6 +410,101 @@ def check_version_not_published():
             f"version '{declared}' is already published as tag '{tag}'. Two "
             "different trees would ship under one version, and the tag push "
             "will be rejected. Bump past it.")
+
+# ---- moved: master must not change content under a version it already shows ----
+#
+# The plugin cache is keyed by VERSION (docs/methodology.md, "A release does not
+# reach a reader until their CACHE moves"), and this repo is its own marketplace:
+# whatever master holds is what `claude plugin marketplace update` installs, tag
+# or no tag. What a reader needs is therefore not "the manifest is ahead of the
+# last RELEASE" but "master never shows two different trees under one version"
+# -- a cache that already holds 0.6.15 never refetches 0.6.15.
+#
+# Until 2026-09-17 every commit was tagged and released, and check_version()'s
+# rule 2 (ahead of the newest tag) enforced that by accident: each commit's own
+# tag became the bar for the next one. Releases are batched now -- README,
+# "Versions and releases" -- so two untagged commits can both sit above the last
+# tag at the SAME version and rule 2 passes both. This compares against the
+# master a reader may already have installed instead. CI sets LINT_BASE per
+# event (ci.yml): a PR's base, a push to master's `before`, a tag's own commit (a
+# tag is not a change to master), and origin/master for any other push; a local
+# run uses origin/master. The check is per
+# PUSH, not per commit: what a reader can install is master's tip, so commits
+# landing together in one push never exist on their own anywhere a cache reads.
+#
+# The working tree is compared, not HEAD: an uncommitted edit to a tracked file
+# is exactly what the next commit publishes, and a local run before committing is
+# where catching it is cheapest. An UNTRACKED file is not in `git diff`, so a new
+# file is caught once it is committed, not before -- which CI always sees.
+LINT_BASE_ENV = "LINT_BASE"
+
+
+def check_version_moves_with_content():
+    manifest = ROOT / ".claude-plugin" / "plugin.json"
+    if not manifest.is_file():
+        return                                  # check_manifest() reported it
+    try:
+        declared = json.loads(manifest.read_text(encoding="utf-8")).get("version")
+    except json.JSONDecodeError:
+        return                                  # ditto
+    version = _semver(declared)
+    if version is None:
+        return                                  # check_version() reported it
+
+    base = os.environ.get(LINT_BASE_ENV, "").strip()
+    if base and set(base) == {"0"}:
+        # GitHub's `before` for a push that CREATES the ref. ci.yml passes
+        # `before` only for master, so this is the push that creates master:
+        # there is no earlier published tree to hold it against.
+        note(f"moved: {LINT_BASE_ENV} is the all-zero sha (the push that "
+             "creates master), so the 'content changes only with the version' "
+             "rule was NOT checked -- there is no earlier published tree here.")
+        return
+    label = base or "origin/master"
+    base_sha = _git("rev-parse", "--verify", "--quiet", f"{label}^{{commit}}")
+    if not base_sha:
+        if base:
+            # CI named a base and it is gone: in practice a force-push rewrote
+            # published master, which is the one way to put a new tree under a
+            # version readers already hold without this check ever seeing both.
+            err(rel(manifest),
+                f"{LINT_BASE_ENV}='{base}' does not resolve -- CI names the master a "
+                "reader could already have installed, and it is gone. A force-push "
+                "to master rewrites what readers hold under their version; do not "
+                "force-push master.")
+            return
+        note(f"moved: cannot resolve '{label}', so the 'content changes only "
+             "with the version' rule was NOT checked -- this run guarded "
+             "nothing. `git fetch origin` and re-run.")
+        return
+
+    diff = subprocess.run(["git", "-C", str(ROOT), "diff", "--quiet", base_sha, "--"],
+                          capture_output=True, text=True)
+    if diff.returncode == 0:
+        return                                  # same tree as published: nothing moved
+    if diff.returncode != 1:
+        note(f"moved: `git diff {label}` failed ({diff.stderr.strip()[:120]}), so "
+             "the 'content changes only with the version' rule was NOT checked.")
+        return
+
+    blob = _git("show", f"{base_sha}:.claude-plugin/plugin.json")
+    try:
+        raw = json.loads(blob).get("version") if blob else None
+    except (json.JSONDecodeError, AttributeError):
+        raw = None
+    published = _semver(raw)                    # None for a non-string, too
+    if published is None:
+        note(f"moved: '{label}' carries no readable X.Y.Z plugin.json, so the "
+             "'content changes only with the version' rule was NOT checked.")
+        return
+    if version <= published:
+        shown = ".".join(str(n) for n in published)
+        err(rel(manifest),
+            f"the tree differs from {label}, which already shows version "
+            f"'{shown}', but plugin.json declares '{declared}' -- a reader whose "
+            "cache holds that version never refetches it, so this content "
+            "would never reach them. Bump the patch in this change.")
+
 
 # ---- links: relative links resolve; no accidental placeholders ----
 LINK_RE = re.compile(r"\]\(([^)\s]+)\)")
@@ -1136,16 +1241,22 @@ def check_families():
                 "a lead reading only this file cannot account the family correctly")
 
 
+#: Every check main() runs, as objects -- so a test can ask whether a check is
+#: RUN, not merely whether its name appears somewhere in main()'s source.
+CHECKS = (check_structure, check_frontmatter, check_manifest,
+          check_version, check_version_not_published,
+          check_version_moves_with_content,
+          check_links, check_paths, check_fences, check_mermaid,
+          check_var_order,
+          check_tracked, check_helper_args, check_sentinels, check_pairing_rule, check_leaf_rule,
+          check_frozen_target,
+          check_delegate_guardrails,
+          check_delegate_audit_trails,
+          check_families, check_launch)
+
+
 def main():
-    for check in (check_structure, check_frontmatter, check_manifest,
-                  check_version, check_version_not_published,
-                  check_links, check_paths, check_fences, check_mermaid,
-                  check_var_order,
-                  check_tracked, check_helper_args, check_sentinels, check_pairing_rule, check_leaf_rule,
-                  check_frozen_target,
-                  check_delegate_guardrails,
-                  check_delegate_audit_trails,
-                  check_families, check_launch):
+    for check in CHECKS:
         check()
     if NOTES:
         # Before the verdict, not after: a note that scrolls past the word

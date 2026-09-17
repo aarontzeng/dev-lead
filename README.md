@@ -403,6 +403,44 @@ of; the script's docstring names which. If you add an invariant, add its
 check, and mutation-test it: break the invariant, watch the check fire,
 restore.
 
+### Versions and releases
+
+Two different things, on two different clocks:
+
+- **A version moves with every change to master.** The plugin cache is keyed
+  by version (`~/.claude/plugins/cache/dev-lead/dev-lead/<version>/`), and this
+  repo is its own marketplace, so a change that does not bump the patch never
+  reaches anyone who already holds that version. `scripts/lint.py`'s `moved`
+  check refuses a tree that differs from published master without a version
+  change -- per push, since master's tip is all a reader can install. The
+  version is how a fix *ships*. Three consequences: a revert bumps too (it is a
+  new tree); a branch or PR must sit above master's version before it merges,
+  so rebase it first; and master is never force-pushed, because that is the one
+  way to change what readers hold under their version -- CI fails the run.
+- **A GitHub Release is a batch, and it is rare.** It announces a set of
+  versions, and its notes cover every version since the previous Release. Cut
+  one when:
+  - how the suite runs has changed and a reader must act or will notice:
+    `scripts/`, `data/launch.json`, a skill's *procedure* (not its wording), a
+    new or removed skill -- the same day, because the version has already
+    shipped it to anyone who updates;
+  - or roughly a week of smaller changes is waiting;
+  - or a fix to something that breaks a run needs announcing now.
+
+  Wording, calibration-journal rows and doc-only changes ship through the
+  version alone and wait for the next Release. Draft the notes from the range:
+  `git log --format='- %s' "$(git describe --tags --abbrev=0)"..HEAD`, then say
+  what changed for a reader, not just what the commits were.
+
+Why this is written down: the first 38 days shipped 78 Releases (2026-08-10 to
+09-16), up to ten in a day; 0.6.0 through 0.6.14 were one commit each, mostly a
+skill's or `docs/methodology.md`'s wording. A Releases page that moves daily
+announces nothing. For comparison, measured 2026-09-17:
+[cmux](https://github.com/manaflow-ai/cmux) at v0.64.25 has 59 Releases, keeps
+its day-to-day builds on rolling `nightly` and `rc` pre-releases, and its
+v0.64.24 Release bundled 20 PRs. Versions stay fine-grained here because the
+cache needs them; Releases do not have to.
+
 ## License
 
 [MIT](LICENSE)

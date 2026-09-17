@@ -1722,6 +1722,268 @@ def _origin_repo(tmp, name, tags):
     return work
 
 
+def test_lint_version_moves_with_content(tmp):
+    """check_version_moves_with_content(): master never shows two trees under one version.
+
+    Releases are batched, so the per-commit tag that used to make
+    check_version()'s rule 2 enforce this is gone. The case this exists for is
+    `untagged_twice`: two commits past the last tag, both above it, the second
+    at the SAME version as the first -- rule 2 is green on it, and a reader whose
+    cache holds that version never sees the second commit.
+    """
+    sys.path.insert(0, str(SCRIPTS))
+    import lint
+
+    notes_seen = []
+
+    def published_repo(name, version):
+        """A clone whose origin/master shows `version` -- what a reader installed."""
+        work = _origin_repo(tmp, name, [])
+        (work / ".claude-plugin").mkdir(parents=True, exist_ok=True)
+        (work / ".claude-plugin" / "plugin.json").write_text(
+            json.dumps({"name": "x", "description": "x", "version": version}))
+        git(work, "add", "-A")
+        git(work, "commit", "-qm", f"release content {version}")
+        git(work, "push", "-q", "origin", "master")
+        return work
+
+    def change(repo, version=None, commit=True, filename="skill.md"):
+        (repo / filename).write_text(f"new text {filename} {version}\n")
+        if version is not None:
+            (repo / ".claude-plugin" / "plugin.json").write_text(
+                json.dumps({"name": "x", "description": "x", "version": version}))
+        if commit:
+            git(repo, "add", "-A")
+            git(repo, "commit", "-qm", f"change {version}")
+
+    def lint_it(repo, base=None):
+        real = lint.ROOT, lint.ERRORS, lint.NOTES, os.environ.get("LINT_BASE")
+        try:
+            lint.ROOT, lint.ERRORS, lint.NOTES = repo, [], []
+            if base is None:
+                os.environ.pop("LINT_BASE", None)
+            else:
+                os.environ["LINT_BASE"] = base
+            lint.check_version_moves_with_content()
+            notes_seen[:] = list(lint.NOTES)
+            return list(lint.ERRORS)
+        finally:
+            lint.ROOT, lint.ERRORS, lint.NOTES = real[:3]
+            if real[3] is None:
+                os.environ.pop("LINT_BASE", None)
+            else:
+                os.environ["LINT_BASE"] = real[3]
+
+    repo = published_repo("unchanged", "0.6.14")
+    got = lint_it(repo)
+    check("moved: the published tree itself passes", got == [] and notes_seen == [],
+          f"got {got} {notes_seen}")
+
+    repo = published_repo("bumped", "0.6.14")
+    change(repo, "0.6.15")
+    got = lint_it(repo)
+    check("moved: a content change that bumps the version passes", got == [], f"got {got}")
+
+    repo = published_repo("same", "0.6.14")
+    change(repo, None)
+    got = lint_it(repo)
+    check("moved: a content change under the published version is flagged",
+          any("already shows version '0.6.14'" in e for e in got), f"got {got}")
+
+    repo = published_repo("lower", "0.6.14")
+    change(repo, "0.6.13")
+    got = lint_it(repo)
+    check("moved: ... and so is one that moves the version backwards",
+          any("declares '0.6.13'" in e for e in got), f"got {got}")
+
+    repo = published_repo("numeric", "0.6.9")
+    change(repo, "0.6.10")
+    got = lint_it(repo)
+    check("moved: compares numerically, so 0.6.10 is ahead of 0.6.9", got == [], f"got {got}")
+
+    # THE case: two untagged commits past the last tag, the second reusing the
+    # first one's version. check_version() is green on it by its own rule.
+    repo = published_repo("untagged_twice", "0.6.14")
+    git(repo, "tag", "-a", "v0.6.14", "-m", "v0.6.14")
+    change(repo, "0.6.15", filename="first.md")
+    git(repo, "push", "-q", "origin", "master")
+    change(repo, None, filename="second.md")
+    real = lint.ROOT, lint.ERRORS, lint.NOTES
+    try:
+        lint.ROOT, lint.ERRORS, lint.NOTES = repo, [], []
+        lint.check_version()
+        rule2 = list(lint.ERRORS)
+    finally:
+        lint.ROOT, lint.ERRORS, lint.NOTES = real
+    got = lint_it(repo)
+    check("moved: check_version() is green on a reused untagged version "
+          "(why this check exists, not a bug in rule 2)", rule2 == [], f"got {rule2}")
+    check("moved: the new check catches the reused untagged version",
+          any("already shows version '0.6.15'" in e for e in got), f"got {got}")
+
+    # an uncommitted edit to a TRACKED file is what the next commit publishes
+    repo = published_repo("dirty", "0.6.14")
+    (repo / "f0.txt").write_text("edited, not committed\n")
+    got = lint_it(repo)
+    check("moved: an uncommitted edit to a tracked file without a bump is flagged",
+          any("already shows version" in e for e in got), f"got {got}")
+    # ...but an untracked file is not in `git diff`: caught once committed, not before
+    repo = published_repo("untracked", "0.6.14")
+    change(repo, None, commit=False, filename="brand-new.md")
+    got = lint_it(repo)
+    check("moved: a new untracked file is not counted until it is committed",
+          got == [], f"got {got}")
+
+    # CI's base, not origin/master: the push's `before`
+    repo = published_repo("ci_before", "0.6.14")
+    before = git(repo, "rev-parse", "HEAD").stdout.strip()
+    change(repo, None)
+    git(repo, "push", "-q", "origin", "master")     # origin/master == HEAD now, as in CI
+    got = lint_it(repo, base=before)
+    check("moved: LINT_BASE (a push's `before`) is the bar, not origin/master",
+          any(f"differs from {before}" in e for e in got), f"got {got}")
+    got = lint_it(repo)
+    check("moved: ... which matters, because origin/master alone is already HEAD",
+          got == [], f"got {got}")
+
+    # what cannot be decided is a note, never a silent pass -- except a base CI
+    # NAMED that is gone, which is a force-pushed master and fails outright
+    got = lint_it(repo, base="0" * 40)
+    check("moved: an all-zero LINT_BASE (the push that creates master) is a note, not a pass",
+          got == [] and any("all-zero sha" in n for n in notes_seen), f"{got} {notes_seen}")
+    for vanished in ("f" * 40, "3b5dea3c1e0d9a8b7c6f5e4d3c2b1a0918273645"):
+        got = lint_it(repo, base=vanished)
+        check(f"moved: a base CI names that does not resolve fails ({vanished[:7]})",
+              any("does not resolve" in e for e in got), f"{got} {notes_seen}")
+    # a topic-branch push: CI passes the ref name `origin/master`, not a sha
+    branch = published_repo("topic_branch", "0.6.14")
+    git(branch, "checkout", "-qb", "topic")
+    change(branch, "0.6.15", filename="topic-1.md")
+    got = lint_it(branch, base="origin/master")
+    check("moved: a branch push is held against origin/master, by ref name",
+          got == [], f"{got} {notes_seen}")
+    change(branch, None, filename="topic-2.md")
+    got = lint_it(branch, base="origin/master")
+    check("moved: ... so a second push to the branch needs no second bump",
+          got == [], f"{got} {notes_seen}")
+    lonely = tmp / "lonely"
+    make_repo(lonely, commits=1)
+    (lonely / ".claude-plugin").mkdir()
+    (lonely / ".claude-plugin" / "plugin.json").write_text(
+        json.dumps({"name": "x", "description": "x", "version": "0.1.0"}))
+    got = lint_it(lonely)
+    check("moved: no origin/master and no LINT_BASE is a note",
+          got == [] and any("cannot resolve 'origin/master'" in n for n in notes_seen),
+          f"{got} {notes_seen}")
+    # ...and main() must actually run it: every case above calls the function
+    # directly, so a check dropped from main()'s list would stay green here. By
+    # object identity, and by running main() -- a name in the source proves
+    # nothing (`x if False else y` still contains it).
+    check("moved: lint.CHECKS holds check_version_moves_with_content",
+          any(c is lint.check_version_moves_with_content for c in lint.CHECKS))
+    ran = []
+    real_checks = lint.CHECKS
+    try:
+        lint.CHECKS = tuple((lambda c=c: ran.append(c)) for c in real_checks)
+        lint.main()
+    except SystemExit:
+        pass
+    finally:
+        lint.CHECKS = real_checks
+    check("moved: lint.main() calls every entry of CHECKS, this one included",
+          lint.check_version_moves_with_content in ran and len(ran) == len(real_checks),
+          f"{len(ran)} of {len(real_checks)}")
+
+    # CI must hand the check its base. Without LINT_BASE a CI run falls back to
+    # origin/master, which after actions/checkout IS the pushed HEAD -- the same
+    # tree, so the check passes having guarded nothing, and no test above can see
+    # that. Read the workflow itself.
+    import re as _re
+    ci = (SCRIPTS.parent / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    lint_step = ci.split("name: Repo invariants", 1)[-1].split("- name:", 1)[0]
+    # the VALUE of the env line, not any mention: a comment carrying both
+    # expressions must not satisfy this
+    value = _re.search(r"^\s*LINT_BASE:\s*(\$\{\{[^}#]*\}\})\s*$", lint_step, _re.M)
+    expr = value.group(1) if value else ""
+    # the WHOLE expression, not substrings of it: each clause decides which tree
+    # a reader could hold, and `github.event.before == github.sha` would keep
+    # every substring while making master pushes fall through to origin/master
+    expected = ("${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha"
+                " || (github.ref == 'refs/heads/master' && github.event.before)"
+                " || (startsWith(github.ref, 'refs/tags/') && github.sha)"
+                " || 'origin/master' }}")
+    check("moved: ci.yml passes LINT_BASE: PR base, master's `before`, a tag's own commit, else origin/master",
+          expr == expected and "scripts/lint.py" in lint_step, f"{expr!r}")
+    # the tag clause holds a tag against itself, so the Release job must be the
+    # one to refuse a tag that is not on master -- before it creates anything
+    release_job = ci.split("\n  release:", 1)[-1]
+    on_master = release_job.find('git merge-base --is-ancestor "$GITHUB_SHA" origin/master')
+    creates = release_job.find('gh release create "$TAG"')
+    check("moved: the Release job refuses a tag not on master, before creating the Release",
+          0 <= on_master < creates, f"{on_master} {creates}")
+    # ...and RUN that step's script, because text and order say nothing about its
+    # exit status (`exit 0` in place of `exit 1` would keep both)
+    step = release_job.split("- name: A Release is cut from master", 1)[-1]
+    script = step.split("run: |", 1)[-1].split("\n      - name:", 1)[0]
+    script = "\n".join(line[10:] if line.startswith(" " * 10) else line.strip()
+                       for line in script.splitlines())
+    guarded = published_repo("release_guard", "0.6.14")
+    on_master_sha = git(guarded, "rev-parse", "HEAD").stdout.strip()
+    git(guarded, "checkout", "-qb", "side")
+    change(guarded, "0.6.15", filename="side.md")
+    off_master_sha = git(guarded, "rev-parse", "HEAD").stdout.strip()
+    git(guarded, "fetch", "-q", "origin")
+
+    def run_step(sha):
+        return subprocess.run(["bash", "-c", script], cwd=guarded, capture_output=True, text=True,
+                              env=dict(os.environ, GITHUB_SHA=sha, TAG="v0.6.15"))
+    r = run_step(off_master_sha)
+    check("moved: the Release step FAILS for a tag whose commit is not on master",
+          r.returncode != 0 and "not on master" in r.stdout, r.stdout + r.stderr)
+    r = run_step(on_master_sha)
+    check("moved: the Release step passes for a tag on master",
+          r.returncode == 0, r.stdout + r.stderr)
+    # a working manifest with a non-string version is reported, not a crash
+    check("moved: _semver treats a non-string as not-a-version",
+          lint._semver(7) is None and lint._semver({}) is None and lint._semver(None) is None
+          and lint._semver("0.6.15") == (0, 6, 15))
+    bare = published_repo("nomanifest_base", "0.6.14")
+    first = git(bare, "rev-list", "--max-parents=0", "HEAD").stdout.strip()
+    got = lint_it(bare, base=first)
+    check("moved: a base without a readable manifest is a note",
+          got == [] and any("no readable X.Y.Z plugin.json" in n for n in notes_seen),
+          f"{got} {notes_seen}")
+    for body in ("{not json", "[]", '{"version": 7}', '{"version": {}}', '{"version": ["0.6.14"]}'):
+        broken = published_repo(f"broken_base_{abs(hash(body))}", "0.6.14")
+        (broken / ".claude-plugin" / "plugin.json").write_text(body)
+        git(broken, "add", "-A")
+        git(broken, "commit", "-qm", "broken manifest")
+        base = git(broken, "rev-parse", "HEAD").stdout.strip()
+        (broken / ".claude-plugin" / "plugin.json").write_text(
+            json.dumps({"name": "x", "description": "x", "version": "0.6.14"}))
+        (broken / "f0.txt").write_text("moved on\n")
+        got = lint_it(broken, base=base)
+        check(f"moved: a base whose manifest is {body!r} is a note, not a pass",
+              got == [] and any("no readable X.Y.Z plugin.json" in n for n in notes_seen),
+              f"{got} {notes_seen}")
+    # a diff that FAILS (neither 0 nor 1) decides nothing
+    repo = published_repo("diff_fails", "0.6.14")
+    change(repo, None)
+    real_run = lint.subprocess.run
+
+    def failing_diff(cmd, *a, **kw):
+        if "diff" in cmd:
+            return subprocess.CompletedProcess(cmd, 128, "", "fatal: bad object")
+        return real_run(cmd, *a, **kw)
+    lint.subprocess.run = failing_diff
+    try:
+        got = lint_it(repo)
+    finally:
+        lint.subprocess.run = real_run
+    check("moved: a failing `git diff` is a note, not a pass",
+          got == [] and any("failed" in n for n in notes_seen), f"{got} {notes_seen}")
+
+
 def test_lint_published_version(tmp):
     """check_version_not_published(): the rule `git describe` structurally cannot enforce.
 
@@ -2413,6 +2675,10 @@ def main():
     print("lint.py check_version")
     with tempfile.TemporaryDirectory() as td:
         test_lint_version(Path(td))
+
+    print("lint.py check_version_moves_with_content")
+    with tempfile.TemporaryDirectory() as td:
+        test_lint_version_moves_with_content(Path(td))
 
     print("lint.py check_version_not_published")
     with tempfile.TemporaryDirectory() as td:

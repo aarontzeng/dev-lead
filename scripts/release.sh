@@ -1,5 +1,12 @@
 #!/usr/bin/env bash
-# Cut a release: bump plugin.json, tag it with the notes, print the push.
+# Cut a release: tag the version master already declares, with the notes, and
+# print the push.
+#
+# A Release is a BATCH (README, "Versions and releases"): versions move with
+# every change to master, because the plugin cache is keyed by version, and a
+# Release announces several of them. Run this when a batch is worth announcing,
+# not after every commit. Draft the notes from the whole range:
+#   git log --format='- %s' "$(git describe --tags --abbrev=0)"..HEAD
 #
 # Why this is a script and not three commands in a doc: every step below failed
 # in a real session on 2026-09-04, and each failure was invisible at the moment
@@ -16,10 +23,11 @@
 #     --notes-from-tag: the annotation IS the notes, so this script refuses a
 #     thin one.
 #
-# It does NOT bump the version. This repo's lint rule 2 requires every commit
-# past a release to already declare a higher version, so the bump belongs in the
-# content commit that needed it -- a bump added here would red every push in
-# between. What this does is prove the declared version is releasable, and tag it.
+# It does NOT bump the version. scripts/lint.py requires every push that changes
+# master to declare a higher version than the master it replaces (the `moved`
+# check), so the bump belongs in the content commit that needed it, long before
+# any Release. What this does is prove the declared version is releasable, and
+# tag it.
 #
 # Usage:  scripts/release.sh <notes-file>
 # Prints: the exact push command. It does NOT push -- publishing stays a human
