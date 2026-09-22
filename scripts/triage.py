@@ -621,12 +621,18 @@ def _tree_has(repo, revision, path):
     "is outside repository", "exists on disk, but not in"); matching its prose
     turned an unresolvable link into an abort.
     """
+    if path in ("", "."):
+        return True
     try:
         result = subprocess.run(["git", "-C", str(repo), "cat-file", "-e", "%s:%s" % (revision, path)],
                                 capture_output=True)
+        if result.returncode == 0:
+            return True
+        listing = subprocess.run(["git", "-C", str(repo), "--literal-pathspecs", "ls-tree",
+                                  str(revision), "--", path], capture_output=True)
     except OSError as exc:
         raise InputError("git: %s" % exc)
-    return result.returncode == 0
+    return listing.returncode == 0 and bool(listing.stdout.strip())
 
 
 URL = re.compile(r"https?://(?:[^\s<>()\[\]\"']|\([^\s<>()\[\]\"']*\))+")
@@ -656,8 +662,8 @@ def _visible_markdown(text):
     lines, fence, indented, blank = [], None, False, True
     for raw_line in text.split("\n"):
         line = raw_line[:-1] if raw_line.endswith("\n") else raw_line
-        indent = len(line) - len(line.lstrip(" \t"))
-        token = line[indent:]
+        token = line.lstrip(" \t")
+        indent = len(line[:len(line) - len(token)].expandtabs(4))
         if fence is not None:
             character, length = fence
             run = len(token) - len(token.lstrip(character))
@@ -717,7 +723,7 @@ def _markdown_targets(text):
             if quote is not None:
                 if character == quote and text[cursor - 1] != "\\":
                     quote = None
-            elif character in ("\"", "'"):
+            elif character in ("\"", "'") and text[cursor - 1].isspace():
                 quote = character
             elif character == "(":
                 depth += 1
@@ -820,6 +826,48 @@ def _is_move_only(repo, previous_revision, current_revision, entries):
         if normalise(old_text) != normalise(new_text):
             return False
     return True
+
+
+def _account_values(person):
+    """The identifiers that make two Gerrit records the same account.
+
+    Gerrit may send a username on one vote and only an email on another, and
+    two records for one reviewer must not read as two open opinions.
+    """
+    person = person or {}
+    values = {str(person[field]).strip().lower()
+              for field in ("username", "email") if person.get(field)}
+    if not values and person.get("name"):
+        values = {str(person["name"]).strip().lower()}
+    return values or {repr(sorted((str(key), str(item)) for key, item in person.items()))}
+
+
+def _supersedes(approval, patch_set, held, held_patch_set):
+    """Whether a vote replaces the one held, ties going to the later patch set."""
+    when, other = approval.get("grantedOn", 0), held.get("grantedOn", 0)
+    if _after(when, other):
+        return True
+    if _after(other, when):
+        return False
+    return _later_patch_set(_number(patch_set), _number(held_patch_set))
+
+
+def _hold_latest_vote(accounts, approval, patch_set):
+    """Keep one vote per account: the latest, merging records as they match."""
+    values = _account_values(approval.get("by"))
+    matches = [held for held in accounts if held["values"] & values]
+    if not matches:
+        accounts.append({"values": set(values), "approval": approval, "patch_set": patch_set})
+        return
+    head = matches[0]
+    for other in matches[1:]:
+        head["values"] |= other["values"]
+        if _supersedes(other["approval"], other["patch_set"], head["approval"], head["patch_set"]):
+            head["approval"], head["patch_set"] = other["approval"], other["patch_set"]
+        accounts.remove(other)
+    head["values"] |= values
+    if _supersedes(approval, patch_set, head["approval"], head["patch_set"]):
+        head["approval"], head["patch_set"] = approval, patch_set
 
 
 def _fired(fired, rule, detail):
@@ -995,7 +1043,8 @@ def _as_of_cutoffs(change, as_of):
     for entry in entries:
         if not isinstance(entry, dict):
             continue
-        if "createdOn" in entry and _later_patch_set(_number(entry), number):
+        if ("createdOn" in entry and _later_patch_set(_number(entry), number)
+                and _numeric_time(entry["createdOn"]) is not None):
             next_created.append(entry["createdOn"])
         if _number(entry) == number:
             created = entry.get("createdOn", created)
@@ -1100,21 +1149,22 @@ def triage_change(config, raw, path, number, query_json, include_wip, as_of=None
                    if _identity_matches(patch_set.get("uploader"), identifiers)]
         upload = max(uploads, key=lambda patch_set: _time(patch_set.get("createdOn", 0))) if uploads else current
         upload_time = upload.get("createdOn", 0)
-        latest = {}
+        accounts = []
         for patch_set in patch_sets.values():
             for approval in patch_set.get("approvals") or []:
                 if approval.get("type") != "Code-Review":
                     continue
                 if _identity_matches(approval.get("by"), identifiers):
                     continue
-                if not _after(approval.get("grantedOn", 0), upload_time):
+                granted = approval.get("grantedOn", 0)
+                # A vote whose timestamp does not parse cannot be shown to
+                # predate my upload, so it stays a candidate rather than
+                # disappearing into "older than everything".
+                if _numeric_time(granted) is not None and not _after(granted, upload_time):
                     continue
-                by = approval.get("by") or {}
-                key = by.get("username") or by.get("email") or by.get("name") or repr(sorted(by.items()))
-                held = latest.get(key)
-                if held is None or _after(approval.get("grantedOn", 0), held.get("grantedOn", 0)):
-                    latest[key] = approval
-        negatives = [approval for approval in latest.values() if (_approval_value(approval) or 0) < 0]
+                _hold_latest_vote(accounts, approval, patch_set)
+        negatives = [held["approval"] for held in accounts
+                     if (_approval_value(held["approval"]) or 0) < 0]
         comments = [
             comment for comment in change.get("comments") or []
             if not _identity_matches(comment.get("reviewer"), identifiers)

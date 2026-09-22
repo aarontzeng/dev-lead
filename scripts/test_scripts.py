@@ -4535,6 +4535,72 @@ def test_triage(tmp):
     check("triage as-of: a gap in patch set numbers still ends the replay",
           not any(rule["rule"] == "owner-fix-round" for rule in result.get("fired_rules", [])), result)
 
+    # Round-4 review: junk sorts first now, so it must never be PICKED as the
+    # replay cutoff and then discarded by the guard.
+    result = changed(173, [patch(1, owner_small_ps1, base, created=10),
+                           patch(2, owner_small_ps2, owner_small_ps1, created="rebuilt"),
+                           patch(3, owner_small_ps2, owner_small_ps1, created=30)],
+                     owner="alice", args=("--as-of-ps", "1"),
+                     comments=[{"timestamp": 35, "reviewer": {"username": "bob"}, "message": "after ps3"}])
+    check("triage as-of: one junk timestamp does not discard a real cutoff",
+          not any(rule["rule"] == "owner-fix-round" for rule in result.get("fired_rules", [])), result)
+
+    # Round-4 review, cursor: a negative whose timestamp does not parse cannot
+    # be shown to predate my upload, so it must not vanish.
+    result = changed(174, [patch(1, owner_small_ps1, base, created=20,
+                                 approvals=[{"type": "Code-Review", "value": "-1", "grantedOn": None,
+                                             "by": {"username": "bob", "email": "bob@example.com"}}])],
+                     owner="alice")
+    check("triage owner fix: a negative with an unparsable timestamp still counts",
+          any(rule["rule"] == "owner-fix-round" for rule in result.get("fired_rules", [])), result)
+
+    # Round-4 review: one reviewer keyed by email on one vote and by username
+    # on the next is one account, not two opinions.
+    result = changed(175, [patch(1, owner_small_ps1, base, created=10,
+                                 approvals=[{"type": "Code-Review", "value": "-1", "grantedOn": 25,
+                                             "by": {"email": "bob@example.com", "name": "Bob Smith"}}]),
+                           patch(2, owner_small_ps2, owner_small_ps1, created=20,
+                                 approvals=[{"type": "Code-Review", "value": "+1", "grantedOn": 30,
+                                             "by": {"username": "bob", "email": "bob@example.com",
+                                                    "name": "Robert Smith"}}])], owner="alice")
+    check("triage owner fix: one reviewer keyed two ways is one account",
+          not any(rule["rule"] == "owner-fix-round" for rule in result.get("fired_rules", [])), result)
+    result = changed(176, [patch(1, owner_small_ps1, base, created=10,
+                                 approvals=[approval("-1", 25, who="bob")]),
+                           patch(2, owner_small_ps2, owner_small_ps1, created=20,
+                                 approvals=[approval("+1", 25, who="bob")])], owner="alice")
+    check("triage owner fix: a same-second tie goes to the later patch set",
+          not any(rule["rule"] == "owner-fix-round" for rule in result.get("fired_rules", [])), result)
+
+    # Round-4 review: a tab is four columns, and an apostrophe belongs to the
+    # destination -- both otherwise HIDE a link that does not resolve.
+    tab_fence = "para\n\t```\n[after](missing.md)\n"
+    check("triage markdown: a tab-indented fence marker does not open a fence",
+          list(triage_module._relative_targets(tab_fence)) == ["missing.md"],
+          list(triage_module._relative_targets(tab_fence)))
+    apostrophe = "[Notes](notes/bob's_summary.md) and [API](api.md)."
+    check("triage markdown: an apostrophe in a destination is part of the path",
+          list(triage_module._relative_targets(apostrophe)) == ["notes/bob's_summary.md", "api.md"],
+          list(triage_module._relative_targets(apostrophe)))
+    check("triage markdown: a quoted title after whitespace is still a title",
+          list(triage_module._relative_targets('[Spec](spec.md "Section 1 (draft") and [API](api.md).'))
+          == ["spec.md", "api.md"],
+          list(triage_module._relative_targets('[Spec](spec.md "Section 1 (draft") and [API](api.md).')))
+    # Round-4 review: a submodule is a gitlink whose commit is NOT in this
+    # repository, so `cat-file -e` says no about a path that is in the tree.
+    git(repo, "checkout", "-q", "-B", "gitlink", base)
+    git(repo, "update-index", "--add", "--cacheinfo",
+        "160000,0123456789012345678901234567890123456789,vendor")
+    gitlink_tree = run("git", "-C", str(repo), "write-tree").stdout.strip()
+    gitlink_rev = run("git", "-C", str(repo), "commit-tree", gitlink_tree, "-p", base, "-m", "gitlink").stdout.strip()
+    git(repo, "reset", "-q", "--mixed", base)
+    check("triage tree: a submodule gitlink counts as present",
+          triage_module._tree_has(repo, gitlink_rev, "vendor"), gitlink_rev)
+    check("triage tree: the repository root resolves",
+          triage_module._tree_has(repo, gitlink_rev, "."), gitlink_rev)
+    check("triage tree: a path absent from the revision does not resolve",
+          not triage_module._tree_has(repo, gitlink_rev, "nowhere.md"), gitlink_rev)
+
     # Fix round 2 F8: a hunk that quotes Git's binary-file sentence is plain
     # content, not a binary delta marker.
     git(repo, "checkout", "-q", "-B", "binary-words", base)
