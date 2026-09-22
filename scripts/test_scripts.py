@@ -3480,6 +3480,8 @@ def test_leg_log_check(tmp):
         ("codex: a Verdict line that is not a verdict", "codex",
          "# Codex Adversarial Review\n\nVerdict: could not be determined (rate limit)\n", 1),
         ("NOT-REACHED spelled with a hyphen", "agy", "## Claim 1 -- NOT-REACHED\n", 0),
+        ("an error after a bare colon", "opencode", "Error: BROKEN pipe\nexit=0\n", 1),
+        ("bracketed verdicts", "agy", "## Claim 1 -- [HOLDS]\n## Claim 2 -- [BROKEN]\n", 0),
         ("codex: the usage-limit failure", "codex",
          "# Codex Adversarial Review\n\nCodex did not return valid structured JSON.\n", 1),
     ]
@@ -3513,6 +3515,8 @@ def test_leg_log_check(tmp):
         ("cursor: a result without a verdict", json.dumps({**ok, "result": "I could not read the files."}), 1),
         ("cursor: an is_error result carrying verdict words",
          json.dumps({**ok, "is_error": True, "result": report}), 1),
+        ("cursor: a result without a success subtype",
+         json.dumps({"type": "result", "request_id": "r1", "result": report}), 1),
         ("cursor: a result without a request_id",
          json.dumps({"type": "result", "result": report}), 1),
     ):

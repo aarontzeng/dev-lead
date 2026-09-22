@@ -50,12 +50,13 @@ import json, os, re, sys
 adapter, log = os.environ["ADAPTER"], os.environ["LOG"]
 # A verdict word counts only in VERDICT POSITION: at the start of a line or
 # right after markup/punctuation (`**HOLDS**`, `## Claim 1 -- HOLDS`,
-# `Status: BROKEN`, `| HOLDS |`, `**A. FIXED.**`) -- not inside a sentence, where an error
+# `**Status**: **BROKEN**`, `| HOLDS |`, `[HOLDS]`, `**A. FIXED.**`) -- not after
+# a bare colon (`Error: BROKEN pipe`; codex, 2026-09-22) and not inside a sentence, where an error
 # message can carry it ("review stream BROKEN before ..."; codex re-review,
 # 2026-09-22). Still a heuristic, and stated as one: it catches a leg that
 # delivered no verdicts, not every error that happens to look like one.
 expect = os.environ.get("EXPECT") or (
-    r"(?:^[ \t*#>|-]*(?:\w{1,3}[.)])?|[*#|:(\u2014\u2013]|--|-\s)[ \t*]*"
+    r"(?:^[ \t*#>|-]*(?:\w{1,3}[.)])?|[*#|(\[\u2014\u2013]|--|-\s)[ \t*]*"
     r"(HOLDS|BROKEN|NOT[ _-]REACHED|NOT FIXED|FIXED)\b"
     r"|^\s*Verdict:\s*(approve|needs-attention)\b")
 try:
@@ -90,7 +91,7 @@ if adapter == "cursor":
         # error can arrive in a result-shaped object too.
         if (isinstance(obj, dict) and isinstance(obj.get("result"), str)
                 and obj.get("request_id") and obj.get("is_error") is not True
-                and obj.get("subtype", "success") == "success"):
+                and obj.get("subtype") == "success"):
             results.append(obj["result"])
         i = end
     if not results:

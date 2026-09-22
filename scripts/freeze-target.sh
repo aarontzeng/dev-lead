@@ -12,6 +12,8 @@
 set -euo pipefail
 
 die() { echo "freeze-target: $*" >&2; exit 1; }
+# resolved up front, before anything is created, so it cannot fail past cleanup
+here=${BASH_SOURCE[0]%/*}; [ "$here" != "${BASH_SOURCE[0]}" ] || here=.
 
 [ $# -eq 3 ] || die "usage: freeze-target.sh <repo-dir> <committish> <dest-dir>"
 repo=$1; committish=$2; dest=$3
@@ -64,7 +66,6 @@ actual=$(git -C "$dest" rev-parse HEAD 2>/dev/null) \
 # Line-ending renormalization is not a change to what a reviewer reads: those
 # files hold the commit's exact bytes (renorm-only.sh checks that, byte for
 # byte, mode included). Everything else still refuses.
-here=$(dirname -- "${BASH_SOURCE[0]}")
 # core.quotePath=false: renorm-only.sh lists raw paths, so a non-ASCII name
 # must arrive raw here too or it can never match (and stays dirty).
 status=$(git -C "$dest" -c core.quotePath=false status --porcelain=v1 2>/dev/null) \
