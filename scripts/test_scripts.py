@@ -3378,6 +3378,16 @@ def test_renorm(tmp):
           r.returncode == 0 and r.stdout.strip() == sha, r.stderr)
     check("renorm: ...and says which files it excused",
           "crlf.txt" in r.stderr and "sp ace.txt" in r.stderr, r.stderr)
+    # through a SYMLINKED entrypoint the sibling helper must still be found
+    linkdir = tmp / "bin"
+    linkdir.mkdir()
+    (linkdir / "freeze-target.sh").symlink_to(freeze)
+    (linkdir / "verify-target.sh").symlink_to(verify)
+    r = run(verify.parent / "verify-target.sh", dest, sha)
+    rl = run(linkdir / "verify-target.sh", dest, sha)
+    check("renorm: verify via a symlink finds renorm-only.sh", rl.returncode == 0, rl.stderr)
+    rl = run(linkdir / "freeze-target.sh", repo, sha, tmp / "crlf-frozen-via-link")
+    check("renorm: freeze via a symlink finds renorm-only.sh", rl.returncode == 0, rl.stderr)
     r = run(renorm, dest)
     check("renorm: the list is exactly the byte-identical files, spaces and non-ASCII included",
           sorted(r.stdout.splitlines()) == ["crlf.txt", "sp ace.txt", "\u6587\u6a94.txt"], r.stdout)
@@ -3482,6 +3492,7 @@ def test_leg_log_check(tmp):
         ("NOT-REACHED spelled with a hyphen", "agy", "## Claim 1 -- NOT-REACHED\n", 0),
         ("an error after a bare colon", "opencode", "Error: BROKEN pipe\nexit=0\n", 1),
         ("bracketed verdicts", "agy", "## Claim 1 -- [HOLDS]\n## Claim 2 -- [BROKEN]\n", 0),
+        ("a plain Status: label", "agy", "Claim 1\nStatus: BROKEN\n", 0),
         ("codex: the usage-limit failure", "codex",
          "# Codex Adversarial Review\n\nCodex did not return valid structured JSON.\n", 1),
     ]

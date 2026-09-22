@@ -50,14 +50,16 @@ import json, os, re, sys
 adapter, log = os.environ["ADAPTER"], os.environ["LOG"]
 # A verdict word counts only in VERDICT POSITION: at the start of a line or
 # right after markup/punctuation (`**HOLDS**`, `## Claim 1 -- HOLDS`,
-# `**Status**: **BROKEN**`, `| HOLDS |`, `[HOLDS]`, `**A. FIXED.**`) -- not after
-# a bare colon (`Error: BROKEN pipe`; codex, 2026-09-22) and not inside a sentence, where an error
+# `**Status**: **BROKEN**`, `Status: HOLDS`, `| HOLDS |`, `[HOLDS]`,
+# `**A. FIXED.**`) -- not after an arbitrary label (`Error: BROKEN pipe`; codex,
+# 2026-09-22; only Status/Verdict/Result labels count) and not inside a sentence, where an error
 # message can carry it ("review stream BROKEN before ..."; codex re-review,
 # 2026-09-22). Still a heuristic, and stated as one: it catches a leg that
 # delivered no verdicts, not every error that happens to look like one.
 expect = os.environ.get("EXPECT") or (
     r"(?:^[ \t*#>|-]*(?:\w{1,3}[.)])?|[*#|(\[\u2014\u2013]|--|-\s)[ \t*]*"
     r"(HOLDS|BROKEN|NOT[ _-]REACHED|NOT FIXED|FIXED)\b"
+    r"|^[ \t*#>|-]*(?:Status|Verdict|Result)\**:[ \t*]*(HOLDS|BROKEN|NOT[ _-]REACHED|NOT FIXED|FIXED)\b"
     r"|^\s*Verdict:\s*(approve|needs-attention)\b")
 try:
     verdict = re.compile(expect, re.M)

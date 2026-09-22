@@ -79,7 +79,8 @@ dirty=$(git -C "$dir" -c core.excludesFile=/dev/null -c core.quotePath=false sta
 # The one excuse, shared with freeze-target.sh: a ` M` whose bytes and mode are
 # exactly the commit's -- line-ending renormalization a fresh checkout already
 # showed (renorm-only.sh). Any other edit to that file, however small, fails.
-dirty=$(printf '%s\n' "$dirty" | "$(dirname -- "${BASH_SOURCE[0]}")/renorm-only.sh" --filter "$dir") \
+self=$(readlink -f -- "${BASH_SOURCE[0]}" 2>/dev/null || echo "${BASH_SOURCE[0]}")
+dirty=$(printf '%s\n' "$dirty" | "${self%/*}/renorm-only.sh" --filter "$dir") \
   || die "could not check $dir for line-ending-only changes"
 
 if [ $# -eq 0 ]; then

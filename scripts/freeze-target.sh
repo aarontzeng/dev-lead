@@ -13,7 +13,10 @@ set -euo pipefail
 
 die() { echo "freeze-target: $*" >&2; exit 1; }
 # resolved up front, before anything is created, so it cannot fail past cleanup
-here=${BASH_SOURCE[0]%/*}; [ "$here" != "${BASH_SOURCE[0]}" ] || here=.
+# through symlinks: the helper is a sibling of the REAL file, not of a link to it
+self=$(readlink -f -- "${BASH_SOURCE[0]}" 2>/dev/null || echo "${BASH_SOURCE[0]}")
+here=${self%/*}; [ "$here" != "$self" ] || here=.
+[ -x "$here/renorm-only.sh" ] || die "cannot find renorm-only.sh next to $self"
 
 [ $# -eq 3 ] || die "usage: freeze-target.sh <repo-dir> <committish> <dest-dir>"
 repo=$1; committish=$2; dest=$3
