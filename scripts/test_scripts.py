@@ -2618,6 +2618,29 @@ def test_leg_cmd():
                   % (label, "runs" if should_run else "blocked"),
                   ("RAN" in out.stdout) == should_run,
                   f"stdout={out.stdout!r} stderr={out.stderr!r}")
+    # --add-dir (SITL-bench, 2026-09-22): cursor takes it, inserted before the
+    # prompt and quoted; an adapter without the flag REFUSES rather than
+    # dropping it -- for opencode, whose out-of-cwd read is auto-rejected
+    # headless, with the rule that replaces it.
+    r = subprocess.run([str(script), "cursor", "review", "--model", "grok-4.7-medium",
+                        "--run-dir", "/tmp/r", "--add-dir", "/ctx one", "--add-dir", "/ctx2"],
+                       capture_output=True, text=True)
+    check("leg-cmd: cursor accepts --add-dir", r.returncode == 0, r.stderr)
+    cmd = r.stdout.strip().splitlines()[-1] if r.stdout.strip() else ""
+    check("leg-cmd: every --add-dir reaches the command, quoted, before the prompt",
+          "--add-dir '/ctx one' --add-dir /ctx2 \"$(cat" in cmd, cmd)
+    r = subprocess.run([str(script), "opencode", "review", "--model", "opencode/x",
+                        "--effort", "high", "--add-dir", "/ctx"], capture_output=True, text=True)
+    check("leg-cmd: opencode refuses --add-dir instead of dropping it", r.returncode != 0, r.stdout)
+    check("leg-cmd: ...and says to put the context inside the target",
+          "INTO" in r.stderr and "leg-log-check" in r.stderr, r.stderr)
+    r = subprocess.run([str(script), "cursor", "review", "--model", "x", "--add-dir", ""],
+                       capture_output=True, text=True)
+    check("leg-cmd: an empty --add-dir is refused", r.returncode != 0, r.stdout)
+    r = subprocess.run([str(script)], capture_output=True, text=True)
+    check("leg-cmd: the usage line says options are per adapter",
+          "only where the adapter takes it" in r.stderr, r.stderr)
+
 
 # ---------------------------------------------------------------- roster ----
 def _roster_doc(review, fix=None, implement=None):
@@ -3311,9 +3334,130 @@ def test_roster(tmp):
           and "codex-openai-codex" not in got.stdout, got.stdout)
 
 
+# ------------------------------------------------ line-ending renormalization ----
+def _crlf_repo(path):
+    """A repo that committed CRLF files and LATER added `eol=lf`: every fresh
+    checkout shows them ` M` with bytes identical to the commit (SITL-bench,
+    2026-09-22, QCS9075-QLI2.0-SDK: 18 files)."""
+    path.mkdir(parents=True)
+    git(path, "init", "-q")
+    git(path, "config", "user.email", "test@example.invalid")
+    git(path, "config", "user.name", "Test")
+    (path / "crlf.txt").write_bytes(b"a\r\nb\r\n")
+    (path / "sp ace.txt").write_bytes(b"c\r\n")
+    (path / "plain.txt").write_text("x\n")
+    (path / "run.sh").write_text("echo\n")
+    git(path, "add", "-A")
+    git(path, "commit", "-qm", "crlf")
+    (path / ".gitattributes").write_text("* text eol=lf\n")
+    git(path, "add", ".gitattributes")
+    git(path, "commit", "-qm", "attrs")
+    return git(path, "rev-parse", "HEAD").stdout.strip()
+
+
+def test_renorm(tmp):
+    freeze, verify = SCRIPTS / "freeze-target.sh", SCRIPTS / "verify-target.sh"
+    renorm = SCRIPTS / "renorm-only.sh"
+    repo = tmp / "crlf-repo"
+    sha = _crlf_repo(repo)
+    dest = tmp / "crlf-frozen"
+
+    r = run(freeze, repo, sha, dest)
+    check("renorm: freeze accepts a checkout dirty ONLY by line-ending renormalization",
+          r.returncode == 0 and r.stdout.strip() == sha, r.stderr)
+    check("renorm: ...and says which files it excused",
+          "crlf.txt" in r.stderr and "sp ace.txt" in r.stderr, r.stderr)
+    r = run(renorm, dest)
+    check("renorm: the list is exactly the byte-identical files, spaces included",
+          sorted(r.stdout.splitlines()) == ["crlf.txt", "sp ace.txt"], r.stdout)
+    r = run(verify, dest, sha)
+    check("renorm: verify certifies the same tree", r.returncode == 0, r.stderr)
+
+    # the excuse is BYTE identity -- any real edit to an excused file fails
+    (dest / "crlf.txt").write_bytes(b"a\r\nB\r\n")
+    r = run(verify, dest, sha)
+    check("renorm: an edit to an excused file is refused", r.returncode != 0, r.stdout)
+    (dest / "crlf.txt").write_bytes(b"a\r\nb\r\n")
+    # a CR-only edit is exactly what --ignore-cr-at-eol would have excused
+    (dest / "sp ace.txt").write_bytes(b"c\n")
+    r = run(verify, dest, sha)
+    check("renorm: a line-ending-shaped edit is NOT excused (bytes, not CR-blind)",
+          r.returncode != 0, r.stdout)
+    (dest / "sp ace.txt").write_bytes(b"c\r\n")
+    # a mode change keeps the bytes and must still fail
+    os.chmod(dest / "run.sh", 0o755)
+    r = run(verify, dest, sha)
+    check("renorm: a mode change is never excused", r.returncode != 0, r.stdout)
+    os.chmod(dest / "run.sh", 0o644)
+    r = run(verify, dest, sha)
+    check("renorm: restored tree certifies again", r.returncode == 0, r.stderr)
+    # only ` M` is excused: the same bytes STAGED are a change to the index
+    git(dest, "add", "crlf.txt")
+    r = run(verify, dest, sha)
+    check("renorm: a staged renormalization is not excused", r.returncode != 0, r.stdout)
+
+
+def test_freeze_refusal_cleans_up(tmp):
+    """A refusal must not leave the worktree registered behind it (SITL-bench,
+    2026-09-22): the caller gets no SHA, so nothing else will remove it, and
+    the next freeze to that path dies on "already exists"."""
+    freeze = SCRIPTS / "freeze-target.sh"
+    repo = tmp / "smudge-repo"
+    repo.mkdir()
+    git(repo, "init", "-q")
+    git(repo, "config", "user.email", "test@example.invalid")
+    git(repo, "config", "user.name", "Test")
+    (repo / "f.txt").write_text("a\n")
+    (repo / ".gitattributes").write_text("f.txt filter=mangle\n")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-qm", "c")
+    # a smudge that changes the bytes: a checkout that is dirty for real
+    git(repo, "config", "filter.mangle.smudge", "sed s/a/b/")
+    git(repo, "config", "filter.mangle.clean", "cat")
+    dest = tmp / "smudge-frozen"
+    r = run(freeze, repo, "HEAD", dest)
+    check("freeze: a really dirty fresh checkout is still refused", r.returncode != 0, r.stdout)
+    check("freeze: ...naming what was dirty", "f.txt" in r.stderr, r.stderr)
+    check("freeze: ...and the refused worktree is gone from disk", not dest.exists())
+    listed = run("git", "-C", repo, "worktree", "list", "--porcelain").stdout
+    check("freeze: ...and from git's worktree list", str(dest) not in listed, listed)
+
+
+# ---------------------------------------------------------- leg-log-check ----
+def test_leg_log_check(tmp):
+    """Silent failed legs (SITL-bench, 2026-09-22): a refused read or a timeout
+    left a log that looked like a finished run once the wrapper appended exit=0."""
+    script = SCRIPTS / "leg-log-check.sh"
+    esc = "\x1b[0m"
+    report = "## Claim 1 -- HOLDS\n" + ("src/x.py:12 quoted code and reasoning. " * 30)
+    cases = [
+        ("missing file", None, 1),
+        ("empty file", "", 1),
+        ("timeout: logs and exit=124 only", "timestamp=1 INFO start\nexit=124\n", 1),
+        ("refused read, nothing after",
+         "timestamp=1 INFO x\n" + esc + "\u2192 " + esc + "Read ../ctx.md\n"
+         + "Error: The user rejected permission to use this specific tool call\nexit=0\n", 1),
+        ("a refusal loop is not report text",
+         "Error: The user rejected permission to use this specific tool call\n" * 20, 1),
+        ("a real report", "timestamp=1 INFO x\n" + report + "exit=0\n", 0),
+        ("a refusal the leg worked around, then a report",
+         "Error: The user rejected permission to use this specific tool call\n" + report, 0),
+    ]
+    for label, body, want in cases:
+        log = tmp / ("log-" + label.replace(" ", "_").replace(",", "").replace(":", ""))
+        if body is not None:
+            log.write_text(body)
+        r = run(script, "opencode", log)
+        check(f"leg-log-check: {label} -> exit {want}", r.returncode == want,
+              f"rc={r.returncode} out={r.stdout!r} err={r.stderr!r}")
+    r = run(script, "opencode", tmp / ("log-" + "a_refusal_the_leg_worked_around_then_a_report"))
+    check("leg-log-check: a worked-around refusal is still WARNED about",
+          "WARNING" in r.stderr, r.stderr)
+
+
 def main():
     for script in ("freeze-target.sh", "verify-target.sh", "snapshot-refs.sh",
-                   "await-codex-job.sh"):
+                   "await-codex-job.sh", "renorm-only.sh", "leg-log-check.sh"):
         p = SCRIPTS / script
         if not p.is_file():
             print(f"  FAIL missing script: {script}")
@@ -3335,6 +3479,11 @@ def main():
         test_snapshot(tmp)
         print("await-codex-job.sh")
         test_await_codex_job(tmp)
+        print("renorm-only.sh (freeze/verify line-ending renormalization)")
+        test_renorm(tmp)
+        test_freeze_refusal_cleans_up(tmp)
+        print("leg-log-check.sh")
+        test_leg_log_check(tmp)
 
     print("lint.py check_paths")
     test_lint_paths()

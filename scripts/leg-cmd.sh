@@ -10,7 +10,14 @@
 #
 # Usage:
 #   leg-cmd.sh <adapter> <role> --model <model> [--effort <e>] [--target <dir>]
-#              [--base <ref>] [--prompt-file <f>] [--run-dir <dir>] [--check]
+#              [--base <ref>] [--prompt-file <f>] [--run-dir <dir>]
+#              [--add-dir <dir> ...] [--check]
+#
+# Not every option applies to every adapter, and one that does not is REFUSED,
+# never dropped: --target/--base/--prompt-file only where the adapter's template
+# has that slot (--prompt-file: grok and claude; the others read
+# "$RUN_DIR/prompt.md", so give them --run-dir), --add-dir only where
+# data/launch.json names the adapter's add_dir_flag (cursor).
 #
 # Prints the command on stdout and the adapter's gotchas on stderr, so
 #   eval "$(leg-cmd.sh agy review --model gemini-3.8-flash-medium --target "$T")"
@@ -23,10 +30,10 @@ HERE=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 DATA="$HERE/../data/launch.json"
 [ -f "$DATA" ] || die "cannot find data/launch.json at $DATA"
 
-[ $# -ge 2 ] || die "usage: leg-cmd.sh <adapter> <role> --model <model> [--effort <e>] [--target <dir>] [--base <ref>] [--prompt-file <f>] [--run-dir <dir>] [--check]"
+[ $# -ge 2 ] || die "usage: leg-cmd.sh <adapter> <role> --model <model> [--effort <e>] [--target <dir>] [--base <ref>] [--prompt-file <f>] [--run-dir <dir>] [--add-dir <dir> ...] [--check]  (each option only where the adapter takes it; see the header of this script)"
 ADAPTER=$1; ROLE=$2; shift 2
 
-MODEL=""; EFFORT=""; TARGET=""; BASE=""; PROMPT_FILE=""; RUN_DIR_ARG=""; CHECK=0
+MODEL=""; EFFORT=""; TARGET=""; BASE=""; PROMPT_FILE=""; RUN_DIR_ARG=""; CHECK=0; ADD_DIRS=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --model)       MODEL=${2:-}; shift 2 ;;
@@ -35,6 +42,9 @@ while [ $# -gt 0 ]; do
     --base)        BASE=${2:-}; shift 2 ;;
     --prompt-file) PROMPT_FILE=${2:-}; shift 2 ;;
     --run-dir)     RUN_DIR_ARG=${2:-}; shift 2 ;;
+    --add-dir)     [ -n "${2:-}" ] || die "--add-dir needs a directory"
+                   case "$2" in *$'\n'*) die "--add-dir: a directory name may not contain a newline" ;; esac
+                   ADD_DIRS="$ADD_DIRS$2"$'\n'; shift 2 ;;
     --check)       CHECK=1; shift ;;
     *) die "unknown option: $1" ;;
   esac
@@ -43,7 +53,7 @@ done
 
 ADAPTER="$ADAPTER" ROLE="$ROLE" MODEL="$MODEL" EFFORT="$EFFORT" TARGET="$TARGET" \
 BASE="$BASE" PROMPT_FILE="$PROMPT_FILE" RUN_DIR_ARG="$RUN_DIR_ARG" \
-CHECK="$CHECK" DATA="$DATA" python3 - <<'PY'
+CHECK="$CHECK" DATA="$DATA" ADD_DIRS="$ADD_DIRS" python3 - <<'PY'
 import json, os, shlex, sys
 
 d = json.load(open(os.environ["DATA"]))
@@ -168,6 +178,27 @@ if os.environ.get("RUN_DIR_ARG") and r["prompt_delivery"] == "prompt_file":
              "--prompt-file, so RUN_DIR would be silently dropped.\n"
              "  give this adapter the brief with --prompt-file instead."
              % (a, role))
+
+# Context outside the target (SITL-bench, 2026-09-22): a brief that points a
+# leg at design docs or a sibling repo needs that directory readable. cursor
+# takes `--add-dir` (probed 2026-09-22 in `--mode ask`: a file there was read);
+# an adapter without an add_dir_flag REFUSES rather than dropping the value --
+# for opencode that matters most, because a read outside its cwd is
+# auto-rejected headless and the leg ends with empty output, looking like a
+# clean run. Inserted before the prompt, after every flag the template sets.
+add_dirs = [x for x in os.environ.get("ADD_DIRS", "").split("\n") if x]
+if add_dirs:
+    flag = spec.get("add_dir_flag")
+    if not flag:
+        sys.exit("leg-cmd: --add-dir was given but %s has no add-dir flag in "
+                 "data/launch.json, so it would be silently dropped.\n  %s"
+                 % (a, spec.get("add_dir_note",
+                                "put the context inside the directory the leg runs in.")))
+    at = next((i for i, t in enumerate(argv) if t == '"$(cat "$RUN_DIR/prompt.md")"'), len(argv))
+    extra = []
+    for d_ in add_dirs:
+        extra += [flag, d_]
+    argv[at:at] = extra
 
 # Quote EVERYTHING the caller supplied. The output is documented for
 # `eval "$(leg-cmd.sh ...)"`, so a token carrying a backtick, $(), ; or |

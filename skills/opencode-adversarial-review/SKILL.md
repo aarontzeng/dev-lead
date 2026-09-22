@@ -276,6 +276,19 @@ cd "$REVIEW_TARGET_DIR" && \
   root explicitly in the prompt ("your cwd is EXACTLY <path>; use relative
   paths") — the same run later hallucinated a neighboring absolute path and
   died identically.
+- **Check the log mechanically before reading it as a verdict:**
+
+  ```bash
+  DEV_LEAD=${DEV_LEAD_ROOT:-$(ls -d "$HOME"/.claude/plugins/cache/dev-lead/dev-lead/* 2>/dev/null | sort -V | tail -1)}
+  "$DEV_LEAD/scripts/leg-log-check.sh" "opencode" "$RUN_DIR/review.log"
+  ```
+
+  It exits 1 on an empty log, on a refused tool call with no report after it, and on a log
+  holding no report text once the log lines, tool trace and your wrapper's
+  `exit=` line are removed. A leg it fails is a MISSING leg, never "no
+  findings" -- measured 2026-09-22 (SITL-bench): two refused out-of-cwd reads
+  and one 20-minute timeout each left a file that looked like a clean run. It
+  catches "nothing"; the diagnosis below is still yours.
 - **Five terminal failures look alike in the log and are not.** Ending with
   `auto-rejecting` is the permission wall — YOUR bug; fix the prompt and
   rerun. `Streaming response failed: [502]/[503] … ResourceExhausted` or

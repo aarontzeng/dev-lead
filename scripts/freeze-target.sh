@@ -42,10 +42,33 @@ esac
 git -C "$repo" worktree add --detach "$dest" "$sha" >/dev/null \
   || die "git worktree add failed"
 
+# A refusal from here on must not leave the worktree registered behind it: the
+# caller got a non-zero exit and no SHA, so nothing will ever clean it up, and
+# the next freeze to the same path dies on "already exists". Measured
+# 2026-09-22 (SITL-bench, QCS9075-QLI2.0-SDK).
+refuse() {
+  git -C "$repo" worktree remove --force "$dest" >/dev/null 2>&1 || true
+  die "$* (the worktree was removed again)"
+}
+
 # Verify what we created rather than assuming it: cheap, and the whole point.
 actual=$(git -C "$dest" rev-parse HEAD)
-[ "$actual" = "$sha" ] || die "created worktree is at $actual, expected $sha"
-[ -z "$(git -C "$dest" status --porcelain=v1)" ] \
-  || die "freshly created worktree is not clean -- refusing to call it frozen"
+[ "$actual" = "$sha" ] || refuse "created worktree is at $actual, expected $sha"
+
+# Line-ending renormalization is not a change to what a reviewer reads: those
+# files hold the commit's exact bytes (renorm-only.sh checks that, byte for
+# byte, mode included). Everything else still refuses.
+here=$(dirname -- "${BASH_SOURCE[0]}")
+status=$(git -C "$dest" status --porcelain=v1 2>/dev/null) \
+  || refuse "git status failed in the new worktree"
+dirty=$(printf '%s\n' "$status" | "$here/renorm-only.sh" --filter "$dest") \
+  || refuse "could not check the worktree for line-ending-only changes"
+[ -z "$dirty" ] \
+  || refuse "freshly created worktree is not clean -- refusing to call it frozen:
+$dirty"
+if [ -n "$status" ]; then
+  echo "freeze-target: NOTE -- files shown as modified only by line-ending renormalization (bytes identical to the commit); verify-target.sh excuses exactly these:" >&2
+  "$here/renorm-only.sh" "$dest" | sed 's/^/  /' >&2
+fi
 
 echo "$sha"
