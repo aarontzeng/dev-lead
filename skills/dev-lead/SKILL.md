@@ -164,6 +164,18 @@ or two reviewers sharing a family — is a stop. Substitute a leg and report
 which leg changed and why. Never drop a leg silently. An unset leg is the
 same stop: ask, do not invent a model.
 
+**A fix round's cross-family requirement is relative to who implemented THAT
+round, not to r1** (Aaron, 2026-09-22). `fix.review` inheriting r1's full leg
+set is a menu, not a floor — how many of those legs a given fix round
+actually needs is the same SIZE judgment Phase 0 already makes for r1, not a
+fixed leg count tied to being a fix round. When the lead writes the fix
+directly (the common case for a small, precisely-diagnosed change quoting a
+verified finding), one leg from any family other than the lead's own
+satisfies the rule; a large or ambiguous fix round earns the same weight as
+r1. Two fix rounds this session (`review.abandon`'s reorder, `roster.py`'s
+two rounds) each shipped on one codex leg for exactly this reason — not a
+shortcut, the correctly-sized response to a small change.
+
 **Compose every launch command with the suite's `leg-cmd.sh`, never from recall.**
 
 ```bash
