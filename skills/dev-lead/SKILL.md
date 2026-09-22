@@ -143,6 +143,27 @@ generator that bloats every brief with speculative hardening.
 
 ## Phase 1 — Dispatch
 
+### Read the roster first
+
+The user may name only adapters ("implement with agy, review with codex +
+cursor + opencode"). The roster declares the model and effort for each
+adapter, role, and round; it is not a launcher default.
+
+```bash
+"$DEV_LEAD/scripts/roster.py" plan --round r1 \
+  --implement agy --review codex,cursor,opencode
+```
+
+`plan` prints each leg's exact `leg-cmd.sh` arguments. A model the user
+names for this round overrides the roster for this round only
+(`--implement agy=<model>[:<family>]`) and is reported as an override; it
+is not written back. A fix round passes `--round fix`.
+
+A collision `plan` reports — the implementer's family equal to a reviewer's,
+or two reviewers sharing a family — is a stop. Substitute a leg and report
+which leg changed and why. Never drop a leg silently. An unset leg is the
+same stop: ask, do not invent a model.
+
 **Compose every launch command with the suite's `leg-cmd.sh`, never from recall.**
 
 ```bash

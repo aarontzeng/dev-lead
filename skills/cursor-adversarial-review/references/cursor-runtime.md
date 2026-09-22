@@ -172,6 +172,19 @@ quota width (not behavior) is expected to change with the plan.
 First real review rounds append here, per the journal format — verified hit
 rates, not impressions.
 
+## Measured 2026-09-22 — a `grok-4.7-high` write leg
+
+- **Catalogue naming changed with 4.7:** the tier is `grok-4.7-{low,medium,high,xhigh}`
+  (plus `-fast`), with NO `cursor-` prefix, while 4.6 and 4.5 keep it
+  (`cursor-grok-4.6-medium`). Same family (Grok) either way. `grok-4.7-high`
+  answered a one-line probe in 16 s with a `request_id`.
+- **One 18 KB task file, read from the worktree** (argv carried only "read
+  TASK.md and do it"): 1363 s, a single commit, 1607 lines across 7 files, lint
+  and the suite green on the lead's re-run.
+- **It adds `Co-authored-by: Cursor <cursoragent@cursor.com>` to its commits even
+  when the task forbids AI-authorship trailers.** Instruction-level, and not
+  followed — check the message at handoff.
+
 ## UNVERIFIED — capture on upcoming sessions
 
 1. Ask-mode enforcement class: tool removed vs behaviorally declined

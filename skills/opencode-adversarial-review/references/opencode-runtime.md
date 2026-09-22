@@ -373,8 +373,11 @@ Latency 4–13 s. **22 callable, 5 blocked by the owner's workspace switches,
 not by the pool**: `deepseek-v4-pro` / `v4-flash` / `v4.1-flash` want explicit
 consent to hosting in mainland China, and the two paid
 `muse-spark-*-contributor` want consent to training on request data. Both
-switches are deliberately OFF on this account. That is a decision, not a
-defect — do not "fix" it by flipping the switch. The 7-model free pool is
+switches were OFF on this account at this probe. **The training switch has
+been ON since 2026-09-16** (the owner's call, mainly for muse-spark 1.3;
+confirmed 2026-09-22), so the two paid contributor models are no longer
+blocked by it — the "5 blocked" count above predates that and was not
+re-measured. The China switch stays OFF on purpose: do not "fix" it. The 7-model free pool is
 unaffected, including the standing `opencode/muse-spark-1.3-contributor-free`
 leg (to which the paid contributor variant adds NO family — same Meta model).
 

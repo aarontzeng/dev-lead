@@ -7,7 +7,7 @@
 
 [![ci](https://github.com/aarontzeng/dev-lead/actions/workflows/ci.yml/badge.svg)](https://github.com/aarontzeng/dev-lead/actions/workflows/ci.yml)
 [![release](https://img.shields.io/github/v/tag/aarontzeng/dev-lead?label=release&color=2563eb)](https://github.com/aarontzeng/dev-lead/releases)
-[![skills](https://img.shields.io/badge/skills-13-8A2BE2)](#whats-in-the-box)
+[![skills](https://img.shields.io/badge/skills-14-8A2BE2)](#whats-in-the-box)
 [![adapters](https://img.shields.io/badge/adapters-6-0d9488)](#whats-in-the-box)
 [![Claude Code plugin](https://img.shields.io/badge/Claude_Code-plugin-d97706)](#install)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
@@ -134,7 +134,7 @@ It is a different species.
 | **Cost per leg** | seconds, inside one process | an external CLI process; 3–15 min is normal, and one measured round ran 176–874 s per leg |
 | **Boundary** | the host's permission model, one policy for every leg | per adapter, machine-enforced where the runtime supports it — and labelled *instruction level* where it does not |
 | **Preamble** | one is correct for every leg, by construction | one **per family**, or legs die silently (below) |
-| **What survives the run** | the script | 13 skills, 6 adapters, six dated runtime references, a calibration journal, [`data/families.json`](data/families.json), and a CI check that fails the build if the pairing sentence stops appearing in any review skill |
+| **What survives the run** | the script | 14 skills, 6 adapters, six dated runtime references, a calibration journal, [`data/families.json`](data/families.json), and a CI check that fails the build if the pairing sentence stops appearing in any review skill |
 
 The left column describes another product from its own documentation; nothing
 in this repo measures it. Every cell on the right is cited in the files above.
@@ -209,6 +209,7 @@ one of them only by accident).
 | Skill | Role |
 |---|---|
 | `dev-lead` | The orchestration layer: intake → dispatch → bounded review rounds → merge gate |
+| `config` | View and change the leg roster: model and effort per adapter, role, and round |
 | `claude-implement` / `claude-adversarial-review` | Claude Code as a headless delegate (`claude -p`) |
 | `codex-implement` / `codex-adversarial-review` | OpenAI Codex via its Claude Code companion plugin — or the raw CLI |
 | `agy-implement` / `agy-adversarial-review` | Google Antigravity CLI (Gemini + a separate Claude pool) |

@@ -82,7 +82,10 @@ The helper exits nonzero on a remote-ref delta, and `|| exit 1` makes that
 failure terminal for this handoff. Do not replace it with a second snapshot
 and a raw `diff`, which can be noticed but accidentally continued past.
 
-Whether cursor-agent leaves the worktree committed or dirty is UNVERIFIED —
-expect either; the lead's own verification pass (build, tests, real code
+Measured once (2026-09-22, `grok-4.7-high`, a 1600-line task that said "commit
+locally, NO AI-authorship trailers"): it **committed** its work, and the commit
+carried **`Co-authored-by: Cursor <cursoragent@cursor.com>`** anyway. Read
+every delegate commit message before it goes anywhere, and rewrite it while it
+is still local. The lead's own verification pass (build, tests, real code
 path) is the merge gate regardless, followed by a reviewer from a
 **different model family** than the one pinned above.

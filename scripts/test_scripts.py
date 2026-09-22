@@ -2619,6 +2619,682 @@ def test_leg_cmd():
                   ("RAN" in out.stdout) == should_run,
                   f"stdout={out.stdout!r} stderr={out.stderr!r}")
 
+# ---------------------------------------------------------------- roster ----
+def _roster_doc(review, fix=None, implement=None):
+    return {
+        "version": 1,
+        "rounds": {
+            "r1": {
+                "implement": {} if implement is None else implement,
+                "review": review,
+            },
+            "fix": {"inherit": "r1"} if fix is None else fix,
+        },
+    }
+
+
+def _codex_leg():
+    return {
+        "model": "gpt-5.6-terra",
+        "effort": "medium",
+        "effort_in": "config_only",
+        "effort_config_key": "model_reasoning_effort",
+        "family": "GPT",
+        "note": "codex's review path has no effort flag; the value is read from config and REPORTED, never asserted",
+    }
+
+
+def _live_roster():
+    """Structure of the owner's roster. Inline on purpose: the file itself is not
+    committed, and check has to accept this shape unchanged."""
+    return {
+        "_comment": ["declaration, not a launcher default"],
+        "version": 1,
+        "rounds": {
+            "r1": {
+                "_comment": "The first implementation round and its review legs.",
+                "implement": {
+                    "agy": None, "codex": None, "cursor": None,
+                    "opencode": None, "claude": None,
+                },
+                "review": {
+                    "agy": {
+                        "model": "gemini-3.8-flash-medium",
+                        "effort_in": "model_name",
+                        "family": "Gemini",
+                    },
+                    "codex": _codex_leg(),
+                    "cursor": {
+                        "model": "cursor-grok-4.6-medium",
+                        "effort_in": "model_name",
+                        "family": "Grok",
+                    },
+                    "opencode": {
+                        "_comment": "Routed by the lens the leg carries, not by the model's tier.",
+                        "by_lens": {
+                            "mechanical": {
+                                "model": "opencode/muse-spark-1.3-contributor-free",
+                                "effort": "xhigh",
+                                "effort_in": "flag",
+                                "family": "Meta",
+                                "fallback": {
+                                    "when": "the free pool is congested or at its daily limit",
+                                    "model": "opencode-go/muse-spark-1.3-contributor",
+                                    "effort": "xhigh",
+                                    "family": "Meta",
+                                    "note": "paid twin, its own Go bucket; adds NO family -- the report says which one ran",
+                                },
+                            },
+                            "judgment": {
+                                "model": "opencode-go/glm-5.2",
+                                "effort": "high",
+                                "effort_in": "flag",
+                                "family": "GLM",
+                                "gated_on": "a calibration row for glm-5.2 existing in dev-lead's opencode-runtime.md; until then use the mechanical entry above",
+                                "not": "glm-5.3 -- same list price, but a $3 five-hour bucket (the kimi-k3 / qwen3.8-max small-bucket class)",
+                            },
+                        },
+                        "top_tier_judgment_only": {
+                            "models": ["opencode-go/kimi-k3", "opencode-go/qwen3.8-max", "opencode-go/glm-5.3"],
+                            "limit": "at most one or two per 5-hour window; the buckets are account-wide, so every session draws on the same ones",
+                        },
+                    },
+                },
+            },
+            "fix": {"_comment": ["inherit r1"], "inherit": "r1"},
+        },
+        "provenance": {
+            "review_roster": {"set_by": "Aaron", "set_on": "2026-09-16"},
+            "moved_here_from_claude_md": {"on": "2026-09-22", "by": "Aaron"},
+        },
+    }
+
+
+def _write_doc(path, doc):
+    path.write_text(json.dumps(doc, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+
+
+def _roster_env(home, **extra):
+    env = dict(os.environ)
+    env.pop("DEV_LEAD_ROSTER", None)
+    env.pop("CLAUDE_PLUGIN_DATA", None)
+    env["HOME"] = str(home)
+    env.update({k: str(v) for k, v in extra.items()})
+    return env
+
+
+def _checked(path):
+    return run(SCRIPTS / "roster.py", "check", "--file", str(path))
+
+
+def test_roster(tmp):
+    import importlib.util
+    from datetime import date
+
+    roster = SCRIPTS / "roster.py"
+    check("roster.py exists", roster.is_file())
+    check("roster.py is executable", os.access(roster, os.X_OK))
+    check("roster.py shebang",
+          roster.read_text(encoding="utf-8").startswith("#!/usr/bin/env python3\n"))
+
+    live = tmp / "live.json"
+    _write_doc(live, _live_roster())
+    got = _checked(live)
+    check("roster: live-format fixture passes check",
+          got.returncode == 0 and got.stdout == "", got.stdout + got.stderr)
+
+    example = SCRIPTS.parent / "templates" / "roster.example.json"
+    got = _checked(example)
+    check("roster: templates/roster.example.json passes check",
+          got.returncode == 0 and got.stdout == "", got.stdout + got.stderr)
+    # Found by review (codex): the wording fix (F5) had no test at all.
+    check("roster: the example's comment matches path's real two-token output",
+          "the path that `roster.py path` prints first" in example.read_text(encoding="utf-8"),
+          example.read_text(encoding="utf-8"))
+
+    # Found by review (codex): the badge fix (F9) had no test at all.
+    readme = SCRIPTS.parent / "README.md"
+    readme_text = readme.read_text(encoding="utf-8")
+    check("roster: README's skill-count badge says 14",
+          "skills-14" in readme_text and "skills-13" not in readme_text, readme_text[:200])
+
+    def fails(name, doc, needle):
+        path = tmp / ("%s.json" % name.replace(" ", "-"))
+        _write_doc(path, doc)
+        got = _checked(path)
+        text = got.stdout + got.stderr
+        check("roster: %s exits 1" % name, got.returncode == 1, text)
+        check("roster: %s reports %r" % (name, needle), needle in text, text)
+
+    fails("unknown adapter", _roster_doc({"nope": {"model": "x", "family": "GPT"}}),
+          "unknown adapter")
+    bad_role = _roster_doc({"codex": _codex_leg()})
+    bad_role["rounds"]["r1"]["audit"] = {}
+    fails("bad role", bad_role, "unknown role")
+    fails("unknown family",
+          _roster_doc({"codex": {**_codex_leg(), "family": "Martian"}}),
+          "unknown family")
+    fails("effort on model_suffix",
+          _roster_doc({"agy": {"model": "gemini-3.8-flash-medium", "effort": "medium",
+                               "family": "Gemini"}}),
+          "effort")
+    fails("missing effort on flag",
+          _roster_doc({"opencode": {"model": "opencode/x", "family": "Meta"}}),
+          "missing effort")
+    fails("codex implement missing effort",
+          _roster_doc(
+              {"agy": {"model": "gemini-3.8-flash-medium", "effort_in": "model_name",
+                       "family": "Gemini"}},
+              implement={"codex": {"model": "gpt-5.6-terra"}},
+          ),
+          "missing effort")
+    fails("effort_in mismatch",
+          _roster_doc({"agy": {"model": "gemini-3.8-flash-medium", "effort_in": "flag",
+                               "family": "Gemini"}}),
+          "effort_in")
+    fails("typo key",
+          _roster_doc({"agy": {"model": "gemini-3.8-flash-medium", "family": "Gemini",
+                               "modle": "gemini-3.8-flash-medium"}}),
+          "modle")
+    fails("two review legs same family",
+          _roster_doc({
+              "agy": {"model": "gemini-3.8-flash-medium", "effort_in": "model_name",
+                      "family": "Gemini"},
+              "cursor": {"model": "cursor-grok-4.6-medium", "effort_in": "model_name",
+                         "family": "Gemini"},
+          }),
+          "share family Gemini")
+    omitted = tmp / "omitted-family-collision.json"
+    _write_doc(omitted, _roster_doc({
+        "codex": {"model": "gpt-5.6-terra", "effort": "medium", "effort_in": "config_only"},
+        "cursor": {"model": "gpt-5.6", "effort_in": "model_name", "family": "GPT"},
+    }))
+    got = _checked(omitted)
+    text = got.stdout + got.stderr
+    check("roster check: a single-family leg with no family still collides",
+          got.returncode == 1 and "codex" in text and "cursor" in text and "GPT" in text,
+          text)
+    same = _checked(tmp / "two-review-legs-same-family.json")
+    check("roster: collision names both legs",
+          "agy review" in same.stdout and "cursor review" in same.stdout, same.stdout)
+    fails("bad fix inherit target",
+          _roster_doc({"codex": _codex_leg()}, fix={"inherit": "r2"}),
+          "bad inherit target")
+    fails("fix round with zero review legs",
+          _roster_doc({"codex": _codex_leg()},
+                      fix={"implement": {}, "review": {"codex": None}}),
+          "fix round has no review leg")
+    bad_version = _roster_doc({"codex": _codex_leg()})
+    bad_version["version"] = 2
+    fails("version != 1", bad_version, "must be 1")
+
+    warned = tmp / "composer.json"
+    _write_doc(warned, _roster_doc({
+        "cursor": {"model": "composer-2", "effort_in": "model_name", "family": "Composer"},
+    }))
+    got = _checked(warned)
+    check("roster: accounting_valid false is a warning and exits 0",
+          got.returncode == 0 and "cannot be the accounting leg" in got.stdout,
+          got.stdout + got.stderr)
+
+    # Lenses of one leg are alternatives. Sharing a family with each other is
+    # not a collision; sharing one with another adapter is.
+    lenses = _roster_doc({
+        "codex": _codex_leg(),
+        "opencode": {"by_lens": {
+            "mechanical": {"model": "opencode/a", "effort": "xhigh", "family": "Meta"},
+            "judgment": {"model": "opencode-go/b", "effort": "high", "family": "Meta"},
+        }},
+    })
+    path = tmp / "lenses-ok.json"
+    _write_doc(path, lenses)
+    got = _checked(path)
+    check("roster: two lenses of one leg may share a family",
+          got.returncode == 0, got.stdout + got.stderr)
+    lenses["rounds"]["r1"]["review"]["agy"] = {
+        "model": "gemini-3.8-flash-medium", "family": "Meta", "effort_in": "model_name",
+    }
+    # Meta is not in agy's serves — use Gemini on the lens instead.
+    lenses["rounds"]["r1"]["review"]["opencode"]["by_lens"]["mechanical"]["family"] = "Gemini"
+    lenses["rounds"]["r1"]["review"]["agy"]["family"] = "Gemini"
+    path = tmp / "lens-collision.json"
+    _write_doc(path, lenses)
+    got = _checked(path)
+    text = got.stdout + got.stderr
+    check("roster: a lens collides with another adapter",
+          got.returncode == 1 and "Gemini" in text
+          and "opencode review (mechanical)" in text and "agy review" in text,
+          text)
+    fb = _roster_doc({
+        "agy": {"model": "gemini-3.8-flash-medium", "family": "Gemini",
+                "effort_in": "model_name"},
+        "opencode": {"by_lens": {"mechanical": {
+            "model": "opencode/a", "effort": "xhigh", "family": "Meta",
+            "fallback": {"model": "opencode-go/a", "effort": "xhigh", "family": "Gemini"},
+        }}},
+    })
+    path = tmp / "fallback-collision.json"
+    _write_doc(path, fb)
+    got = _checked(path)
+    text = got.stdout + got.stderr
+    check("roster: a fallback family collides with another adapter",
+          got.returncode == 1 and "fallback" in text and "agy review" in text
+          and "Gemini" in text, text)
+
+    # Found by review (codex): a fallback on a multi-family adapter with NO family
+    # was exempt from the family rule, so it could run a model of the implementer's
+    # own family unseen -- cursor review labelled Grok, falling back to a Claude model,
+    # against a Claude implementation.
+    unlabelled = _roster_doc({
+        "cursor": {"model": "grok-4.7-high", "family": "Grok", "effort_in": "model_name",
+                   "fallback": {"model": "claude-sonnet"}},
+    }, implement={"claude": {"model": "claude-sonnet", "family": "Claude"}})
+    path = tmp / "fallback-unlabelled.json"
+    _write_doc(path, unlabelled)
+    got = _checked(path)
+    text = got.stdout + got.stderr
+    check("roster check: a multi-family fallback without a family is refused",
+          got.returncode == 1 and "rounds.r1.review.cursor.fallback.family" in text, text)
+    got = run(roster, "plan", "--round", "r1", "--implement", "claude", "--review", "cursor",
+              env=_roster_env(tmp, DEV_LEAD_ROSTER=path))
+    text = got.stdout + got.stderr
+    check("roster plan: ... and so is the round that would run it",
+          got.returncode == 1 and "fallback" in text, text)
+
+    nested = _roster_doc({
+        "cursor": {"model": "grok-4", "family": "Grok", "effort_in": "model_name",
+                   "fallback": {"model": "y", "fallback": {"modle": "z"}}},
+    })
+    path = tmp / "nested-fallback.json"
+    _write_doc(path, nested)
+    got = _checked(path)
+    text = got.stdout + got.stderr
+    check("roster check: a fallback cannot contain fallback.fallback",
+          got.returncode == 1 and "fallback.fallback" in text
+          and "a fallback cannot have its own fallback" in text, text)
+
+    home = tmp / "home"
+    home.mkdir()
+    env = _roster_env(home, DEV_LEAD_ROSTER=live)
+    plan = run(roster, "plan", "--round", "r1", "--implement", "claude=claude-sonnet",
+               "--review", "codex,opencode", env=env)
+    out = plan.stdout + plan.stderr
+    check("roster plan: codex + opencode exits 0", plan.returncode == 0, out)
+
+    def args_of(stdout, role, adapter):
+        for line in stdout.splitlines():
+            head = line.split()
+            if len(head) >= 2 and head[0] == role and head[1] == adapter and "args=" in line:
+                return line.split("args=", 1)[1]
+        return ""
+
+    codex_args = args_of(plan.stdout, "review", "codex")
+    opencode_args = args_of(plan.stdout, "review", "opencode")
+    check("roster plan: codex review args have no --effort",
+          codex_args == "--model gpt-5.6-terra", codex_args)
+    check("roster plan: opencode review args pass --effort",
+          opencode_args == "--model opencode/muse-spark-1.3-contributor-free --effort xhigh",
+          opencode_args)
+    check("roster plan: codex effort is read from config",
+          "expected; read from ~/.codex/config.toml model_reasoning_effort" in plan.stdout,
+          plan.stdout)
+
+    same_family = tmp / "same-family-plan.json"
+    _write_doc(same_family, _roster_doc({
+        "agy": {"model": "gemini-3.8-flash-medium", "effort_in": "model_name",
+                "family": "Gemini"},
+    }))
+    env = _roster_env(home, DEV_LEAD_ROSTER=same_family)
+    got = run(roster, "plan", "--round", "r1",
+              "--implement", "agy=gemini-3.8-flash-medium:Gemini", "--review", "agy",
+              env=env)
+    text = got.stdout + got.stderr
+    check("roster plan: implementer and reviewer same family exits 1",
+          got.returncode == 1 and "agy implement" in text and "agy review" in text
+          and "Gemini" in text, text)
+
+    two = tmp / "two-reviewers-plan.json"
+    # Claude is served by both agy and cursor, so the collision is the family
+    # and not an unknown-family error.
+    two_doc = _roster_doc({
+        "agy": {"model": "gemini-3.8-flash-medium", "effort_in": "model_name",
+                "family": "Claude"},
+        "cursor": {"model": "claude-sonnet", "effort_in": "model_name", "family": "Claude"},
+    })
+    _write_doc(two, two_doc)
+    env = _roster_env(home, DEV_LEAD_ROSTER=two)
+    got = run(roster, "plan", "--round", "fix", "--implement", "grok=grok-4",
+              "--review", "agy,cursor", env=env)
+    text = got.stdout + got.stderr
+    check("roster plan: two reviewers same family exits 1",
+          got.returncode == 1 and "agy review" in text and "cursor review" in text
+          and "Claude" in text, text)
+
+    unset = tmp / "unset-plan.json"
+    _write_doc(unset, _roster_doc({"codex": _codex_leg()}))
+    env = _roster_env(home, DEV_LEAD_ROSTER=unset)
+    got = run(roster, "plan", "--round", "r1", "--implement", "agy",
+              "--review", "codex", env=env)
+    text = got.stdout + got.stderr
+    check("roster plan: unset leg exits 1",
+          got.returncode == 1 and "unset" in text and "agy" in text, text)
+
+    wide = tmp / "cursor-family.json"
+    _write_doc(wide, _roster_doc({"codex": _codex_leg()}))
+    env = _roster_env(home, DEV_LEAD_ROSTER=wide)
+    got = run(roster, "plan", "--round", "r1",
+              "--implement", "cursor=grok-4.7-high", "--review", "codex", env=env)
+    text = got.stdout + got.stderr
+    check("roster plan: multi-family implement without :FAMILY exits 1",
+          got.returncode == 1 and "family required" in text and "cursor" in text, text)
+    got = run(roster, "plan", "--round", "r1",
+              "--implement", "cursor=grok-4.7-high:Grok", "--review", "codex", env=env)
+    check("roster plan: :Grok exits 0 when no reviewer is Grok",
+          got.returncode == 0, got.stdout + got.stderr)
+    check("roster plan: cursor override args carry the model and no --effort",
+          args_of(got.stdout, "implement", "cursor") == "--model grok-4.7-high",
+          got.stdout)
+    check("roster plan: reports the model override",
+          "override" in got.stdout, got.stdout)
+
+    swallowed = tmp / "family-suffix.json"
+    _write_doc(swallowed, _roster_doc({
+        "agy": {"model": "gemini-3.8-flash-medium", "effort_in": "model_name",
+                "family": "Gemini"},
+    }))
+    env = _roster_env(home, DEV_LEAD_ROSTER=swallowed)
+    got = run(roster, "plan", "--round", "r1",
+              "--implement", "claude=claude-opus:GPT", "--review", "agy", env=env)
+    text = got.stdout + got.stderr
+    check("roster plan: a :FAMILY the adapter does not serve exits 1 naming it",
+          got.returncode == 1 and "GPT" in text and "not served by claude" in text,
+          text)
+    free = tmp / "free-suffix.json"
+    _write_doc(free, _roster_doc(
+        {"codex": _codex_leg()},
+        implement={"opencode": {"model": "opencode/placeholder", "effort": "high",
+                                "family": "Meta"}},
+    ))
+    env = _roster_env(home, DEV_LEAD_ROSTER=free)
+    got = run(roster, "plan", "--round", "r1",
+              "--implement", "opencode=openrouter/x/y:free:Nemotron",
+              "--review", "codex", env=env)
+    check("roster plan: :free stays in the model and the real family is split off",
+          got.returncode == 0 and "model=openrouter/x/y:free" in got.stdout
+          and "family=Nemotron" in got.stdout, got.stdout + got.stderr)
+
+    codex_impl = tmp / "codex-impl-effort.json"
+    _write_doc(codex_impl, _roster_doc(
+        {"agy": {"model": "gemini-3.8-flash-medium", "effort_in": "model_name",
+                 "family": "Gemini"}},
+        implement={"codex": {"model": "gpt-5.6-terra", "effort": "high"}},
+    ))
+    env = _roster_env(home, DEV_LEAD_ROSTER=codex_impl)
+    got = run(roster, "plan", "--round", "r1", "--implement", "codex",
+              "--review", "agy", env=env)
+    check("roster plan: codex implement passes --effort",
+          got.returncode == 0
+          and args_of(got.stdout, "implement", "codex")
+          == "--model gpt-5.6-terra --effort high",
+          got.stdout + got.stderr)
+
+    # anti-drift: roster's accept/refuse of an effort flag equals leg-cmd.sh.
+    # leg-cmd.sh checks effort before required values, so a missing --base is
+    # not an effort refusal. Classify by the effort-mechanism message.
+    spec = importlib.util.spec_from_file_location("roster_mod", roster)
+    roster_mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(roster_mod)
+    launch = json.loads((SCRIPTS.parent / "data" / "launch.json").read_text(encoding="utf-8"))
+    markers = ("MODEL NAME", "no effort control", "needs --effort",
+               "no effort concept", "unknown effort mechanism")
+    leg = SCRIPTS / "leg-cmd.sh"
+    for adapter, adapter_spec in launch.items():
+        if adapter.startswith("_"):
+            continue
+        for role in adapter_spec["role"]:
+            for effort in ("", "medium"):
+                argv = [str(leg), adapter, role, "--model", "opencode/x"]
+                if effort:
+                    argv += ["--effort", effort]
+                ran = run(*argv)
+                leg_refuses = any(marker in (ran.stderr or "") for marker in markers)
+                roster_refuses = roster_mod.effort_flag_refusal(adapter, role, effort) is not None
+                check("roster effort %s %s effort=%s matches leg-cmd"
+                      % (adapter, role, "set" if effort else "absent"),
+                      leg_refuses == roster_refuses,
+                      "leg=%s stderr=%r roster=%s"
+                      % (leg_refuses, ran.stderr, roster_refuses))
+
+    # anti-drift, the other direction: plan's args plus the template's other
+    # required values must not die on a missing {EFFORT}. leg-cmd.sh requires
+    # every placeholder, not only the effort mechanism.
+    families_doc = json.loads(
+        (SCRIPTS.parent / "data" / "families.json").read_text(encoding="utf-8"))
+
+    def concrete_leg(adapter, role):
+        serves = families_doc["adapters"][adapter]["serves"]
+        spec = launch[adapter]
+        mech = spec["effort"]["mechanism"]
+        applies = role == spec["effort"].get("applies_to_role", role)
+        argv = spec["role"][role]["argv"]
+        built = {"model": "opencode/x" if adapter == "opencode" else "m"}
+        if len(serves) != 1:
+            built["family"] = serves[0]
+        if any("{EFFORT}" in tok for tok in argv):
+            built["effort"] = "high"
+        elif mech == "config_only" and applies:
+            built["effort"] = "medium"
+        return built, serves[0]
+
+    concrete = {}
+    for adapter, adapter_spec in launch.items():
+        if adapter.startswith("_"):
+            continue
+        concrete[adapter] = {
+            role: concrete_leg(adapter, role) for role in adapter_spec["role"]
+        }
+    for adapter, roles in concrete.items():
+        for role in roles:
+            family = roles[role][1]
+            partner = next(
+                other for other, other_roles in concrete.items()
+                if other != adapter and other_roles["implement"][1] != family
+            )
+            if role == "implement":
+                doc = _roster_doc(
+                    {partner: concrete[partner]["review"][0]},
+                    implement={adapter: roles["implement"][0]},
+                )
+                impl_name, rev_name = adapter, partner
+            else:
+                doc = _roster_doc(
+                    {adapter: roles["review"][0]},
+                    implement={partner: concrete[partner]["implement"][0]},
+                )
+                impl_name, rev_name = partner, adapter
+            roster_file = tmp / ("plan-effort-%s-%s.json" % (adapter, role))
+            _write_doc(roster_file, doc)
+            planned = run(roster, "plan", "--round", "r1",
+                          "--implement", impl_name, "--review", rev_name,
+                          env=_roster_env(home, DEV_LEAD_ROSTER=roster_file))
+            plan_args = args_of(planned.stdout, role, adapter)
+            check("roster plan emits %s %s" % (adapter, role),
+                  planned.returncode == 0 and plan_args.startswith("--model "),
+                  planned.stdout + planned.stderr)
+            template = " ".join(launch[adapter]["role"][role]["argv"])
+            extra = []
+            if "{TARGET}" in template:
+                extra += ["--target", str(tmp / "wt")]
+            if "{BASE}" in template:
+                extra += ["--base", "HEAD"]
+            if "{PROMPT_FILE}" in template:
+                extra += ["--prompt-file", str(tmp / "brief.md")]
+            ran = run(leg, adapter, role, "--model", "M", *plan_args.split(), *extra)
+            blob = (ran.stdout or "") + (ran.stderr or "")
+            missing_effort = (
+                "missing required value(s):" in blob
+                and "effort" in blob.split("missing required value(s):", 1)[1].split(")", 1)[0]
+            )
+            check("roster plan args satisfy {EFFORT} for %s %s" % (adapter, role),
+                  not missing_effort and "needs --effort" not in blob, blob)
+
+    # set through a symlink writes the target and leaves the link a link.
+    real = tmp / "real-roster.json"
+    _write_doc(real, {
+        "_comment": "keep me",
+        "version": 1,
+        "rounds": {"r1": {"implement": {}, "review": {"codex": _codex_leg()}},
+                   "fix": {"inherit": "r1"}},
+    })
+    os.chmod(real, 0o640)
+    link = tmp / "link-roster.json"
+    link.symlink_to(real)
+    env = _roster_env(home, DEV_LEAD_ROSTER=link)
+    got = run(roster, "set", "r1", "review", "agy",
+              "--model", "gemini-3.8-flash-medium", "--family", "Gemini",
+              "--why", "因为 café", env=env)
+    check("roster set through symlink exits 0", got.returncode == 0,
+          got.stdout + got.stderr)
+    check("roster set leaves the path a symlink", link.is_symlink(),
+          "mode=%o" % link.lstat().st_mode)
+    check("roster set changes the target",
+          "gemini-3.8-flash-medium" in real.read_text(encoding="utf-8"))
+    written = json.loads(real.read_text(encoding="utf-8"))
+    check("roster set preserves _comment and its position",
+          list(written)[0] == "_comment" and written["_comment"] == "keep me")
+    agy = written["rounds"]["r1"]["review"]["agy"]
+    check("roster set records why and set_on",
+          agy["why"] == "因为 café" and agy["set_on"] == date.today().isoformat(),
+          agy)
+    check("roster set does not escape non-ascii",
+          "因为 café" in real.read_text(encoding="utf-8")
+          and "\\u" not in real.read_text(encoding="utf-8"))
+    check("roster set preserves the file mode",
+          real.stat().st_mode & 0o777 == 0o640, oct(real.stat().st_mode))
+    blob = real.read_bytes()
+    got = run(roster, "set", "r1", "review", "cursor",
+              "--model", "cursor-grok-4.6-medium", "--effort", "high",
+              "--family", "Grok", "--why", "should not land", env=env)
+    check("roster set of an invalid roster exits 1", got.returncode == 1,
+          got.stdout + got.stderr)
+    check("roster set of an invalid roster leaves the file byte-identical",
+          real.read_bytes() == blob)
+    check("roster set failure also leaves the symlink a symlink", link.is_symlink())
+
+    missing = tmp / "does-not-exist.json"
+    env = _roster_env(home, DEV_LEAD_ROSTER=missing)
+    got = run(roster, "set", "r1", "review", "agy",
+              "--model", "gemini-3.8-flash-medium", "--effort", "high",
+              "--family", "Gemini", "--why", "no", env=env)
+    check("roster set that fails validation creates nothing",
+          got.returncode == 1 and not missing.exists(), got.stdout + got.stderr)
+
+    created = tmp / "brand-new.json"
+    env = _roster_env(home, DEV_LEAD_ROSTER=created)
+    got = run(roster, "set", "r1", "review", "codex",
+              "--model", "gpt-5.6-terra", "--effort", "medium", "--family", "GPT",
+              "--why", "first leg", env=env)
+    check("roster set creates a missing file", got.returncode == 0, got.stdout + got.stderr)
+    made = json.loads(created.read_text(encoding="utf-8"))
+    check("roster set skeleton has version 1, r1, and fix inherit",
+          made["version"] == 1 and made["rounds"]["fix"]["inherit"] == "r1"
+          and made["rounds"]["r1"]["review"]["codex"]["model"] == "gpt-5.6-terra")
+    check("roster set file ends with a newline",
+          created.read_bytes().endswith(b"\n"))
+
+    inherit_src = tmp / "inherit-set.json"
+    base_doc = _roster_doc({
+        "codex": _codex_leg(),
+        "cursor": {"model": "cursor-grok-4.6-medium", "effort_in": "model_name",
+                   "family": "Grok"},
+    })
+    r1_before = json.loads(json.dumps(base_doc["rounds"]["r1"]))
+    _write_doc(inherit_src, base_doc)
+    got = run(roster, "set", "fix", "implement", "agy",
+              "--model", "gemini-3.8-flash-medium", "--family", "Gemini",
+              "--why", "x", env=_roster_env(home, DEV_LEAD_ROSTER=inherit_src))
+    check("roster set fix on an inheriting round exits 0",
+          got.returncode == 0, got.stdout + got.stderr)
+    written = json.loads(inherit_src.read_text(encoding="utf-8"))
+    agy_leg = written["rounds"]["fix"]["implement"]["agy"]
+    check("roster set fix keeps r1's review and writes the new implement leg",
+          written["rounds"]["fix"]["review"] == written["rounds"]["r1"]["review"]
+          and written["rounds"]["r1"] == r1_before
+          and agy_leg["model"] == "gemini-3.8-flash-medium"
+          and agy_leg["family"] == "Gemini" and agy_leg["why"] == "x",
+          written["rounds"])
+
+    bad_inherit = tmp / "bad-inherit-set.json"
+    _write_doc(bad_inherit, _roster_doc({"codex": _codex_leg()}))
+    before_bytes = bad_inherit.read_bytes()
+    got = run(roster, "set", "fix", "--inherit", "r2",
+              env=_roster_env(home, DEV_LEAD_ROSTER=bad_inherit))
+    text = got.stdout + got.stderr
+    check("roster set fix --inherit r2 exits 1",
+          got.returncode == 1 and "bad inherit target 'r2'" in text, text)
+    check("roster set fix --inherit r2 leaves the file byte-identical",
+          bad_inherit.read_bytes() == before_bytes)
+
+    commented = tmp / "comment-leg.json"
+    _write_doc(commented, _roster_doc({
+        "codex": {**_codex_leg(), "_comment": "keep"},
+    }))
+    got = run(roster, "set", "r1", "review", "codex",
+              "--model", "gpt-5.6-terra", "--effort", "high", "--family", "GPT",
+              "--why", "updated",
+              env=_roster_env(home, DEV_LEAD_ROSTER=commented))
+    check("roster set replacing a leg exits 0", got.returncode == 0,
+          got.stdout + got.stderr)
+    replaced = json.loads(commented.read_text(encoding="utf-8"))["rounds"]["r1"]["review"]["codex"]
+    check("roster set keeps the leg's _comment",
+          replaced.get("_comment") == "keep" and replaced["why"] == "updated"
+          and replaced["effort"] == "high", replaced)
+
+    show_env = _roster_env(home, DEV_LEAD_ROSTER=live)
+    got = run(roster, "show", "--round", "fix", env=show_env)
+    check("roster show: inherited fix round marks each leg",
+          got.returncode == 0 and "(inherited from r1)" in got.stdout
+          and got.stdout.count("(inherited from r1)") >= 2, got.stdout)
+    gone = tmp / "missing-show.json"
+    got = run(roster, "show", env=_roster_env(home, DEV_LEAD_ROSTER=gone))
+    check("roster show: missing file exits 0 and names set",
+          got.returncode == 0 and str(gone) in got.stdout and "set" in got.stdout,
+          got.stdout)
+    got = run(roster, "check", env=_roster_env(home, DEV_LEAD_ROSTER=gone))
+    check("roster check: missing file exits 1",
+          got.returncode == 1 and str(gone) in (got.stdout + got.stderr),
+          got.stdout + got.stderr)
+
+    # Resolution order: DEV_LEAD_ROSTER, then CLAUDE_PLUGIN_DATA, then ~/.claude/...
+    from_env = tmp / "from-env.json"
+    plugin_dir = tmp / "dev-lead-some-marketplace"
+    plugin_dir.mkdir()
+    env = _roster_env(home, DEV_LEAD_ROSTER=from_env, CLAUDE_PLUGIN_DATA=plugin_dir)
+    got = run(roster, "path", env=env)
+    check("roster path: DEV_LEAD_ROSTER wins",
+          got.returncode == 0 and str(from_env) in got.stdout
+          and "dev-lead-some-marketplace" not in got.stdout
+          and "dev-lead-dev-lead" not in got.stdout, got.stdout)
+    env = _roster_env(home, CLAUDE_PLUGIN_DATA=plugin_dir)
+    got = run(roster, "path", env=env)
+    check("roster path: CLAUDE_PLUGIN_DATA is next",
+          got.returncode == 0 and str(plugin_dir / "roster.json") in got.stdout
+          and "dev-lead-dev-lead" not in got.stdout, got.stdout)
+    env = _roster_env(home)
+    got = run(roster, "path", env=env)
+    fallback = home / ".claude" / "plugins" / "data" / "dev-lead-dev-lead" / "roster.json"
+    check("roster path: home fallback is last",
+          got.returncode == 0 and str(fallback) in got.stdout, got.stdout)
+    # A lead's shell can carry ANOTHER plugin's CLAUDE_PLUGIN_DATA (measured
+    # 2026-09-22: codex's). It must not be read as dev-lead's.
+    other = tmp / "codex-openai-codex"
+    other.mkdir()
+    got = run(roster, "path", env=_roster_env(home, CLAUDE_PLUGIN_DATA=other))
+    check("roster path: another plugin's CLAUDE_PLUGIN_DATA is ignored",
+          got.returncode == 0 and str(fallback) in got.stdout
+          and "codex-openai-codex" not in got.stdout, got.stdout)
+
+
 def main():
     for script in ("freeze-target.sh", "verify-target.sh", "snapshot-refs.sh",
                    "await-codex-job.sh"):
@@ -2671,6 +3347,10 @@ def main():
     print("lint.py check_delegate_audit_trails")
     test_lint_delegate_audit_trails()
     test_leg_cmd()
+
+    print("roster.py")
+    with tempfile.TemporaryDirectory() as td:
+        test_roster(Path(td))
 
     print("lint.py check_version")
     with tempfile.TemporaryDirectory() as td:
