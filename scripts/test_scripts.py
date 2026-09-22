@@ -2708,6 +2708,48 @@ def test_merge_gate(tmp, roster):
     check("gate: provenance still passes", out.returncode == 0, out.stdout)
 
 
+def test_config_effort(tmp):
+    """A config_only adapter's effort lives in a file on THAT machine, so the
+    roster can only declare it. leg-cmd prints what is in force; check warns on
+    a mismatch (measured on a peer's machine 2026-09-23: roster medium, config
+    high, the round ran high). Position: after test_merge_gate."""
+    home = tmp / "cfghome"
+    (home / ".codex").mkdir(parents=True)
+    (home / ".codex" / "config.toml").write_text('model_reasoning_effort = "high"\n')
+    env = _roster_env(home)
+
+    out = run(SCRIPTS / "leg-cmd.sh", "codex", "review", "--model", "gpt-5.6-terra",
+              "--base", "abc", "--run-dir", str(tmp), env=env)
+    check("config effort: leg-cmd prints what is IN FORCE, not what is declared",
+          "IN FORCE on this machine: high" in out.stderr, out.stderr)
+    check("config effort: ...and names the per-call escape hatch, not an edit",
+          "codex exec -c model_reasoning_effort" in out.stderr
+          and "never an edit" in out.stderr, out.stderr)
+
+    doc = _live_roster()
+    doc["rounds"]["r1"]["review"]["codex"]["effort"] = "medium"
+    path = tmp / "cfg-roster.json"
+    _write_doc(path, doc)
+    out = run(SCRIPTS / "roster.py", "check", env=_roster_env(home, DEV_LEAD_ROSTER=str(path)))
+    check("config effort: check WARNS on a declared/in-force mismatch",
+          out.returncode == 0 and "declares 'medium'" in out.stdout
+          and "says 'high'" in out.stdout, out.stdout)
+
+    (home / ".codex" / "config.toml").write_text('model_reasoning_effort = "medium"\n')
+    out = run(SCRIPTS / "roster.py", "check", env=_roster_env(home, DEV_LEAD_ROSTER=str(path)))
+    check("config effort: no warning when they agree",
+          out.returncode == 0 and "declares" not in out.stdout, out.stdout)
+
+    (home / ".codex" / "config.toml").unlink()
+    out = run(SCRIPTS / "roster.py", "check", env=_roster_env(home, DEV_LEAD_ROSTER=str(path)))
+    check("config effort: an unreadable config is not a warning (nothing is known)",
+          out.returncode == 0 and "declares" not in out.stdout, out.stdout)
+    out = run(SCRIPTS / "leg-cmd.sh", "codex", "review", "--model", "gpt-5.6-terra",
+              "--base", "abc", "--run-dir", str(tmp), env=env)
+    check("config effort: leg-cmd says 'not set' rather than inventing one",
+          "IN FORCE on this machine: not set" in out.stderr, out.stderr)
+
+
 def _roster_doc(review, fix=None, implement=None):
     return {
         "version": 1,
@@ -3671,6 +3713,9 @@ def main():
     print("roster.py merge gate")
     with tempfile.TemporaryDirectory() as td:
         test_merge_gate(Path(td), SCRIPTS / "roster.py")
+    print("config_only effort (leg-cmd + roster check)")
+    with tempfile.TemporaryDirectory() as td:
+        test_config_effort(Path(td))
 
     print("lint.py check_version")
     with tempfile.TemporaryDirectory() as td:

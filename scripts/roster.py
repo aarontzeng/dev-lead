@@ -178,6 +178,24 @@ def _check_family(family, adapter, path, problems):
         problems.warn(path, "%s cannot be the accounting leg" % family)
 
 
+def _config_effort(eff):
+    """The effort a config_only adapter will actually use on THIS machine, or
+    None. The roster can only DECLARE it: the file is shared with other tools
+    and other sessions, so nothing here edits it (a peer measured a roster
+    saying medium while the machine ran high, 2026-09-23). Comparing is the
+    most a check can honestly do."""
+    try:
+        with open(os.path.expanduser(eff.get("config_file", "")), encoding="utf-8") as fh:
+            key = eff.get("config_key", "")
+            for line in fh:
+                line = line.strip()
+                if line.startswith(key) and "=" in line:
+                    return line.split("=", 1)[1].strip().strip('"\'')
+    except OSError:
+        return None
+    return None
+
+
 def _check_effort(leg, adapter, role, path, problems):
     """Effort key rules. Not the same as the flag refusal for config_only review.
 
@@ -202,7 +220,15 @@ def _check_effort(leg, adapter, role, path, problems):
         if not leg.get("effort"):
             problems.error(path + ".effort", "missing effort")
     elif mech == "config_only" and applies:
-        pass
+        declared = leg.get("effort")
+        in_force = _config_effort(eff)
+        if declared and in_force and declared != in_force:
+            problems.warn(path + ".effort",
+                          "declares %r but %s %s on this machine says %r -- this leg "
+                          "will run at %r (to pin one per call: `codex exec -c %s=%s`, "
+                          "never an edit of that shared file)"
+                          % (declared, eff.get("config_file"), eff.get("config_key"),
+                             in_force, in_force, eff.get("config_key"), declared))
     elif mech == "config_only":
         pass
     else:

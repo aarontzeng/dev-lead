@@ -220,6 +220,26 @@ print("# adapter %s / role %s   (data/launch.json, verified %s)" % (a, role, spe
 # the caller that --effort is parsed as prompt text, directly above a command
 # passing --effort. Same accessor the guard at the top already uses.
 applies = role == eff.get("applies_to_role", role)
+# A config_only adapter's effort comes from a file on THIS machine, so the
+# roster can only declare it. Print what is actually in force, or the lead
+# reads the roster and believes a number the run will not use (measured on a
+# peer's machine 2026-09-23: roster medium, config high, a round ran high).
+if eff["mechanism"] == "config_only" and applies:
+    cfg_path = os.path.expanduser(eff.get("config_file", "").replace("~", "~"))
+    key = eff.get("config_key", "")
+    in_force = None
+    try:
+        for line in open(cfg_path, encoding="utf-8"):
+            line = line.strip()
+            if line.startswith(key) and "=" in line:
+                in_force = line.split("=", 1)[1].strip().strip('"\'')
+                break
+    except OSError:
+        cfg_path = cfg_path + " (unreadable)"
+    print("# effort IN FORCE on this machine: %s (%s %s) -- the roster can only "
+          "declare it; to pin one per call use `codex exec -c %s=<effort>` "
+          "(references/codex-runtime.md), never an edit of that shared file."
+          % (in_force or "not set", cfg_path, key, key), file=sys.stderr)
 note = eff.get("note", "") if applies else eff.get("implement_note", eff.get("note", ""))
 print("# effort: %s -- %s" % (mech, note.split(".")[0]), file=w)
 # ADAPTER-wide, and said so: gotchas carry no role field in launch.json, so
