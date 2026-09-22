@@ -213,9 +213,9 @@ Role-specific choices:
    impractical, say so and do not call the test a regression proof.
 4. Review — see "The loop" below.
 5. Merge (fast-forward from the worktree branch) and tear down the worktree
-   **only after the user has seen the diff and the verified findings and
-   said to proceed** — then the lead pushes to the ref the project's
-   contract names and reports it. The delegate never pushes.
+   **only after the diff and the verified findings are approved** — by the
+   user, or (or, with the roster's `merge_gate.mode = lead`, on a fully green verdict itself — anything not green still goes to the person) — then the lead pushes to the ref the project's contract names
+   and reports it. The delegate never pushes.
 
 ## The loop (implement → review → fix → re-verify)
 

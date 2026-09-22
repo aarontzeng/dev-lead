@@ -54,7 +54,7 @@ done
 
 ADAPTER="$ADAPTER" ROLE="$ROLE" MODEL="$MODEL" EFFORT="$EFFORT" TARGET="$TARGET" \
 BASE="$BASE" PROMPT_FILE="$PROMPT_FILE" RUN_DIR_ARG="$RUN_DIR_ARG" \
-CHECK="$CHECK" DATA="$DATA" ADD_DIRS="$ADD_DIRS" python3 - <<'PY'
+CHECK="$CHECK" DATA="$DATA" ADD_DIRS="$ADD_DIRS" HERE="$HERE" python3 - <<'PY'
 import json, os, shlex, sys
 
 d = json.load(open(os.environ["DATA"]))
@@ -224,22 +224,21 @@ applies = role == eff.get("applies_to_role", role)
 # roster can only declare it. Print what is actually in force, or the lead
 # reads the roster and believes a number the run will not use (measured on a
 # peer's machine 2026-09-23: roster medium, config high, a round ran high).
+# The reader is roster.py's, imported rather than copied: two parsers of one
+# file drift, and a review leg broke both copies the day they were written.
 if eff["mechanism"] == "config_only" and applies:
-    cfg_path = os.path.expanduser(eff.get("config_file", "").replace("~", "~"))
-    key = eff.get("config_key", "")
-    in_force = None
-    try:
-        for line in open(cfg_path, encoding="utf-8"):
-            line = line.strip()
-            if line.startswith(key) and "=" in line:
-                in_force = line.split("=", 1)[1].strip().strip('"\'')
-                break
-    except OSError:
-        cfg_path = cfg_path + " (unreadable)"
+    import importlib.util as _ilu
+    _spec = _ilu.spec_from_file_location(
+        "dev_lead_roster", os.path.join(os.environ["HERE"], "roster.py"))
+    _roster = _ilu.module_from_spec(_spec)
+    _spec.loader.exec_module(_roster)
+    _key = eff.get("config_key", "")
+    _cfg = eff.get("config_file", "")
+    _in_force = _roster.read_config_value(_cfg, _key)
     print("# effort IN FORCE on this machine: %s (%s %s) -- the roster can only "
           "declare it; to pin one per call use `codex exec -c %s=<effort>` "
           "(references/codex-runtime.md), never an edit of that shared file."
-          % (in_force or "not set", cfg_path, key, key), file=sys.stderr)
+          % (_in_force or "not set", os.path.expanduser(_cfg), _key, _key), file=w)
 note = eff.get("note", "") if applies else eff.get("implement_note", eff.get("note", ""))
 print("# effort: %s -- %s" % (mech, note.split(".")[0]), file=w)
 # ADAPTER-wide, and said so: gotchas carry no role field in launch.json, so

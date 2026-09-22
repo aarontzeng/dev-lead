@@ -640,6 +640,14 @@ one.
 
 ## 9. A person approves the result; the lead lands it
 
+**Who approves is configuration** (`merge_gate.mode` in the roster, 0.6.20):
+`user` — this section as written — or `lead`, where a FULLY GREEN verdict is
+its own approval and the lead lands it, reporting what qualified. The rest of
+this section is unchanged by that setting, and so is what counts as green: an
+unanswered review round, a failing test, an open blocker or an unverified
+finding goes to the person in BOTH modes, and a project contract that is
+stricter still wins. Read the mode with `roster.py show`; do not assume it.
+
 The lead assembles a verdict from the run log — rounds, findings and their
 fates, test results, diff stat against `$BASE` — and presents it. What the
 human approves is that result: the verdict and the diff. Once approved,

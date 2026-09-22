@@ -26,7 +26,7 @@ flowchart TD
         R5 -->|"yes, and rounds remain"| R1
     end
 
-    R5 -->|"none"| M["<b>Phase 3 · Merge gate</b><br/>verdict assembled from the run log<br/>re-verify branch IDENTITY, not just cleanliness<br/>fast-forward on explicit approval, push, then tear down"]
+    R5 -->|"none"| M["<b>Phase 3 · Merge gate</b><br/>verdict assembled from the run log<br/>re-verify branch IDENTITY, not just cleanliness<br/>fast-forward on approval — the person's, or the verdict itself when merge_gate.mode=lead — push, then tear down"]
     R5 -->|"a stop condition fired"| S["<b>Report and hold</b><br/>worktree preserved, findings history presented<br/>no merge — the human decides"]
     M --> P[["<b>Push — the lead, after the approval.</b><br/>To the ref the project's contract names; reports it at once.<br/>Delegates never push, in any mode."]]
 ```
@@ -50,7 +50,7 @@ Two edges in that diagram carry most of the argument:
 | **Phase 0** | Acceptance criteria a machine can check · the files a correct change should touch · a risk class · the task's factual premises checked *against the code*, not taken on trust |
 | **Phase 1** | The chosen family probed as available **this run** (stale logs describe past runs) · `$BASE` pinned once to `git merge-base <target> HEAD` · one isolated worktree per delegate · `refs/remotes` snapshotted so an accidental push surfaces as a delta |
 | **A round** | The lead re-ran the suite *itself* · the lead made the checkpoint commit · every new regression test was watched **failing** against the un-fixed code · every finding recorded with its fate, rejections included and evidenced |
-| **Phase 3** | No verified HIGH findings open · branch *identity* re-verified at the gate · explicit human approval of the diff |
+| **Phase 3** | No verified HIGH findings open · branch *identity* re-verified at the gate · approval of the diff: the person's, or — when the roster's `merge_gate.mode` is `lead` — a fully green verdict itself (anything not green still goes to the person) |
 | **Always** | Delegates never push, in every mode — machine-enforced on two adapters, instruction level plus a fail-closed refs tripwire on the other four (table below) · the lead's push is the only one, and it never precedes a green verdict |
 
 ## One round in detail
@@ -86,7 +86,7 @@ sequenceDiagram
         L->>U: findings history, worktree preserved<br/>the run ends here — NO merge
     else clean
         L->>U: verdict + diff stat against $BASE
-        U->>L: explicit approval
+        U->>L: approval (skipped on a green verdict when merge_gate.mode=lead)
         L->>W: fast-forward merge, tear down worktree
         L->>W: push to the ref the contract names
         L->>U: reports the ref / change / PR

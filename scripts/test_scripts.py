@@ -2684,6 +2684,28 @@ def test_merge_gate(tmp, roster):
     out = run(SCRIPTS / "roster.py", "gate", "bogus", "--why", "x", env=env)
     check("gate: an unknown mode is refused", out.returncode != 0, out.stdout)
 
+    # show is what Phase 3 reads and it does not run check, so it must not
+    # present a block check would refuse as the gate in force.
+    doc2 = _live_roster(); doc2["merge_gate"] = {"mode": "lead", "modee": 1}
+    _write_doc(path, doc2)
+    out = run(SCRIPTS / "roster.py", "show", env=env)
+    check("gate: show refuses to present an invalid block as in force",
+          "INVALID" in out.stdout and "merge gate: lead" not in out.stdout, out.stdout)
+    check("gate: ...and falls back to the person's gate in what it prints",
+          "the person approves the verdict" in out.stdout, out.stdout)
+
+    # A standing authorisation with no reason and no date is the one nobody can
+    # audit later, and a hand edit is how it would arrive (codex leg, 2026-09-23).
+    for bad, needle in (({"mode": "lead"}, "merge_gate.why"),
+                        ({"mode": "lead", "why": "  ", "set_on": "2026-09-23"}, "merge_gate.why"),
+                        ({"mode": "lead", "why": "x"}, "merge_gate.set_on"),
+                        ({"mode": "lead", "why": "x", "set_on": "yesterday"}, "not an ISO date")):
+        doc2 = _live_roster(); doc2["merge_gate"] = bad
+        _write_doc(path, doc2)
+        out = run(SCRIPTS / "roster.py", "check", env=env)
+        check(f"gate: check refuses {bad!r}", out.returncode != 0 and needle in out.stdout,
+              out.stdout)
+
     # check() must fail a hand-edited file, which is the only way these arrive
     for bad, needle in (({"mode": "auto"}, "merge_gate.mode"),
                         ({"mode": "lead", "modee": "typo"}, "merge_gate.modee"),
@@ -2739,6 +2761,22 @@ def test_config_effort(tmp):
     out = run(SCRIPTS / "roster.py", "check", env=_roster_env(home, DEV_LEAD_ROSTER=str(path)))
     check("config effort: no warning when they agree",
           out.returncode == 0 and "declares" not in out.stdout, out.stdout)
+
+    # TOML shapes a review leg built to break the first (line-scanning) reader
+    for text, want, label in (
+        ('model_reasoning_effort = "high"  # temporary\n', "high", "an inline comment is not part of the value"),
+        ('model_reasoning_effort_backup = "low"\nmodel_reasoning_effort = "high"\n', "high", "a prefix key is not the key"),
+        ('[profiles.custom]\nmodel_reasoning_effort = "low"\n', None, "a key under a [table] is not a root key"),
+        ('# model_reasoning_effort = "low"\nmodel_reasoning_effort = "high"\n', "high", "a commented-out line is skipped"),
+        ('model_reasoning_effort="high"\n', "high", "no spaces around ="),
+        ('model_reasoning_effort = high\n', "high", "an unquoted value"),
+        ('other = 1\nmodel_reasoning_effort = "high"\n', "high", "a key after another root key"),
+    ):
+        (home / ".codex" / "config.toml").write_text(text)
+        out = run(SCRIPTS / "leg-cmd.sh", "codex", "review", "--model", "gpt-5.6-terra",
+                  "--base", "abc", "--run-dir", str(tmp), env=env)
+        expect = "IN FORCE on this machine: %s" % (want if want else "not set")
+        check(f"config effort: {label}", expect in out.stderr, out.stderr.strip()[:200])
 
     (home / ".codex" / "config.toml").unlink()
     out = run(SCRIPTS / "roster.py", "check", env=_roster_env(home, DEV_LEAD_ROSTER=str(path)))
@@ -2853,8 +2891,23 @@ def _roster_env(home, **extra):
     return env
 
 
+_NO_CONFIG_HOME = None
+
+
 def _checked(path):
-    return run(SCRIPTS / "roster.py", "check", "--file", str(path))
+    # HOME points at a directory with no ~/.codex/config.toml on purpose: since
+    # 0.6.20 `check` warns when a config_only leg's declared effort contradicts
+    # the machine's config, and these assertions compare stdout exactly. Without
+    # this they would pass or fail by whatever the developer's own codex config
+    # says (cursor leg, 2026-09-23).
+    global _NO_CONFIG_HOME
+    if _NO_CONFIG_HOME is None:
+        _NO_CONFIG_HOME = tempfile.mkdtemp(prefix="roster-no-config-")
+    env = dict(os.environ)
+    env["HOME"] = _NO_CONFIG_HOME
+    env.pop("DEV_LEAD_ROSTER", None)
+    env.pop("CLAUDE_PLUGIN_DATA", None)
+    return run(SCRIPTS / "roster.py", "check", "--file", str(path), env=env)
 
 
 def test_roster(tmp):

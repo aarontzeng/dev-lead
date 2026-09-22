@@ -178,22 +178,52 @@ def _check_family(family, adapter, path, problems):
         problems.warn(path, "%s cannot be the accounting leg" % family)
 
 
+def read_config_value(path, key):
+    """A ROOT-table scalar from a TOML file, or None. Deliberately small, not a
+    TOML parser: this reads one key out of a file another tool owns, on Python
+    3.10 where tomllib does not exist (3.11+ could use it; the fallback would
+    still be needed).
+
+    What it gets right, because a review leg built each of these (2026-09-23):
+    the key must match EXACTLY (`model_reasoning_effort_backup` is not
+    `model_reasoning_effort`), an inline comment after the value is not part of
+    the value, and a key under a `[table]` is not a root key. Anything it
+    cannot read confidently -- a multi-line or array value, a quoted key -- is
+    None, which every caller treats as "nothing is known", never as a default.
+    A duplicate root key returns the FIRST (TOML forbids duplicates, so the
+    file is already invalid and the tool that owns it decides what that means).
+    """
+    try:
+        with open(os.path.expanduser(str(path)), encoding="utf-8") as fh:
+            lines = fh.readlines()
+    except OSError:
+        return None
+    for raw in lines:
+        line = raw.strip()
+        if line.startswith("[") :          # a table header: root scope is over
+            return None
+        if not line or line.startswith("#"):
+            continue
+        name, sep, value = line.partition("=")
+        if not sep or name.strip() != key:
+            continue
+        value = value.strip()
+        if value[:1] in ("'", '"'):        # quoted: the value ends at its quote
+            quote = value[0]
+            end = value.find(quote, 1)
+            return value[1:end] if end > 0 else None
+        value = value.split("#", 1)[0].strip()   # bare: an inline comment is not it
+        return value or None
+    return None
+
+
 def _config_effort(eff):
     """The effort a config_only adapter will actually use on THIS machine, or
     None. The roster can only DECLARE it: the file is shared with other tools
     and other sessions, so nothing here edits it (a peer measured a roster
     saying medium while the machine ran high, 2026-09-23). Comparing is the
     most a check can honestly do."""
-    try:
-        with open(os.path.expanduser(eff.get("config_file", "")), encoding="utf-8") as fh:
-            key = eff.get("config_key", "")
-            for line in fh:
-                line = line.strip()
-                if line.startswith(key) and "=" in line:
-                    return line.split("=", 1)[1].strip().strip('"\'')
-    except OSError:
-        return None
-    return None
+    return read_config_value(eff.get("config_file", ""), eff.get("config_key", ""))
 
 
 def _check_effort(leg, adapter, role, path, problems):
@@ -490,6 +520,21 @@ def _check_merge_gate(doc, problems):
     if mode not in MERGE_GATE_MODES:
         problems.error("merge_gate.mode",
                        "must be one of: %s (got %r)" % (", ".join(MERGE_GATE_MODES), mode))
+    # why and set_on are REQUIRED, not decoration: `lead` is a standing
+    # authorisation to land work without asking, and one that arrived in the
+    # file with no reason and no date is exactly the one nobody can audit
+    # later. The CLI already refuses to write it; a hand edit must fail too
+    # (codex leg, 2026-09-23: {"mode": "lead"} alone passed).
+    for key in ("why", "set_on"):
+        value = gate.get(key)
+        if not isinstance(value, str) or not value.strip():
+            problems.error("merge_gate.%s" % key, "required, a non-empty string")
+    set_on = gate.get("set_on")
+    if isinstance(set_on, str) and set_on.strip():
+        try:
+            date.fromisoformat(set_on.strip())
+        except ValueError:
+            problems.error("merge_gate.set_on", "not an ISO date: %r" % (set_on,))
 
 
 def merge_gate_mode(doc):
@@ -760,12 +805,25 @@ def cmd_show(path, only):
     if err:
         print(err)
         return 1
+    # show is what Phase 3 reads, and it does not run check -- so a block check
+    # would refuse must not be shown as if it were in force (cursor leg,
+    # 2026-09-23: {"mode": "lead", "modee": 1} printed "merge gate: lead").
     gate = doc.get("merge_gate") if isinstance(doc.get("merge_gate"), dict) else {}
-    mode = merge_gate_mode(doc)
-    print("merge gate: %s%s%s" % (
-        mode,
-        "" if gate.get("mode") in MERGE_GATE_MODES else " (default; not set in the file)",
-        " -- %s" % gate["why"] if gate.get("why") else ""))
+    gate_problems = Problems()
+    _check_merge_gate(doc, gate_problems)
+    if gate_problems.errors:
+        print("merge gate: INVALID -- the file's merge_gate is refused by check, "
+              "so the gate is the default (user). Run `roster.py check`:")
+        for line in gate_problems.errors:
+            print("  " + line)
+        mode = "user"
+        gate = {}
+    else:
+        mode = merge_gate_mode(doc)
+        print("merge gate: %s%s%s" % (
+            mode,
+            "" if gate.get("mode") in MERGE_GATE_MODES else " (default; not set in the file)",
+            " -- %s" % gate["why"] if gate.get("why") else ""))
     print("  %s" % ("a fully green verdict is its own approval; anything not green still goes to the person"
                     if mode == "lead" else
                     "the person approves the verdict and the diff; the lead lands it in that same run"))

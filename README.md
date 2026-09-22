@@ -93,7 +93,9 @@ re-runs the suite itself, watches every new regression test fail before it
 passes, sends the frozen diff to reviewers from *other* families with
 *different* briefs, verifies each finding against the code, and stops at the
 merge gate: you approve the verdict and the diff, the lead merges, pushes,
-and reports the resulting ref.
+and reports the resulting ref — or, with `merge_gate.mode = lead` in the
+roster, a fully green verdict is its own approval and the lead lands it and
+reports what qualified. Anything not green goes to you either way.
 
 | Measured, not asserted | |
 |---|---|
@@ -116,7 +118,7 @@ So the rule is structural, not advisory:
 | 🚫 **No self-family review** | GPT implemented → Gemini, Claude, or a named free-pool model reviews. HIGH-risk work takes **two** reviewers from two other families |
 | 🔒 **Machine-enforced boundaries** | Read-only permission configs, sandboxes, and allow-lists — not "please don't edit anything" |
 | 🧪 **Nothing trusted on self-report** | The lead re-runs tests itself, mutation-proofs every new regression test, and verifies every review finding before acting |
-| 🙋 **A person approves the result; the lead lands it** | The verdict and the diff get a human yes — then merging and pushing are the lead's to do, in that run, without a second ask. Delegates never push |
+| 🙋 **A person approves the result; the lead lands it** | The verdict and the diff get a human yes — then merging and pushing are the lead's to do, in that run, without a second ask. Configurable (`merge_gate.mode`): `lead` makes a fully green verdict its own approval; anything not green still comes to you. Delegates never push |
 
 ## If you already fan out in-process
 

@@ -71,7 +71,7 @@ DEV_LEAD=${DEV_LEAD_ROOT:-$(ls -d "$HOME"/.claude/plugins/cache/dev-lead/dev-lea
    fully green verdict itself (`lead`), or does the person approve the
    verdict and diff first (`user`, the default)? Say what it does NOT change:
    anything not fully green — an unanswered review round, a failing test, an
-   open blocker — still goes to the person either way, and a stricter repo
+   open blocker, an unverified finding — still goes to the person either way, and a stricter repo
    contract still wins.
 
 5. **Check.** `"$DEV_LEAD/scripts/roster.py" check`. A family that cannot

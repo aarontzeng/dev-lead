@@ -25,7 +25,8 @@ allow-list), grant it read access to `$DEV_LEAD_ROOT`.
 1. `docs/methodology.md` — the rules that govern every role. Read it once
    per session before doing anything else. Non-negotiables: the cross-family
    review rule, frozen review targets, merge-base spans, evidence gates,
-   mutation-proofing, the human-approved merge gate.
+   mutation-proofing, the merge gate (the person's approval by default; see
+   §9 for the `merge_gate.mode = lead` setting and what it does NOT change).
 2. The skill for **your role in this run** (see below).
 3. That family's runtime reference
    (`skills/<family>-adversarial-review/references/<family>-runtime.md`) —
@@ -62,8 +63,10 @@ and the result that would confirm the finding, and let the lead run it.
 
 - **Delegates never push.** Report the commit hash; the lead pushes.
 - **A person approves the result; the lead lands it.** Present the verdict
-  and the diff; on explicit approval the lead merges, pushes to the ref this
-  project's contract names, and reports it — no second ask.
+  and the diff; on approval the lead merges, pushes to the ref this
+  project's contract names, and reports it — no second ask. With the roster's
+  `merge_gate.mode = lead`, a fully green verdict is that approval; anything
+  not green, and any stricter project contract, still goes to the person.
 - **Cross-family review is mandatory** before anything merges. Two families
   for HIGH-risk changes.
 - **Nothing is trusted on self-report** — the lead re-runs tests and
