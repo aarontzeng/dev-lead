@@ -348,24 +348,36 @@ def _identity_matches(person, identifiers):
     return any(person.get(key) in identifiers for key in ("username", "email", "name"))
 
 
-def _time(value):
-    """Produce a total timestamp ordering for Gerrit's mixed JSON values."""
+def _numeric_time(value):
+    """The value as a finite epoch time, or None when Gerrit gave us junk."""
+    if isinstance(value, bool):
+        return None
     if isinstance(value, (int, float)):
         try:
             numeric = float(value)
         except OverflowError:
-            return (1, str(value))
-        if math.isfinite(numeric):
-            return (0, numeric)
+            return None
+        return numeric if math.isfinite(numeric) else None
     if isinstance(value, str):
         try:
             numeric = float(value)
-            if math.isfinite(numeric):
-                return (0, numeric)
         except ValueError:
-            pass
-        return (1, value)
-    return (2, repr(value))
+            return None
+        return numeric if math.isfinite(numeric) else None
+    return None
+
+
+def _time(value):
+    """Order Gerrit's mixed JSON timestamps, junk first.
+
+    Junk sorts BEFORE every real time on purpose: an unparsable createdOn must
+    never win `max` and become "my last upload", which would hide every later
+    negative vote.
+    """
+    numeric = _numeric_time(value)
+    if numeric is not None:
+        return (0, numeric)
+    return (-1, repr(value))
 
 
 def _after(left, right):
@@ -548,7 +560,12 @@ def _delta_lines(pairs):
             removed.extend([line] * count)
         for line, count in (old_removed - new_removed).items():
             added.extend([line] * count)
-        _add_line_data(data, (after or before)["new"], added, removed)
+        entry = after or before
+        if entry.get("old") and entry["old"] != entry["new"]:
+            _add_line_data(data, entry["old"], [], removed)
+            _add_line_data(data, entry["new"], added, [])
+        else:
+            _add_line_data(data, entry["new"], added, removed)
     return data
 
 
@@ -598,10 +615,21 @@ def _tree_text(repo, revision, path):
 
 
 def _tree_has(repo, revision, path):
-    return _tree_text(repo, revision, path) is not None
+    """Whether the revision carries that path, decided by git's exit code.
+
+    `git show` has at least three ways of saying no ("does not exist in",
+    "is outside repository", "exists on disk, but not in"); matching its prose
+    turned an unresolvable link into an abort.
+    """
+    try:
+        result = subprocess.run(["git", "-C", str(repo), "cat-file", "-e", "%s:%s" % (revision, path)],
+                                capture_output=True)
+    except OSError as exc:
+        raise InputError("git: %s" % exc)
+    return result.returncode == 0
 
 
-URL = re.compile(r"https?://[^\s<>()\[\]\"']+")
+URL = re.compile(r"https?://(?:[^\s<>()\[\]\"']|\([^\s<>()\[\]\"']*\))+")
 
 
 def _without_inline_code(line):
@@ -633,10 +661,10 @@ def _visible_markdown(text):
         if fence is not None:
             character, length = fence
             run = len(token) - len(token.lstrip(character))
-            if run >= length and token[run:].strip(" \t\r") == "":
+            if indent <= 3 and run >= length and token[run:].strip(" \t\r") == "":
                 fence = None
             continue
-        if not token:
+        if not token.strip(" \t\r"):
             blank = True
             continue
         # An indented code block opens only after a blank line: the same indent
@@ -646,7 +674,7 @@ def _visible_markdown(text):
             indented, blank = True, False
             continue
         indented, blank = False, False
-        start = re.match(r"(`{3,}|~{3,})", token)
+        start = re.match(r"(`{3,}|~{3,})", token) if indent <= 3 else None
         if start:
             marker = start.group(1)
             fence = (marker[0], len(marker))
@@ -655,10 +683,22 @@ def _visible_markdown(text):
     return "\n".join(lines)
 
 
+def _trimmed_url(value):
+    """Drop sentence punctuation, but keep a parenthesis the URL itself opened."""
+    while value:
+        stripped = value.rstrip(".,;:!?]}>\"'")
+        if stripped.endswith(")") and stripped.count("(") < stripped.count(")"):
+            stripped = stripped[:-1]
+        if stripped == value:
+            return value
+        value = stripped
+    return value
+
+
 def _urls(text):
     found = set()
     for value in URL.findall(_visible_markdown(text)):
-        value = value.rstrip(".,;:!?)]}>\"'")
+        value = _trimmed_url(value)
         if value:
             found.add(value)
     return found
@@ -671,16 +711,24 @@ def _markdown_targets(text):
         start = text.find("](", index)
         if start < 0:
             return
-        cursor, depth = start + 2, 1
+        cursor, depth, quote = start + 2, 1, None
         while cursor < len(text) and depth:
-            if text[cursor] == "(":
+            character = text[cursor]
+            if quote is not None:
+                if character == quote and text[cursor - 1] != "\\":
+                    quote = None
+            elif character in ("\"", "'"):
+                quote = character
+            elif character == "(":
                 depth += 1
-            elif text[cursor] == ")":
+            elif character == ")":
                 depth -= 1
             cursor += 1
         if depth == 0:
             yield text[start + 2:cursor - 1]
-        index = cursor
+            index = cursor
+        else:
+            index = start + 2
 
 
 def _relative_targets(text):
@@ -917,19 +965,27 @@ def _at_or_after(left, right):
     return _time(left) >= _time(right)
 
 
+def _later_patch_set(number, replayed):
+    """Whether `number` is a patch set uploaded after the replayed one."""
+    try:
+        return int(number) > int(replayed)
+    except (TypeError, ValueError):
+        return False
+
+
 def _as_of_cutoffs(change, as_of):
     """Return distinct replay cutoffs for everyone and for my own actions.
 
-    A replay ends for all accounts when patch set N+1 is uploaded. My approval
-    on N and my messages from N's upload onward are additionally excluded so
-    the replay reflects the decision before I reviewed N, without discarding
-    other reviewers' intervening feedback.
+    A replay ends for all accounts when the next patch set after N is uploaded
+    (the next one that EXISTS: Gerrit numbering may have gaps). My approval on
+    N and my messages from N's upload onward are additionally excluded so the
+    replay reflects the decision before I reviewed N, without discarding other
+    reviewers' intervening feedback.
     """
     if as_of is None:
         return None
     try:
         number = str(int(as_of))
-        next_number = str(int(as_of) + 1)
     except (TypeError, ValueError):
         raise InputError("change: --as-of-ps must be a patch set number")
     entries = list(change.get("patchSets") or [])
@@ -939,7 +995,7 @@ def _as_of_cutoffs(change, as_of):
     for entry in entries:
         if not isinstance(entry, dict):
             continue
-        if _number(entry) == next_number and "createdOn" in entry:
+        if "createdOn" in entry and _later_patch_set(_number(entry), number):
             next_created.append(entry["createdOn"])
         if _number(entry) == number:
             created = entry.get("createdOn", created)
@@ -951,6 +1007,8 @@ def _limit_to_as_of(change, patch_sets, cutoffs, identifiers):
     if cutoffs is None:
         return
     everyone, mine = cutoffs["everyone"], cutoffs["mine"]
+    everyone = everyone if _numeric_time(everyone) is not None else None
+    mine = mine if _numeric_time(mine) is not None else None
     replayed_patch_set = cutoffs["patch_set"]
     for patch_set in patch_sets.values():
         patch_set["approvals"] = [
@@ -1042,14 +1100,21 @@ def triage_change(config, raw, path, number, query_json, include_wip, as_of=None
                    if _identity_matches(patch_set.get("uploader"), identifiers)]
         upload = max(uploads, key=lambda patch_set: _time(patch_set.get("createdOn", 0))) if uploads else current
         upload_time = upload.get("createdOn", 0)
-        negatives = [
-            approval for patch_set in patch_sets.values()
-            for approval in patch_set.get("approvals") or []
-            if approval.get("type") == "Code-Review"
-            and not _identity_matches(approval.get("by"), identifiers)
-            and (_approval_value(approval) or 0) < 0
-            and _after(approval.get("grantedOn", 0), upload_time)
-        ]
+        latest = {}
+        for patch_set in patch_sets.values():
+            for approval in patch_set.get("approvals") or []:
+                if approval.get("type") != "Code-Review":
+                    continue
+                if _identity_matches(approval.get("by"), identifiers):
+                    continue
+                if not _after(approval.get("grantedOn", 0), upload_time):
+                    continue
+                by = approval.get("by") or {}
+                key = by.get("username") or by.get("email") or by.get("name") or repr(sorted(by.items()))
+                held = latest.get(key)
+                if held is None or _after(approval.get("grantedOn", 0), held.get("grantedOn", 0)):
+                    latest[key] = approval
+        negatives = [approval for approval in latest.values() if (_approval_value(approval) or 0) < 0]
         comments = [
             comment for comment in change.get("comments") or []
             if not _identity_matches(comment.get("reviewer"), identifiers)

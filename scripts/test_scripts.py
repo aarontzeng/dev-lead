@@ -4175,10 +4175,16 @@ def test_triage(tmp):
                      comments=[{"timestamp": 21, "reviewer": {"username": "bob"}, "message": "please adjust"}])
     check("triage owner fix: comment only uses roster",
           result.get("legs") == "roster" and any(rule["rule"] == "owner-fix-round" for rule in result.get("fired_rules", [])), result)
-    result = changed(122, [patch(1, per_file_ps1, base, approvals=[approval("+1")], created=10),
-                           patch(2, per_file_ps2, per_file_ps1, created=20)], owner="alice",
+    git(repo, "checkout", "-q", "-B", "owner-small", base)
+    write("src/owner.txt", "one\n")
+    owner_small_ps1 = commit("owner small ps1")
+    write("src/owner.txt", "two\n")
+    owner_small_ps2 = commit("owner small ps2")
+    result = changed(122, [patch(1, owner_small_ps1, base, approvals=[approval("+1")], created=10),
+                           patch(2, owner_small_ps2, owner_small_ps1, created=20)], owner="alice",
                      comments=[{"timestamp": 21, "reviewer": {"username": "bob"}, "message": "small fix"}])
-    check("triage owner fix: small post-vote delta still uses roster", result.get("legs") == "roster", result)
+    check("triage owner fix: small post-vote delta still uses roster",
+          result.get("legs") == "roster", result)
     result = changed(123, [patch(1, rename_ps2, rename_ps1, kind="TRIVIAL_REBASE", created=20)], owner="alice",
                      comments=[{"timestamp": 21, "reviewer": {"username": "bob"}, "message": "rebase fix"}])
     check("triage owner fix: trivial rebase still uses roster", result.get("legs") == "roster", result)
@@ -4442,6 +4448,92 @@ def test_triage(tmp):
     check("triage markdown: an indented list continuation is still link-checked",
           list(triage_module._relative_targets(list_doc)) == ["missing.md"],
           list(triage_module._relative_targets(list_doc)))
+
+    # Round-3 review: Markdown parsing, each from a leg's concrete input.
+    crlf_doc = "para\r\n\r\n    [code](hidden.md)\r\n"
+    check("triage markdown: a CRLF blank line still opens an indented code block",
+          not list(triage_module._relative_targets(crlf_doc)),
+          list(triage_module._relative_targets(crlf_doc)))
+    indented_fence = "para\n    ```\n[after](missing.md)\n"
+    check("triage markdown: a four-space fence marker does not open a fence",
+          list(triage_module._relative_targets(indented_fence)) == ["missing.md"],
+          list(triage_module._relative_targets(indented_fence)))
+    titled = '[Spec](spec.md "Section 1 (draft") and [API](api.md).'
+    check("triage markdown: a paren inside a quoted title does not swallow the next link",
+          list(triage_module._relative_targets(titled)) == ["spec.md", "api.md"],
+          list(triage_module._relative_targets(titled)))
+    unbalanced = "[x](a.md (unclosed\n\n[y](missing.md)\n"
+    check("triage markdown: one unbalanced destination does not hide later links",
+          "missing.md" in list(triage_module._relative_targets(unbalanced)),
+          list(triage_module._relative_targets(unbalanced)))
+    check("triage markdown: a URL may carry a balanced parenthesis",
+          triage_module._urls("[doc](https://example.com/wiki/Page_(v1))") == {"https://example.com/wiki/Page_(v1)"},
+          triage_module._urls("[doc](https://example.com/wiki/Page_(v1))"))
+
+    # Round-3 review, agy/cursor: with no prior vote the delta lines come from
+    # _delta_lines, which filed a rename's removed lines on the NEW path, so a
+    # trigger keyword deleted by the rename was never searched.
+    git(repo, "checkout", "-q", "-B", "rename-out", base)
+    rename_out_text = "Status Verified\n" + "".join("keep %d\n" % index for index in range(30))
+    write("docs/spec/moved.md", rename_out_text)
+    rename_out_base = commit("rename out base")
+    (repo / "docs" / "other").mkdir(parents=True, exist_ok=True)
+    git(repo, "mv", "docs/spec/moved.md", "docs/other/moved.md")
+    write("docs/other/moved.md", rename_out_text.replace("Status Verified\n", ""))
+    rename_out_ps1 = commit("rename out ps1")
+    result = changed(167, [patch(1, rename_out_ps1, rename_out_base)])
+    check("triage rename: a removed trigger line is searched at the old path without a prior vote",
+          result.get("risk_floor") == "HIGH", result)
+
+    # Round-3 review, agy: a reviewer who replaced their own -1 with a later
+    # vote has answered; only their latest vote counts.
+    result = changed(168, [patch(1, owner_small_ps1, base, created=10,
+                                 approvals=[approval("-1", 15, who="bob")]),
+                           patch(2, owner_small_ps2, owner_small_ps1, created=20,
+                                 approvals=[approval("+1", 25, who="bob")])], owner="alice")
+    check("triage owner fix: a superseded negative is not an open fix round",
+          not any(rule["rule"] == "owner-fix-round" for rule in result.get("fired_rules", [])), result)
+    result = changed(169, [patch(1, owner_small_ps1, base, created=10,
+                                 approvals=[approval("+1", 15, who="bob")]),
+                           patch(2, owner_small_ps2, owner_small_ps1, created=20,
+                                 approvals=[approval("-1", 25, who="bob")])], owner="alice")
+    check("triage owner fix: the latest negative still opens a fix round",
+          any(rule["rule"] == "owner-fix-round" for rule in result.get("fired_rules", [])), result)
+
+    # Round-3 review, cursor: an unparsable createdOn must not win "my last
+    # upload" and hide every later negative vote.
+    result = changed(170, [patch(1, owner_small_ps1, base, created="rebuilt"),
+                           patch(2, owner_small_ps2, owner_small_ps1, created=20,
+                                 approvals=[approval("-1", 25, who="bob")])], owner="alice")
+    check("triage owner fix: junk timestamps cannot hide a later negative",
+          any(rule["rule"] == "owner-fix-round" for rule in result.get("fired_rules", [])), result)
+
+    # Round-3 review, cursor/agy: git has a third way of saying "not in this
+    # revision" for a path that exists in the work tree.
+    git(repo, "checkout", "-q", "-B", "worktree-link", base)
+    worktree_text = "[here](on-disk.md)\n" + ("same\n" * 12)
+    write("docs/wt/page.md", worktree_text)
+    worktree_ps1 = commit("worktree link source")
+    (repo / "docs" / "wt" / "deep").mkdir(parents=True, exist_ok=True)
+    git(repo, "mv", "docs/wt/page.md", "docs/wt/deep/page.md")
+    write("docs/wt/deep/page.md", worktree_text)
+    worktree_ps2 = commit("worktree link move")
+    # Present in the work tree, absent from every patch set: git answers
+    # "exists on disk, but not in <rev>", its third way of saying no.
+    (repo / "docs" / "wt" / "deep" / "on-disk.md").write_text("only on disk\n")
+    result = changed(171, [patch(1, worktree_ps1, base, approvals=[approval("+1")]),
+                           patch(2, worktree_ps2, worktree_ps1)])
+    check("triage move: a link that misses the revision is flagged, not fatal",
+          any("does not resolve" in flag for flag in result.get("flags", [])), result)
+
+    # Round-3 review, agy: Gerrit numbering may skip, so the replay ends at the
+    # next patch set that exists.
+    result = changed(172, [patch(1, owner_small_ps1, base, created=10),
+                           patch(3, owner_small_ps2, owner_small_ps1, created=30)],
+                     owner="alice", args=("--as-of-ps", "1"),
+                     comments=[{"timestamp": 35, "reviewer": {"username": "bob"}, "message": "after ps3"}])
+    check("triage as-of: a gap in patch set numbers still ends the replay",
+          not any(rule["rule"] == "owner-fix-round" for rule in result.get("fired_rules", [])), result)
 
     # Fix round 2 F8: a hunk that quotes Git's binary-file sentence is plain
     # content, not a binary delta marker.
