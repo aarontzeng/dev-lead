@@ -65,13 +65,22 @@ DEV_LEAD=${DEV_LEAD_ROOT:-$(ls -d "$HOME"/.claude/plugins/cache/dev-lead/dev-lea
    written. A row in a CLI's model listing is not evidence the model can
    be called.
 
-4. **Check.** `"$DEV_LEAD/scripts/roster.py" check`. A family that cannot
+4. **The merge gate.** `roster.py show` prints it first. If the user named
+   it, apply `"$DEV_LEAD/scripts/roster.py" gate <user|lead> --why "<the
+   user's words>"`. Otherwise ask once, in their words: does dev-lead land a
+   fully green verdict itself (`lead`), or does the person approve the
+   verdict and diff first (`user`, the default)? Say what it does NOT change:
+   anything not fully green — an unanswered review round, a failing test, an
+   open blocker — still goes to the person either way, and a stricter repo
+   contract still wins.
+
+5. **Check.** `"$DEV_LEAD/scripts/roster.py" check`. A family that cannot
    be the accounting leg is a warning: it prints and does not fail. Any
    error does. `set` refuses to write a roster that fails, so a failure
    here means the file was changed outside this skill.
 
-5. **Report.** For each slot this session changed, say old → new: model,
-   effort, family, or whether the fix round inherits.
+6. **Report.** For each slot this session changed, say old → new: model,
+   effort, family, whether the fix round inherits, or the merge gate.
 
 `unset <round> <role> <adapter>` stores `null` for that leg. An unset leg
 is not a default model. The next dispatch has to name one.

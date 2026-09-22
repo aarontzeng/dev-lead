@@ -2650,6 +2650,64 @@ def test_leg_cmd():
 
 
 # ---------------------------------------------------------------- roster ----
+def test_merge_gate(tmp, roster):
+    """The merge gate is configuration, not memory (Aaron, 2026-09-23):
+    `lead` lets a fully green verdict land itself, `user` keeps the person's
+    approval. Position: its own function, called from test_roster."""
+    path = tmp / "gate.json"
+    doc = _live_roster()
+    _write_doc(path, doc)
+    env = _roster_env(tmp, DEV_LEAD_ROSTER=str(path))
+
+    out = run(SCRIPTS / "roster.py", "show", env=env)
+    check("gate: absent reads as the default and says so",
+          "merge gate: user" in out.stdout and "default" in out.stdout, out.stdout)
+
+    out = run(SCRIPTS / "roster.py", "gate", "lead", "--why", "owner ruling", env=env)
+    check("gate: set to lead exits 0", out.returncode == 0, out.stderr + out.stdout)
+    stored = json.loads(path.read_text())["merge_gate"]
+    check("gate: stores mode, why and the date",
+          stored["mode"] == "lead" and stored["why"] == "owner ruling" and stored.get("set_on"),
+          stored)
+    out = run(SCRIPTS / "roster.py", "show", env=env)
+    check("gate: show names the mode and what it means",
+          "merge gate: lead" in out.stdout and "green verdict is its own approval" in out.stdout,
+          out.stdout)
+    check("gate: ...and says what still goes to the person",
+          "not green" in out.stdout, out.stdout)
+
+    out = run(SCRIPTS / "roster.py", "gate", "user", env=env)
+    check("gate: a change with no --why is refused", out.returncode != 0, out.stdout)
+    check("gate: ...and does not change the file",
+          json.loads(path.read_text())["merge_gate"]["mode"] == "lead")
+
+    out = run(SCRIPTS / "roster.py", "gate", "bogus", "--why", "x", env=env)
+    check("gate: an unknown mode is refused", out.returncode != 0, out.stdout)
+
+    # check() must fail a hand-edited file, which is the only way these arrive
+    for bad, needle in (({"mode": "auto"}, "merge_gate.mode"),
+                        ({"mode": "lead", "modee": "typo"}, "merge_gate.modee"),
+                        ("lead", "merge_gate")):
+        doc2 = _live_roster(); doc2["merge_gate"] = bad
+        _write_doc(path, doc2)
+        out = run(SCRIPTS / "roster.py", "check", env=env)
+        check(f"gate: check refuses {bad!r}", out.returncode != 0 and needle in out.stdout,
+              out.stdout)
+
+    # an unknown TOP-LEVEL key is an error too: a typo'd block would otherwise
+    # be accepted in silence and the lead would run the default
+    doc3 = _live_roster(); doc3["mege_gate"] = {"mode": "lead"}
+    _write_doc(path, doc3)
+    out = run(SCRIPTS / "roster.py", "check", env=env)
+    check("gate: a typo'd top-level block is refused, not ignored",
+          out.returncode != 0 and "mege_gate" in out.stdout, out.stdout)
+    # ...but the keys the file legitimately carries are not
+    doc4 = _live_roster(); doc4["provenance"] = {"review_roster": {"set_by": "Aaron"}}
+    _write_doc(path, doc4)
+    out = run(SCRIPTS / "roster.py", "check", env=env)
+    check("gate: provenance still passes", out.returncode == 0, out.stdout)
+
+
 def _roster_doc(review, fix=None, implement=None):
     return {
         "version": 1,
@@ -3342,6 +3400,8 @@ def test_roster(tmp):
 
 
 # ------------------------------------------------ line-ending renormalization ----
+
+
 def _crlf_repo(path):
     """A repo that committed CRLF files and LATER added `eol=lf`: every fresh
     checkout shows them ` M` with bytes identical to the commit (SITL-bench,
@@ -3608,6 +3668,9 @@ def main():
     print("roster.py")
     with tempfile.TemporaryDirectory() as td:
         test_roster(Path(td))
+    print("roster.py merge gate")
+    with tempfile.TemporaryDirectory() as td:
+        test_merge_gate(Path(td), SCRIPTS / "roster.py")
 
     print("lint.py check_version")
     with tempfile.TemporaryDirectory() as td:

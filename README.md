@@ -209,7 +209,7 @@ one of them only by accident).
 | Skill | Role |
 |---|---|
 | `dev-lead` | The orchestration layer: intake → dispatch → bounded review rounds → merge gate |
-| `config` | View and change the leg roster: model and effort per adapter, role, and round |
+| `config` | View and change the leg roster (model and effort per adapter, role, round) and the merge gate: whether a fully green verdict lands itself (`lead`) or waits for the person (`user`, default) |
 | `claude-implement` / `claude-adversarial-review` | Claude Code as a headless delegate (`claude -p`) |
 | `codex-implement` / `codex-adversarial-review` | OpenAI Codex via its Claude Code companion plugin — or the raw CLI |
 | `agy-implement` / `agy-adversarial-review` | Google Antigravity CLI (Gemini + a separate Claude pool) |

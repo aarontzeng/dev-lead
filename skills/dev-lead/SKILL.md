@@ -843,7 +843,18 @@ that refusal is the guard working; never switch to `--no-ff` to get past it.
 Rebase the branch onto the moved target and re-run the ff. The human owns the
 main checkout; assume it moves.
 
-- **Default (`merge-gate=user`)**: present the verdict and the diff summary;
+**Which gate is in force comes from the roster file, not from memory**
+(`merge_gate.mode`, added 2026-09-23 on Aaron's ruling; `roster.py show`
+prints it, `roster.py gate <user|lead> --why "…"` changes it, and absent
+means `user`). Read it at the start of Phase 3 — a lead that assumes the
+default lands nothing on a machine configured for `lead`, and a lead that
+assumes `lead` merges work the person wanted to see. **Neither mode changes
+what counts as green**: a verdict with an unanswered review round, a failing
+test, an open blocker or an unverified finding goes to the person in both.
+A repo's own contract wins where it is stricter (QUANTA Part 5, the user's
+CLAUDE.md).
+
+- **`merge-gate=user` (default)**: present the verdict and the diff summary;
   merge (fast-forward), push, and tear down the worktree only after the user
   says proceed. The human approves the RESULT — the verdict and the diff —
   not the intention; once approved, landing it is the lead's job in that
@@ -853,11 +864,16 @@ main checkout; assume it moves.
   branch, or the target branch where the contract allows it — never a
   force-push, never someone else's branch — and report the resulting ref,
   change or PR number immediately.
-- **`auto-merge`** — only when the user explicitly granted it at invocation
-  for this run: on a fully green verdict the verdict IS the approval —
-  merge, push, tear down, and report what landed and why it qualified. Any
-  non-green condition falls back to the default gate. The grant is per-run,
-  never remembered.
+- **`merge-gate=lead`** — the standing form of the same grant, from the
+  roster: on a fully green verdict the verdict IS the approval — merge,
+  push, tear down, and report what landed and why it qualified. Any
+  non-green condition falls back to the user gate. Report says the mode was
+  `lead` and names what made the verdict green, so the person reading it
+  afterwards can audit the decision they delegated.
+- **`auto-merge`** — the per-run version, when the user grants it at
+  invocation on a machine configured `user`. Same conditions; the grant is
+  per-run, never remembered. A per-run "ask me anyway" likewise overrides a
+  configured `lead` for that run: the person can always take the gate back.
 - If the session model is not the strongest available, an optional
   independent verdict check: spawn a frontier-tier subagent with the run log
   and the final diff, asking only "does anything here disqualify a merge?" —

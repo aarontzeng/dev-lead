@@ -33,6 +33,20 @@ LEG_KEYS = {
 OPENCODE_REVIEW_KEYS = {"by_lens", "top_tier_judgment_only"}
 FALLBACK_KEYS = {"when"}
 INHERIT_KEYS = {"inherit", "set_on", "why"}
+# Who decides that a green verdict may land (Aaron, 2026-09-23). "user" is the
+# doctrine the skill has always had: the person approves the verdict and the
+# diff, then the lead merges and pushes in the same run. "lead" makes a fully
+# green verdict its own approval -- a standing version of the per-run
+# `auto-merge` grant, and the per-run grant still exists for a one-off. A
+# verdict that is not fully green falls back to the person in BOTH modes; the
+# setting moves who approves a clean result, never what counts as clean. A
+# repo's own contract still wins where it is stricter (QUANTA, CLAUDE.md).
+MERGE_GATE_MODES = ("user", "lead")
+MERGE_GATE_KEYS = {"mode", "set_on", "why"}
+# Every top-level key the roster may carry. Unknown ones are an ERROR, not a
+# shrug: a typo'd block ("mege_gate") would otherwise be accepted silently and
+# the lead would run the default while the file says otherwise.
+TOP_KEYS = {"version", "rounds", "merge_gate", "provenance"}
 EFFORT_IN = {
     "model_suffix": "model_name",
     "flag": "flag",
@@ -361,6 +375,11 @@ def validate(doc):
         return problems
     if type(doc.get("version")) is not int or doc.get("version") != 1:
         problems.error("version", "must be 1")
+    for key in _public_keys(doc):
+        if key not in TOP_KEYS:
+            problems.error(key, "unknown top-level key %r (known: %s)"
+                           % (key, ", ".join(sorted(TOP_KEYS))))
+    _check_merge_gate(doc, problems)
     rounds = doc.get("rounds")
     if not isinstance(rounds, dict):
         problems.error("rounds", "required")
@@ -429,6 +448,29 @@ def validate(doc):
         if key not in ("r1", "fix"):
             problems.error("rounds.%s" % key, "unknown round %r" % (key,))
     return problems
+
+
+def _check_merge_gate(doc, problems):
+    gate = doc.get("merge_gate")
+    if gate is None:
+        return
+    if not isinstance(gate, dict):
+        problems.error("merge_gate", "must be an object {mode, why, set_on}")
+        return
+    for key in _public_keys(gate):
+        if key not in MERGE_GATE_KEYS:
+            problems.error("merge_gate.%s" % key, "unknown key %r" % (key,))
+    mode = gate.get("mode")
+    if mode not in MERGE_GATE_MODES:
+        problems.error("merge_gate.mode",
+                       "must be one of: %s (got %r)" % (", ".join(MERGE_GATE_MODES), mode))
+
+
+def merge_gate_mode(doc):
+    """The configured mode, or the default. Read by the skill at Phase 3."""
+    gate = doc.get("merge_gate") if isinstance(doc, dict) else None
+    mode = gate.get("mode") if isinstance(gate, dict) else None
+    return mode if mode in MERGE_GATE_MODES else "user"
 
 
 def load_roster(path):
@@ -692,6 +734,15 @@ def cmd_show(path, only):
     if err:
         print(err)
         return 1
+    gate = doc.get("merge_gate") if isinstance(doc.get("merge_gate"), dict) else {}
+    mode = merge_gate_mode(doc)
+    print("merge gate: %s%s%s" % (
+        mode,
+        "" if gate.get("mode") in MERGE_GATE_MODES else " (default; not set in the file)",
+        " -- %s" % gate["why"] if gate.get("why") else ""))
+    print("  %s" % ("a fully green verdict is its own approval; anything not green still goes to the person"
+                    if mode == "lead" else
+                    "the person approves the verdict and the diff; the lead lands it in that same run"))
     rounds = doc.get("rounds") if isinstance(doc.get("rounds"), dict) else {}
     if only:
         names = [only]
@@ -996,6 +1047,19 @@ def cmd_set(path, args):
     return _commit(path, doc)
 
 
+def cmd_gate(path, args):
+    if not args.why:
+        print('roster: gate <%s> --why TEXT' % "|".join(MERGE_GATE_MODES))
+        return 1
+    doc, err = _load_or_skeleton(path)
+    if err:
+        print(err)
+        return 1
+    doc["merge_gate"] = {"mode": args.mode, "set_on": date.today().isoformat(),
+                         "why": args.why}
+    return _commit(path, doc)
+
+
 def cmd_unset(path, args):
     if args.round not in ("r1", "fix"):
         print("roster: rounds.%s: unknown round %r" % (args.round, args.round))
@@ -1044,6 +1108,10 @@ def main(argv=None):
     p_set.add_argument("--why")
     p_set.add_argument("--inherit")
 
+    p_gate = sub.add_parser("gate")
+    p_gate.add_argument("mode", choices=MERGE_GATE_MODES)
+    p_gate.add_argument("--why")
+
     p_unset = sub.add_parser("unset")
     p_unset.add_argument("round")
     p_unset.add_argument("role")
@@ -1060,6 +1128,8 @@ def main(argv=None):
         return cmd_show(path, args.round)
     if args.cmd == "plan":
         return cmd_plan(path, args.round, args.implement, args.review, args.lens)
+    if args.cmd == "gate":
+        return cmd_gate(path, args)
     if args.cmd == "set":
         return cmd_set(path, args)
     if args.cmd == "unset":
