@@ -2770,12 +2770,15 @@ def test_config_effort(tmp):
         ('# model_reasoning_effort = "low"\nmodel_reasoning_effort = "high"\n', "high", "a commented-out line is skipped"),
         ('model_reasoning_effort="high"\n', "high", "no spaces around ="),
         ('model_reasoning_effort = high\n', "high", "an unquoted value"),
+        ('model_reasoning_effort = high  # note\n', "high", "an inline comment after a BARE value"),
         ('other = 1\nmodel_reasoning_effort = "high"\n', "high", "a key after another root key"),
     ):
         (home / ".codex" / "config.toml").write_text(text)
         out = run(SCRIPTS / "leg-cmd.sh", "codex", "review", "--model", "gpt-5.6-terra",
                   "--base", "abc", "--run-dir", str(tmp), env=env)
-        expect = "IN FORCE on this machine: %s" % (want if want else "not set")
+        # the trailing " (" matters: without it "high" also matches a parse that
+        # returned 'high"  # temporary', and the mutation stays green
+        expect = "IN FORCE on this machine: %s (" % (want if want else "not set")
         check(f"config effort: {label}", expect in out.stderr, out.stderr.strip()[:200])
 
     (home / ".codex" / "config.toml").unlink()
