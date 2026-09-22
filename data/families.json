@@ -26,8 +26,8 @@
     },
     "opencode": {
       "cli": "opencode",
-      "serves": ["DeepSeek", "Nemotron", "GLM", "North", "Inkling", "Laguna", "Xiaomi", "Tencent", "Meta", "unknown"],
-      "note": "free pool; catalogue changes, verify with `opencode models`"
+      "serves": ["DeepSeek", "Nemotron", "GLM", "North", "Inkling", "Laguna", "Xiaomi", "Tencent", "Meta", "Kimi", "unknown"],
+      "note": "free pool; catalogue changes, verify with `opencode models`. Kimi is reachable via the paid opencode-go/kimi-k3 pool, not the free one (opencode-runtime.md)"
     },
     "grok": {
       "cli": "grok (Grok Build)",

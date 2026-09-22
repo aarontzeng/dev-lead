@@ -2752,6 +2752,22 @@ def test_roster(tmp):
           "the path that `roster.py path` prints first" in example.read_text(encoding="utf-8"),
           example.read_text(encoding="utf-8"))
 
+    # Aaron, 2026-09-22 (/dev-lead:config): opencode-go/kimi-k3 is CALLABLE
+    # (calibration row in opencode-runtime.md, 2026-09-16) and CLAUDE.md's own
+    # roster policy names it a legitimate top-tier judgment leg -- but
+    # data/families.json had not registered Kimi under opencode's `serves`,
+    # so a roster naming it was refused by check()/plan() as an unknown family.
+    families = json.loads((SCRIPTS.parent / "data" / "families.json").read_text(encoding="utf-8"))
+    check("families.json: opencode serves Kimi (opencode-go/kimi-k3 is real)",
+          "Kimi" in families["adapters"]["opencode"]["serves"], families["adapters"]["opencode"])
+    kimi_doc = _roster_doc({"opencode": {"model": "opencode-go/kimi-k3", "effort": "high",
+                                         "effort_in": "flag", "family": "Kimi"}})
+    path = tmp / "kimi.json"
+    _write_doc(path, kimi_doc)
+    got = _checked(path)
+    check("roster: opencode/kimi-k3 with family Kimi passes check",
+          got.returncode == 0 and got.stdout == "", got.stdout + got.stderr)
+
     # Found by review (codex): the badge fix (F9) had no test at all.
     readme = SCRIPTS.parent / "README.md"
     readme_text = readme.read_text(encoding="utf-8")
