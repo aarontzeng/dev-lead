@@ -225,6 +225,13 @@ its operational mechanics: permission traps, silent failure modes, auth
 diagnosis, model catalogues. Every item in those files was paid for with a
 real incident, and each is dated so you can judge freshness.
 
+### Triage rules
+
+Alongside `scripts/roster.py`, `scripts/triage.py` validates machine-local
+`triage.json` rules, patrols Gerrit changes, and suggests a risk floor for
+planned paths. Its path globs treat `**` as crossing `/`, while `*` and `?`
+do not; a pattern with no `/` matches only the basename.
+
 The lead role is portable: all six CLIs can read the same skills directory,
 so a Codex or Gemini lead can follow the same playbook and delegate to
 Claude via `claude-implement`.

@@ -104,6 +104,10 @@ Refuse to dispatch until the task has:
      HIGH — but the plan's dated assessment said MEDIUM with reasons; the
      plan was right and delegation worked.)
 
+If a `triage.json` exists, run `"$DEV_LEAD/scripts/triage.py" scope --files <planned paths>`
+for a risk floor and lenses; it only raises. The tables still decide; record
+the suggestion next to the final decision in the run log.
+
 Survey the code yourself first — **premise-check the task's factual claims**.
 The measured incident: a task said "remove the duplicate query" about a query
 that was a deliberate safety re-check; the delegate faithfully removed it. A

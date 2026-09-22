@@ -1,0 +1,55 @@
+{
+  "_comment": [
+    "Copy this machine-local file beside roster.json, then replace every example value.",
+    "Glob semantics: ** matches any characters including /; * and ? do not cross /; a pattern without / matches the basename only."
+  ],
+  "version": 1,
+  "me": ["alice", "alice@example.com"],
+  "gerrit": {
+    "ssh": "alice@gerrit.example.com",
+    "port": 29418
+  },
+  "clones": {
+    "example-sdk": "/abs/path/to/example-sdk"
+  },
+  "gateways": {
+    "example-sdk": "alpha",
+    "example-fw": "beta"
+  },
+  "lens_classes": {
+    "consistency": "mechanical",
+    "falsifiability": "judgment"
+  },
+  "lenses": [
+    {
+      "glob": "docs/spec/*.md",
+      "lenses": ["consistency"],
+      "why": "Specifications need consistency checks."
+    }
+  ],
+  "delta_triggers": [
+    {
+      "glob": "docs/spec/*.md",
+      "added_regex": "Status.*Verified",
+      "risk": "HIGH",
+      "lenses": ["falsifiability"],
+      "flag": "status flip",
+      "why": "A verified-status assertion needs evidence."
+    }
+  ],
+  "risk_default": "MEDIUM",
+  "move_check": {
+    "naming": [
+      {
+        "glob": "docs/design/**",
+        "regex": "^docs/design/[a-z0-9-]+/[a-z0-9-]+-contract\\.md$"
+      }
+    ]
+  },
+  "small_delta_lines": 60,
+  "order": [
+    {"owner": "bob", "gateway": "alpha", "rank": 0},
+    {"gateway": "alpha", "rank": 1},
+    {"gateway": "beta", "rank": 2}
+  ]
+}

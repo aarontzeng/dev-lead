@@ -3778,6 +3778,242 @@ def test_roster(tmp):
           and "codex-openai-codex" not in got.stdout, got.stdout)
 
 
+def test_triage(tmp):
+    """Rule/config, patch-set delta, patrol, move, and scope contracts."""
+    import hashlib
+
+    triage = SCRIPTS / "triage.py"
+    check("triage.py exists", triage.is_file())
+    check("triage.py is executable", os.access(triage, os.X_OK))
+    check("triage.py shebang",
+          triage.read_text(encoding="utf-8").startswith("#!/usr/bin/env python3\n"))
+
+    repo = tmp / "example-sdk"
+    repo.mkdir()
+    git(repo, "init", "-q")
+    git(repo, "config", "user.email", "test@example.invalid")
+    git(repo, "config", "user.name", "Test")
+
+    def write(name, text):
+        target = repo / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(text, encoding="utf-8")
+
+    def commit(message):
+        git(repo, "add", "-A")
+        git(repo, "commit", "-qm", message)
+        return git(repo, "rev-parse", "HEAD").stdout.strip()
+
+    write("src/value.txt", "base\n")
+    write("unrelated.txt", "base\n")
+    write("links/ok.md", "ok\n")
+    base = commit("base")
+
+    roster_file = tmp / "roster.json"
+    _write_doc(roster_file, _live_roster())
+    config = {
+        "version": 1,
+        "me": ["alice", "alice@example.com"],
+        "gerrit": {"ssh": "alice@gerrit.example.com", "port": 29418},
+        "clones": {"example-sdk": str(repo)},
+        "gateways": {"example-sdk": "alpha", "example-fw": "beta"},
+        "lens_classes": {"consistency": "mechanical", "falsifiability": "judgment"},
+        "lenses": [{"glob": "docs/spec/*.md", "lenses": ["consistency"], "why": "spec"}],
+        "delta_triggers": [
+            {"glob": "docs/spec/*.md", "added_regex": "Status.*Verified", "risk": "HIGH",
+             "lenses": ["falsifiability"], "flag": "status flip", "why": "status"},
+            {"glob": "secure/**", "path_only": True, "risk": "HIGH",
+             "lenses": ["falsifiability"], "why": "secure path"},
+        ],
+        "risk_default": "MEDIUM",
+        "move_check": {"naming": []},
+        "small_delta_lines": 3,
+        "order": [{"owner": "bob", "gateway": "alpha", "rank": 0},
+                  {"gateway": "alpha", "rank": 1}, {"gateway": "beta", "rank": 2}],
+    }
+    config_file = tmp / "triage.json"
+    _write_doc(config_file, config)
+    env = _roster_env(tmp, DEV_LEAD_ROSTER=roster_file, DEV_LEAD_TRIAGE=config_file)
+
+    def checked(path):
+        return run(triage, "check", "--file", str(path), env=env)
+
+    def expect_bad(name, mutate, needle):
+        document = json.loads(json.dumps(config))
+        mutate(document)
+        path = tmp / (name + ".json")
+        _write_doc(path, document)
+        got = checked(path)
+        text = got.stdout + got.stderr
+        check("triage check: %s fails" % name, got.returncode == 1, text)
+        check("triage check: %s names the problem" % name, needle in text, text)
+
+    template = SCRIPTS.parent / "templates" / "triage.example.json"
+    got = checked(template)
+    check("triage check: template passes", got.returncode == 0 and got.stdout == "", got.stdout + got.stderr)
+    got = checked(config_file)
+    check("triage check: test config passes", got.returncode == 0 and got.stdout == "", got.stdout + got.stderr)
+    expect_bad("unknown-key", lambda doc: doc.update({"typo": 1}), "unknown key")
+    expect_bad("unknown-lens", lambda doc: doc["lenses"][0].update({"lenses": ["missing"]}), "unknown lens")
+    expect_bad("unknown-class", lambda doc: doc["lens_classes"].update({"consistency": "not-a-class"}), "by_lens")
+    expect_bad("bad-regex", lambda doc: doc["delta_triggers"][0].update({"added_regex": "["}), "invalid regex")
+    expect_bad("bad-risk", lambda doc: doc.update({"risk_default": "SEVERE"}), "LOW, MEDIUM, or HIGH")
+    expect_bad("empty-trigger", lambda doc: doc["delta_triggers"][0].pop("added_regex"), "needs added_regex")
+
+    init_file = tmp / "initial" / "triage.json"
+    init_env = _roster_env(tmp, DEV_LEAD_ROSTER=roster_file, DEV_LEAD_TRIAGE=init_file)
+    got = run(triage, "init", env=init_env)
+    check("triage init: writes the template", got.returncode == 0 and init_file.read_bytes() == template.read_bytes(), got.stdout + got.stderr)
+    got = run(triage, "init", env=init_env)
+    check("triage init: refuses a second write without --force", got.returncode == 1 and "already exists" in got.stdout, got.stdout)
+    got = run(triage, "init", "--force", env=init_env)
+    check("triage init: --force replaces the rules file", got.returncode == 0 and init_file.read_bytes() == template.read_bytes(), got.stdout + got.stderr)
+    missing_env = _roster_env(tmp, DEV_LEAD_ROSTER=roster_file, DEV_LEAD_TRIAGE=tmp / "missing.json")
+    got = run(triage, "scope", "--files", "docs/spec/new.md", env=missing_env)
+    check("triage config: an explicit missing DEV_LEAD_TRIAGE is an input error",
+          got.returncode == 2 and "file not found" in got.stderr, got.stdout + got.stderr)
+
+    def patch(number, revision, parent, *, kind="REWORK", approvals=None, created=10):
+        return {"number": number, "revision": revision, "parents": [parent], "kind": kind,
+                "createdOn": created, "uploader": {"username": "alice"},
+                "approvals": approvals or [], "files": [{"file": "src/value.txt", "type": "MODIFIED", "insertions": 1, "deletions": 1}]}
+
+    def approval(value, granted=20, who="alice"):
+        return {"type": "Code-Review", "value": value,
+                "by": {"username": who, "email": who + "@example.com"}, "grantedOn": granted}
+
+    def query(number, records, *, owner="bob", wip=False, comments=None, topic="series", depends=None, status="NEW", extra=None):
+        document = {"number": number, "project": "example-sdk",
+                    "owner": {"username": owner, "email": owner + "@example.com"},
+                    "wip": wip, "topic": topic, "status": status, "patchSets": records,
+                    "currentPatchSet": records[-1], "comments": comments or [], "dependsOn": depends or []}
+        if extra:
+            document.update(extra)
+        path = tmp / ("query-%s-%s.json" % (number, records[-1]["number"]))
+        path.write_text(json.dumps(document) + "\n" + json.dumps({"type": "stats", "rowCount": 1}) + "\n", encoding="utf-8")
+        return path
+
+    def changed(number, records, **kwargs):
+        got = run(triage, "change", str(number), "--query-json", query(number, records, **kwargs), env=env)
+        text = got.stdout + got.stderr
+        check("triage change: %s exits 0" % number, got.returncode == 0, text)
+        return json.loads(got.stdout) if got.returncode == 0 else {}
+
+    # A current vote is skippable until another reviewer sends a later message
+    # that identifies the reviewer; WIP has its own opt-in gate.
+    write("src/value.txt", "first\n")
+    ps1 = commit("ps1")
+    current_vote = patch(1, ps1, base, approvals=[approval("+1")])
+    result = changed(101, [current_vote], depends=[{"number": 9, "status": "NEW"}])
+    check("triage change: current vote skips", result.get("skip") is not None and result.get("legs") == "none", result)
+    result = changed(102, [current_vote], comments=[{"timestamp": 30, "reviewer": {"username": "bob"}, "message": "alice please revisit"}])
+    check("triage change: a later message naming me unskips", result.get("skip") is None, result)
+    result = changed(103, [current_vote], wip=True)
+    check("triage change: WIP skips without opt-in", result.get("skip", "").startswith("WIP"), result)
+    got = run(triage, "change", "103", "--query-json",
+              query(103, [patch(1, ps1, base)], wip=True), "--include-wip", env=env)
+    included = json.loads(got.stdout) if got.returncode == 0 else {}
+    check("triage change: --include-wip does not skip", got.returncode == 0 and included.get("skip") is None, got.stdout + got.stderr)
+
+    # A carry-over does not produce new lenses or risk depth.
+    write("src/value.txt", "rebased\n")
+    ps2 = commit("ps2")
+    result = changed(104, [patch(1, ps1, base, approvals=[approval("+1")]),
+                           patch(2, ps2, ps1, kind="TRIVIAL_REBASE")])
+    check("triage change: carry-over inherits and has no legs",
+          result.get("ps_kind") == "carry-over" and result.get("risk_floor") == "inherit" and result.get("legs") == "none", result)
+
+    # PS2 is rebased onto an unrelated parent, then carries a real edit. Its
+    # own patch exposes only the real edit, not the parent file.
+    git(repo, "checkout", "-q", "-B", "rebase-parent", base)
+    write("unrelated.txt", "parent-only\n")
+    parent2 = commit("parent change")
+    write("src/value.txt", "real edit\n")
+    rebased = commit("rebased ps")
+    result = changed(105, [patch(1, ps1, base, approvals=[approval("+1")]), patch(2, rebased, parent2)])
+    check("triage change: rebase excludes parent-only files", result.get("delta_files") == ["src/value.txt"], result)
+
+    # A pure move may change only the count of ../ in relative links. The
+    # move checks separately catch URL, link-resolution, and naming failures.
+    git(repo, "checkout", "-q", "-B", "moves", base)
+    move_text = "# move\n[ok](../../links/ok.md)\nhttps://same.example/item\n" + ("same\n" * 12)
+    write("docs/move/old.md", move_text)
+    move_old = commit("move old")
+    (repo / "docs/move/deep").mkdir(parents=True, exist_ok=True)
+    git(repo, "mv", "docs/move/old.md", "docs/move/deep/new.md")
+    write("docs/move/deep/new.md", move_text.replace("../../links", "../../../links"))
+    move_new = commit("move new")
+    result = changed(106, [patch(1, move_old, base, approvals=[approval("+1")]), patch(2, move_new, move_old)])
+    check("triage change: normalised relative-link move passes", result.get("ps_kind") == "move-only" and not result.get("flags"), result)
+
+    def bad_move(number, replace, naming=None):
+        git(repo, "checkout", "-q", "-B", "move-%s" % number, move_old)
+        (repo / "docs/move/deep").mkdir(parents=True, exist_ok=True)
+        git(repo, "mv", "docs/move/old.md", "docs/move/deep/new.md")
+        write("docs/move/deep/new.md", move_text.replace("../../links", "../../../links").replace(*replace))
+        revision = commit("bad move")
+        old_config = config["move_check"]
+        if naming is not None:
+            config["move_check"] = {"naming": naming}
+            _write_doc(config_file, config)
+        output = changed(number, [patch(1, move_old, base, approvals=[approval("+1")]), patch(2, revision, move_old)])
+        config["move_check"] = old_config
+        _write_doc(config_file, config)
+        return output
+
+    result = bad_move(107, ("https://same.example/item", "https://other.example/item"))
+    check("triage change: move URL failure is flagged", any("absolute URL" in flag for flag in result.get("flags", [])), result)
+    result = bad_move(108, ("../../../links/ok.md", "../../../links/missing.md"))
+    check("triage change: move relative-link failure is flagged", any("does not resolve" in flag for flag in result.get("flags", [])), result)
+    result = bad_move(109, ("docs/move/deep/new.md", "docs/move/deep/new.md"),
+                      [{"glob": "docs/move/**", "regex": "^docs/move/[a-z]+-contract\\.md$"}])
+    check("triage change: move naming failure is flagged", any("naming regex" in flag for flag in result.get("flags", [])), result)
+
+    # Trigger text is read from the patch delta, never from unchanged lines.
+    git(repo, "checkout", "-q", "-B", "trigger", base)
+    write("docs/spec/one.md", "Status Verified\nunchanged\n")
+    trigger_old = commit("trigger old")
+    write("docs/spec/one.md", "Status Verified\nreal ordinary edit\n")
+    trigger_plain = commit("trigger plain")
+    result = changed(110, [patch(1, trigger_old, base, approvals=[approval("+1")]), patch(2, trigger_plain, trigger_old)])
+    check("triage change: unchanged trigger text does not fire", result.get("risk_floor") == "MEDIUM" and "status flip" not in result.get("flags", []), result)
+    write("docs/spec/one.md", "Status Verified\nStatus Verified now\n")
+    trigger_high = commit("trigger high")
+    result = changed(111, [patch(1, trigger_old, base, approvals=[approval("+1")]), patch(2, trigger_high, trigger_old)])
+    check("triage change: added trigger text raises risk and adds lens",
+          result.get("risk_floor") == "HIGH" and "status flip" in result.get("flags", [])
+          and any(lens["name"] == "falsifiability" for lens in result.get("lenses", [])), result)
+
+    # A bounded rework is own-read; larger content returns the roster with the
+    # judgment opencode branch. An owner needs that roster after a negative vote.
+    git(repo, "checkout", "-q", "-B", "legs", trigger_old)
+    write("docs/spec/one.md", "Status Verified\nsmall\n")
+    small = commit("small")
+    result = changed(112, [patch(1, trigger_old, base, approvals=[approval("+1")]), patch(2, small, trigger_old)])
+    check("triage change: a small post-vote delta is own-read", result.get("legs") == "own-read", result)
+    write("docs/spec/one.md", "Status Verified\n" + ("Status Verified large\n" * 5))
+    large = commit("large")
+    result = changed(113, [patch(1, trigger_old, base, approvals=[approval("+1")]), patch(2, large, small)])
+    check("triage change: a large delta uses judgment roster legs",
+          result.get("legs") == "roster" and any(leg["adapter"] == "opencode" for leg in result.get("review_legs", [])), result)
+    owner_result = changed(114, [patch(1, large, small, approvals=[approval("-1", 30, "bob")], created=10)], owner="alice")
+    check("triage change: owner fix round uses roster", owner_result.get("legs") == "roster" and any(rule["rule"] == "owner-fix-round" for rule in owner_result.get("fired_rules", [])), owner_result)
+
+    result = changed(115, [patch(1, small, trigger_old)], depends=[{"number": 7, "status": "NEW"}, {"number": 8, "status": "MERGED"}])
+    check("triage change: order, ancestors, and topic are explicit",
+          result.get("order") == 0 and result.get("unmerged_ancestors") == [7]
+          and result.get("topic_members", {}).get("atomic") is False, result)
+    expected_hash = hashlib.sha256(config_file.read_bytes()).hexdigest()
+    check("triage change: rules carry config sha256", result.get("rules", {}).get("sha256") == expected_hash, result)
+
+    got = run(triage, "scope", "--files", "secure/credentials.py", env=env)
+    scoped = json.loads(got.stdout) if got.returncode == 0 else {}
+    check("triage scope: path-only HIGH suggests lead implementation",
+          got.returncode == 0 and scoped.get("risk_floor") == "HIGH"
+          and "lead implements directly" in scoped.get("suggestion", {}).get("implementer", "")
+          and scoped.get("note") == "suggestion only; the lead decides, and rules only raise", got.stdout + got.stderr)
+
+
 # ------------------------------------------------ line-ending renormalization ----
 
 
@@ -4056,6 +4292,10 @@ def main():
     print("roster.py config-effort (the consented config write)")
     with tempfile.TemporaryDirectory() as td:
         test_config_effort_write(Path(td))
+
+    print("triage.py")
+    with tempfile.TemporaryDirectory() as td:
+        test_triage(Path(td))
 
     print("lint.py check_version")
     with tempfile.TemporaryDirectory() as td:
