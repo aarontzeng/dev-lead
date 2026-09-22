@@ -22,6 +22,7 @@ ROOT_KEYS = {
     "lenses", "delta_triggers", "risk_default", "move_check",
     "small_delta_lines", "order",
 }
+EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 
 
 class InputError(Exception):
@@ -36,8 +37,23 @@ class Problems:
         self.errors.append("triage: %s: %s" % (path, message))
 
 
+def _is_comment_key(key):
+    return str(key).startswith("_comment")
+
+
 def public_keys(value):
-    return [key for key in value if not str(key).startswith("_")]
+    return [key for key in value if not _is_comment_key(key)]
+
+
+def _map_items(value, path, problems):
+    """Yield public map entries and reject reserved-looking non-comments."""
+    for key, item in value.items():
+        if _is_comment_key(key):
+            continue
+        if str(key).startswith("_"):
+            problems.error("%s.%s" % (path, key), "unknown key %r" % key)
+            continue
+        yield key, item
 
 
 def triage_path():
@@ -151,12 +167,10 @@ def validate(doc):
         if not isinstance(values, dict):
             problems.error(name, "must be an object")
             continue
-        for project, value in values.items():
-            if str(project).startswith("_"):
-                continue
+        for project, value in _map_items(values, name, problems):
             if not isinstance(project, str) or not project or not isinstance(value, str) or not value:
                 problems.error("%s.%s" % (name, project), "must map non-empty strings")
-            elif absolute and not os.path.isabs(value):
+            elif absolute and not os.path.isabs(os.path.expanduser(value)):
                 problems.error("%s.%s" % (name, project), "must be an absolute path")
     lens_classes = doc.get("lens_classes")
     roster_classes = _roster_lens_classes(problems)
@@ -164,9 +178,7 @@ def validate(doc):
         problems.error("lens_classes", "must be an object")
         lens_classes = {}
     else:
-        for lens, lens_class in lens_classes.items():
-            if str(lens).startswith("_"):
-                continue
+        for lens, lens_class in _map_items(lens_classes, "lens_classes", problems):
             if not isinstance(lens, str) or not lens or not isinstance(lens_class, str):
                 problems.error("lens_classes.%s" % lens, "lens and class must be non-empty strings")
             elif lens_class not in roster_classes:
@@ -278,21 +290,34 @@ def load_config(path):
     return doc, raw, path
 
 
-def rules_identity(doc, raw, path):
-    return {"version": doc["version"], "sha256": hashlib.sha256(raw).hexdigest(), "path": str(path)}
+def rules_identity(doc, raw, path, as_of_patch_set=None):
+    identity = {"version": doc["version"], "sha256": hashlib.sha256(raw).hexdigest(), "path": str(path)}
+    if as_of_patch_set is not None:
+        identity["as_of_patch_set"] = int(as_of_patch_set)
+    return identity
+
+
+def _decoded(value):
+    return value.decode("utf-8", errors="replace")
 
 
 def _git(repo, *args):
-    result = subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True)
+    try:
+        result = subprocess.run(["git", "-C", str(repo), *args], capture_output=True)
+    except OSError as exc:
+        raise InputError("git: %s" % exc)
     if result.returncode:
-        message = result.stderr.strip() or result.stdout.strip() or "git failed"
+        message = _decoded(result.stderr).strip() or _decoded(result.stdout).strip() or "git failed"
         raise InputError("git: %s" % message)
-    return result.stdout
+    return _decoded(result.stdout)
 
 
 def _object_exists(repo, revision):
-    result = subprocess.run(["git", "-C", str(repo), "cat-file", "-e", revision + "^{commit}"],
-                            capture_output=True, text=True)
+    try:
+        result = subprocess.run(["git", "-C", str(repo), "cat-file", "-e", revision + "^{commit}"],
+                                capture_output=True)
+    except OSError as exc:
+        raise InputError("git: %s" % exc)
     return result.returncode == 0
 
 
@@ -333,7 +358,7 @@ def _number(value):
     return str(value.get("number") if isinstance(value, dict) else value)
 
 
-def _patch_sets(change):
+def _patch_sets(change, as_of=None):
     entries = change.get("patchSets") or []
     if not isinstance(entries, list):
         raise InputError("change: patchSets must be a list")
@@ -344,12 +369,29 @@ def _patch_sets(change):
     unique = {}
     for entry in entries:
         if isinstance(entry, dict) and entry.get("number") is not None:
-            unique[_number(entry)] = entry
+            number = _number(entry)
+            if number not in unique:
+                unique[number] = dict(entry)
+            else:
+                # Gerrit repeats currentPatchSet with overlapping data. Keep
+                # the patchSets entry authoritative and fill only its gaps.
+                for key, value in entry.items():
+                    if key not in unique[number]:
+                        unique[number][key] = value
     if current_number is None:
         current_number = max(unique, key=lambda item: int(item)) if unique else None
+    if as_of is not None:
+        try:
+            current_number = str(int(as_of))
+        except (TypeError, ValueError):
+            raise InputError("change: --as-of-ps must be a patch set number")
+        if current_number not in unique:
+            raise InputError("change: patch set %s is missing from patchSets" % current_number)
+        unique = {key: value for key, value in unique.items() if int(key) <= int(current_number)}
     if not current_number or current_number not in unique:
         raise InputError("change: current patch set is missing from patchSets")
     change["patchSets"] = list(unique.values())
+    change["currentPatchSet"] = unique[current_number]
     return unique, unique[current_number]
 
 
@@ -361,7 +403,48 @@ def _parent(repo, patch_set):
             parent = parent.get("id") or parent.get("revision") or parent.get("commit")
         if isinstance(parent, str) and parent:
             return parent
-    return _git(repo, "rev-parse", patch_set["revision"] + "^").strip()
+    revision = patch_set.get("revision")
+    if not revision:
+        raise InputError("change: patch set has no revision")
+    parents = _git(repo, "rev-list", "--parents", "-n", "1", revision).strip().split()
+    return parents[1] if len(parents) > 1 else EMPTY_TREE
+
+
+def _status_kind(entry):
+    status = entry.get("status", "") if isinstance(entry, dict) else ""
+    return status[:1]
+
+
+def _paths_for(entry):
+    paths = [entry["old"]]
+    if entry["new"] != entry["old"]:
+        paths.append(entry["new"])
+    return paths
+
+
+def _hunk_lines(patch):
+    """Return only content lines, preserving CR bytes before each newline."""
+    lines, in_hunk = [], False
+    for raw_line in patch.splitlines(keepends=True):
+        line = raw_line[:-1] if raw_line.endswith("\n") else raw_line
+        if line.startswith("diff --git "):
+            in_hunk = False
+            continue
+        if not in_hunk:
+            if line.startswith("@@"):
+                in_hunk = True
+            continue
+        if line.startswith("\\ No newline at end of file"):
+            continue
+        lines.append(line)
+    return lines
+
+
+def _patch_lines(patch):
+    useful = _hunk_lines(patch)
+    added = [line[1:] for line in useful if line.startswith("+")]
+    removed = [line[1:] for line in useful if line.startswith("-")]
+    return useful, added, removed
 
 
 def _diff_entries(repo, parent, revision):
@@ -373,7 +456,7 @@ def _diff_entries(repo, parent, revision):
         index += 1
         if not status:
             continue
-        if status[0] in ("R", "C"):
+        if status[0] == "R":
             old, new = fields[index], fields[index + 1]
             index += 2
         else:
@@ -381,13 +464,12 @@ def _diff_entries(repo, parent, revision):
             index += 1
         if new in ("/COMMIT_MSG", "/MERGE_LIST", "COMMIT_MSG", "MERGE_LIST"):
             continue
-        patch = _git(repo, "diff", "--no-ext-diff", "--unified=0", "--format=", parent, revision, "--", new)
-        useful = [line for line in patch.splitlines()
-                  if not line.startswith(("index ", "@@", "diff --git ", "--- ", "+++ "))]
-        added = [line[1:] for line in useful if line.startswith("+") and not line.startswith("+++")]
-        removed = [line[1:] for line in useful if line.startswith("-") and not line.startswith("---")]
+        patch = _git(repo, "--literal-pathspecs", "diff", "--no-ext-diff", "--find-renames",
+                     "--unified=0", "--format=", parent, revision, "--", *_paths_for({"old": old, "new": new}))
+        useful, added, removed = _patch_lines(patch)
         entries.append({"status": status, "old": old, "new": new,
-                        "signature": "\n".join(useful), "added": added, "removed": removed})
+                        "signature": "\n".join(useful), "added": added, "removed": removed,
+                        "binary": "Binary files " in patch})
     return entries
 
 
@@ -399,7 +481,7 @@ def _delta(previous, current):
         before = previous_by_path.get(entry["new"]) or previous_by_path.get(entry["old"])
         if before is not None:
             matched_previous.add(before["new"])
-        if before is None or before["signature"] != entry["signature"] or before["status"] != entry["status"]:
+        if before is None or before["signature"] != entry["signature"] or _status_kind(before) != _status_kind(entry):
             chosen.append(entry)
             pairs.append((before, entry))
     # A patch can drop a previous patch set's direct change entirely.  There is
@@ -414,12 +496,19 @@ def _delta(previous, current):
     return chosen, pairs
 
 
+def _add_line_data(data, path, added, removed):
+    current_added, current_removed = data.setdefault(path, ([], []))
+    current_added.extend(added)
+    current_removed.extend(removed)
+
+
 def _delta_lines(pairs):
-    added, removed = [], []
+    data = {}
     for before, after in pairs:
         old_added = Counter(before["added"] if before else [])
         old_removed = Counter(before["removed"] if before else [])
         new_added, new_removed = Counter(after["added"]), Counter(after["removed"])
+        added, removed = [], []
         for line, count in (new_added - old_added).items():
             added.extend([line] * count)
         for line, count in (new_removed - old_removed).items():
@@ -428,47 +517,122 @@ def _delta_lines(pairs):
             removed.extend([line] * count)
         for line, count in (old_removed - new_removed).items():
             added.extend([line] * count)
-    return added, removed
+        _add_line_data(data, (after or before)["new"], added, removed)
+    return data
 
 
-def _between_lines(repo, before_revision, after_revision, entries):
+def _between_lines(repo, before_revision, after_revision, entries, moves=()):
     """Actual hunk lines between two patch sets, limited to their delta files.
 
     Comparing each patch-set's *patch* identifies the files that matter, but a
     line first added by the earlier patch set becomes context in the later one.
     It is not thereby removed from the review delta.  Diffing the two resulting
     trees gives the hunk lines that actually changed between those reviews.
+    A file moved between the two trees is diffed as its rename pair: removed
+    lines belong to the old path, added lines to the new one.
     """
-    paths = [entry["new"] for entry in entries]
-    if not paths:
-        return [], []
-    patch = _git(repo, "diff", "--no-ext-diff", "--unified=0", "--format=",
-                 before_revision, after_revision, "--", *paths)
-    added, removed = [], []
-    for line in patch.splitlines():
-        if line.startswith("+++") or line.startswith("---"):
-            continue
-        if line.startswith("+"):
-            added.append(line[1:])
-        elif line.startswith("-"):
-            removed.append(line[1:])
-    return added, removed
+    moved = {}
+    for pair in moves:
+        moved[pair["old"]] = moved[pair["new"]] = pair
+    data, done = {}, set()
+    for entry in entries:
+        pair = next((moved[path] for path in _paths_for(entry) if path in moved), None)
+        if pair is not None:
+            if id(pair) in done:
+                continue
+            done.add(id(pair))
+            paths, removed_at, added_at = _paths_for(pair), pair["old"], pair["new"]
+        else:
+            paths, removed_at, added_at = _paths_for(entry), entry["new"], entry["new"]
+        patch = _git(repo, "--literal-pathspecs", "diff", "--no-ext-diff", "--find-renames",
+                     "--unified=0", "--format=", before_revision, after_revision, "--", *paths)
+        _useful, added, removed = _patch_lines(patch)
+        _add_line_data(data, removed_at, [], removed)
+        _add_line_data(data, added_at, added, [])
+    return data
 
 
 def _tree_text(repo, revision, path):
-    result = subprocess.run(["git", "-C", str(repo), "show", "%s:%s" % (revision, path)],
-                            capture_output=True, text=True)
+    try:
+        result = subprocess.run(["git", "-C", str(repo), "show", "%s:%s" % (revision, path)],
+                                capture_output=True)
+    except OSError as exc:
+        raise InputError("git: %s" % exc)
     if result.returncode:
-        return None
-    return result.stdout
+        message = _decoded(result.stderr).strip() or _decoded(result.stdout).strip()
+        if "does not exist in" in message:
+            return None
+        raise InputError("git: %s" % (message or "git show failed"))
+    return _decoded(result.stdout)
 
 
 def _tree_has(repo, revision, path):
     return _tree_text(repo, revision, path) is not None
 
 
-URL = re.compile(r"https?://[^\s)\]>]+")
+URL = re.compile(r"https?://[^\s<>()\[\]\"']+")
 MARKDOWN_LINK = re.compile(r"\]\(([^)]+)\)")
+
+
+def _without_inline_code(line):
+    kept, index = [], 0
+    while True:
+        start = line.find("`", index)
+        if start < 0:
+            kept.append(line[index:])
+            return "".join(kept)
+        kept.append(line[index:start])
+        end_marker = start
+        while end_marker < len(line) and line[end_marker] == "`":
+            end_marker += 1
+        marker = line[start:end_marker]
+        end = line.find(marker, end_marker)
+        if end < 0:
+            kept.append(line[start:])
+            return "".join(kept)
+        index = end + len(marker)
+
+
+def _visible_markdown(text):
+    """Drop fenced blocks and inline code before extracting links or URLs."""
+    lines, fenced, marker = [], False, None
+    for raw_line in text.splitlines(keepends=True):
+        line = raw_line[:-1] if raw_line.endswith("\n") else raw_line
+        start = re.match(r"^\s*(`{3,}|~{3,})", line)
+        if start:
+            token = start.group(1)
+            if not fenced:
+                fenced, marker = True, token[0]
+            elif token[0] == marker:
+                fenced, marker = False, None
+            continue
+        if not fenced:
+            lines.append(_without_inline_code(line))
+    return "\n".join(lines)
+
+
+def _urls(text):
+    found = set()
+    for value in URL.findall(_visible_markdown(text)):
+        value = value.rstrip(".,;:!?)]}>\"'")
+        if value:
+            found.add(value)
+    return found
+
+
+def _relative_targets(text):
+    for target in MARKDOWN_LINK.findall(_visible_markdown(text)):
+        target = target.strip()
+        if target.startswith("<"):
+            closing = target.find(">")
+            target = target[1:closing] if closing >= 0 else target[1:]
+        else:
+            target = re.split(r"\s+(?=[\"'])", target, maxsplit=1)[0]
+        if not target or target.startswith("#") or re.match(r"[A-Za-z][A-Za-z0-9+.-]*:", target):
+            continue
+        target = target.split("#", 1)[0].split("?", 1)[0]
+        if target:
+            yield target
 
 
 def _move_checks(config, repo, previous_revision, current_revision, entries):
@@ -483,13 +647,12 @@ def _move_checks(config, repo, previous_revision, current_revision, entries):
         normalise = lambda text: re.sub(r"(\.\./)+", "../", text)
         if normalise(old_text) != normalise(new_text):
             flags.append("%s: content differs after relative-link-depth normalisation" % entry["new"])
-        if set(URL.findall(old_text)) != set(URL.findall(new_text)):
-            flags.append("%s: absolute URL set changed" % entry["new"])
-        for target in MARKDOWN_LINK.findall(new_text):
-            target = target.strip().strip("<>")
-            if not target or target.startswith("#") or re.match(r"[A-Za-z][A-Za-z0-9+.-]*:", target):
-                continue
-            target = target.split("#", 1)[0]
+        old_urls, new_urls = _urls(old_text), _urls(new_text)
+        if old_urls != new_urls:
+            added, removed = sorted(new_urls - old_urls), sorted(old_urls - new_urls)
+            flags.append("%s: absolute URLs changed (added: %s; removed: %s)" %
+                         (entry["new"], ", ".join(added) or "none", ", ".join(removed) or "none"))
+        for target in _relative_targets(new_text):
             resolved = posixpath.normpath(posixpath.join(posixpath.dirname(entry["new"]), target))
             if not _tree_has(repo, current_revision, resolved):
                 flags.append("%s: relative link %s does not resolve" % (entry["new"], target))
@@ -497,6 +660,41 @@ def _move_checks(config, repo, previous_revision, current_revision, entries):
             if glob_matches(rule["glob"], entry["new"]) and not re.fullmatch(rule["regex"], entry["new"]):
                 flags.append("%s: naming regex does not match" % entry["new"])
     return flags
+
+
+def _tree_renames(repo, previous_revision, current_revision, entries):
+    """Rename pairs between the two patch-set TREES, and whether they are all of it.
+
+    Gerrit patch sets are amends of one another on the same base, so a file
+    moved between them is "added at A" in one patch set's own diff and "added
+    at B" in the next: the per-patch-set entries never show a rename. Diffing
+    the two trees over the delta's paths lets git pair A with B. The pairs are
+    returned even when other files changed too, so a move inside a rework is
+    still counted and checked as a move.
+    """
+    paths = []
+    for entry in entries:
+        for path in _paths_for(entry):
+            if path not in paths:
+                paths.append(path)
+    if not paths:
+        return [], False
+    raw = _git(repo, "--literal-pathspecs", "diff", "--no-ext-diff", "--find-renames",
+               "--name-status", "-z", previous_revision, current_revision, "--", *paths)
+    fields = raw.split("\0")
+    pairs, only_renames, index = [], True, 0
+    while index < len(fields) - 1:
+        status = fields[index]
+        index += 1
+        if not status:
+            continue
+        if status[0] == "R":
+            pairs.append({"status": status, "old": fields[index], "new": fields[index + 1]})
+            index += 2
+        else:
+            only_renames = False
+            index += 1
+    return pairs, only_renames and bool(pairs)
 
 
 def _is_move_only(repo, previous_revision, current_revision, entries):
@@ -531,10 +729,12 @@ def _lenses_and_triggers(config, files, delta_lines, fired, *, path_only=False):
         paths = [path for path in files if glob_matches(rule["glob"], path)]
         if not paths:
             continue
-        fires = rule.get("path_only") is True if path_only else False
+        fires = rule.get("path_only") is True
         if not path_only and "added_regex" in rule:
             compiled = re.compile(rule["added_regex"])
-            fires = any(compiled.search(line) for line in delta_lines[0] + delta_lines[1])
+            fires = fires or any(compiled.search(line)
+                                for matched_path in paths
+                                for line in sum(delta_lines.get(matched_path, ([], [])), []))
         if not fires:
             continue
         raised = max(raised, rule["risk"], key=lambda item: RISK_VALUE[item])
@@ -577,34 +777,42 @@ def _review_legs(lens_classes):
     return resolved, wanted
 
 
-def _query(config, number, query_json):
-    def rows_from(text):
-        rows = []
-        for line in text.splitlines():
-            if not line.strip():
-                continue
-            try:
-                row = json.loads(line)
-            except json.JSONDecodeError as exc:
-                raise InputError("query JSON: invalid JSON: %s" % exc)
-            if row.get("type") != "stats":
-                rows.append(row)
-        return rows
+def _rows_from(text):
+    rows = []
+    for line in text.splitlines():
+        if not line.strip():
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise InputError("query JSON: invalid JSON: %s" % exc)
+        if row.get("type") != "stats":
+            rows.append(row)
+    return rows
 
+
+def _gerrit_rows(config, *query):
+    command = ["ssh", "-p", str(config["gerrit"]["port"]), config["gerrit"]["ssh"],
+               "gerrit", "query", "--format=JSON", *query]
+    try:
+        result = subprocess.run(command, capture_output=True, text=True)
+    except OSError as exc:
+        raise InputError("gerrit query: %s" % exc)
+    if result.returncode:
+        raise InputError("gerrit query: %s" % (result.stderr.strip() or result.stdout.strip()))
+    return _rows_from(result.stdout)
+
+
+def _query(config, number, query_json):
     if query_json:
         try:
             text = Path(query_json).read_text(encoding="utf-8")
         except OSError as exc:
             raise InputError("query JSON: %s" % exc)
-        rows = rows_from(text)
+        rows = _rows_from(text)
     else:
-        command = ["ssh", "-p", str(config["gerrit"]["port"]), config["gerrit"]["ssh"],
-                   "gerrit", "query", "--format=JSON", "--current-patch-set", "--patch-sets",
-                   "--files", "--all-approvals", "--comments", "--dependencies", "change:%s" % number]
-        result = subprocess.run(command, capture_output=True, text=True)
-        if result.returncode:
-            raise InputError("gerrit query: %s" % (result.stderr.strip() or result.stdout.strip()))
-        rows = rows_from(result.stdout)
+        rows = _gerrit_rows(config, "--current-patch-set", "--patch-sets", "--files",
+                            "--all-approvals", "--comments", "--dependencies", "change:%s" % number)
     wanted = str(number)
     for row in rows:
         if str(row.get("number")) == wanted:
@@ -613,14 +821,15 @@ def _query(config, number, query_json):
     else:
         raise InputError("query JSON: change %s not found" % number)
     if not query_json and change.get("topic"):
-        topic_command = ["ssh", "-p", str(config["gerrit"]["port"]), config["gerrit"]["ssh"],
-                         "gerrit", "query", "--format=JSON", "--current-patch-set",
-                         "topic:%s" % change["topic"]]
-        result = subprocess.run(topic_command, capture_output=True, text=True)
-        if result.returncode:
-            raise InputError("gerrit topic query: %s" % (result.stderr.strip() or result.stdout.strip()))
-        rows += rows_from(result.stdout)
+        rows += _gerrit_rows(config, "--current-patch-set", "topic:%s" % change["topic"])
     return change, rows
+
+
+def _approval_value(approval):
+    try:
+        return int(str(approval.get("value")).strip())
+    except (AttributeError, TypeError, ValueError):
+        return None
 
 
 def _last_vote(change, identifiers):
@@ -632,14 +841,118 @@ def _last_vote(change, identifiers):
     if not found:
         return None, None, None
     _when, patch_set, approval = max(found, key=lambda item: _time(item[0]))
+    if _approval_value(approval) in (None, 0):
+        return None, None, None
     return patch_set, approval, {"ps": int(patch_set["number"]), "value": approval.get("value")}
 
 
-def triage_change(config, raw, path, number, query_json, include_wip):
+def _at_or_after(left, right):
+    try:
+        return _time(left) >= _time(right)
+    except TypeError:
+        return str(left) >= str(right)
+
+
+def _as_of_cutoff(change, as_of, identifiers):
+    """The moment just before I acted on patch set N.
+
+    That is the earlier of patch set N+1's upload and my first vote or message
+    on patch set N: a replay must see the change as the patrol did before
+    reading it, not the vote I cast after reading it. For a change I own (I
+    do not vote on it) this leaves the N+1 upload, so reviewers' votes on N
+    still count.
+    """
+    if as_of is None:
+        return None
+    try:
+        number = str(int(as_of))
+        next_number = str(int(as_of) + 1)
+    except (TypeError, ValueError):
+        raise InputError("change: --as-of-ps must be a patch set number")
+    entries = list(change.get("patchSets") or [])
+    if isinstance(change.get("currentPatchSet"), dict):
+        entries.append(change["currentPatchSet"])
+    candidates, created = [], None
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        if _number(entry) == next_number and "createdOn" in entry:
+            candidates.append(entry["createdOn"])
+        if _number(entry) == number:
+            created = entry.get("createdOn", created)
+            candidates.extend(approval.get("grantedOn", 0) for approval in entry.get("approvals") or []
+                              if _identity_matches(approval.get("by"), identifiers))
+    if created is not None:
+        candidates.extend(comment.get("timestamp", 0) for comment in change.get("comments") or []
+                          if _identity_matches(comment.get("reviewer"), identifiers)
+                          and _at_or_after(comment.get("timestamp", 0), created))
+    return min(candidates, key=_time) if candidates else None
+
+
+def _limit_to_as_of(change, patch_sets, cutoff):
+    if cutoff is None:
+        return
+    for patch_set in patch_sets.values():
+        patch_set["approvals"] = [
+            approval for approval in patch_set.get("approvals") or []
+            if not _at_or_after(approval.get("grantedOn", 0), cutoff)
+        ]
+    change["comments"] = [
+        comment for comment in change.get("comments") or []
+        if not _at_or_after(comment.get("timestamp", 0), cutoff)
+    ]
+
+
+def _order(config, owner, gateway, fired):
+    for index, rule in enumerate(config["order"]):
+        if ("owner" in rule and rule["owner"] not in (owner.get("username"), owner.get("email"))) or (
+                "gateway" in rule and rule["gateway"] != gateway):
+            continue
+        _fired(fired, "order[%s]" % index, "matched rank %s" % rule["rank"])
+        return rule["rank"]
+    _fired(fired, "order", "no order rule matched; rank 99")
+    return 99
+
+
+def _ancestor_lists(config, change, rows, query_json):
+    by_number = {str(row.get("number")): row for row in rows if isinstance(row, dict) and row.get("number") is not None}
+    unmerged, unknown = [], []
+    for dependency in change.get("dependsOn") or []:
+        if not isinstance(dependency, dict) or dependency.get("number") is None:
+            continue
+        number = dependency["number"]
+        status = dependency.get("status")
+        if status is None:
+            row = by_number.get(str(number))
+            if row is None and not query_json:
+                found = _gerrit_rows(config, "change:%s" % number)
+                row = next((item for item in found if str(item.get("number")) == str(number)), None)
+            status = row.get("status") if isinstance(row, dict) else None
+        if status is None:
+            unknown.append(number)
+        elif status != "MERGED":
+            unmerged.append(number)
+    return unmerged, unknown
+
+
+def _topic_members(change, all_changes):
+    topic, members = change.get("topic"), []
+    for row in all_changes:
+        member = row.get("number")
+        if topic and row.get("topic") == topic and member is not None and member not in members:
+            members.append(member)
+    return topic, members
+
+
+def _line_count(line_data):
+    return sum(len(added) + len(removed) for added, removed in line_data.values())
+
+
+def triage_change(config, raw, path, number, query_json, include_wip, as_of=None):
     change, all_changes = _query(config, number, query_json)
-    patch_sets, current = _patch_sets(change)
-    current_spec = change.get("currentPatchSet")
-    current["revision"] = current.get("revision") or (current_spec.get("revision") if isinstance(current_spec, dict) else None)
+    cutoff = _as_of_cutoff(change, as_of, set(config["me"]))
+    patch_sets, current = _patch_sets(change, as_of)
+    _limit_to_as_of(change, patch_sets, cutoff)
     if not current.get("revision"):
         raise InputError("change: current patch set has no revision")
     identifiers = set(config["me"])
@@ -647,28 +960,36 @@ def triage_change(config, raw, path, number, query_json, include_wip):
     gateway = config["gateways"].get(project)
     role = "owner" if _identity_matches(change.get("owner"), identifiers) else "reviewer"
     voted_set, vote, vote_summary = _last_vote(change, identifiers)
-    fired, flags = [], []
+    fired = []
     if gateway is None:
         _fired(fired, "gateway", "unknown project %s" % project)
     _fired(fired, "role", "%s is %s" % (project, role))
     wip = bool(change.get("wip"))
     current_vote = vote_summary is not None and str(vote_summary["ps"]) == str(current["number"])
-    mentioned_after_vote = False
-    if vote:
-        for comment in change.get("comments") or []:
-            if (_after(comment.get("timestamp", 0), vote.get("grantedOn", 0))
-                    and not _identity_matches(comment.get("reviewer"), identifiers)
-                    and any(identifier in comment.get("message", "") for identifier in identifiers)):
-                mentioned_after_vote = True
+    mentioned_after_vote = any(
+        _after(comment.get("timestamp", 0), vote.get("grantedOn", 0))
+        and not _identity_matches(comment.get("reviewer"), identifiers)
+        and any(identifier in comment.get("message", "") for identifier in identifiers)
+        for comment in change.get("comments") or []
+    ) if vote else False
     owner_fix = False
     if role == "owner":
-        upload_time = current.get("createdOn", 0)
-        negatives = [approval for approval in current.get("approvals") or []
-                     if approval.get("type") == "Code-Review" and int(approval.get("value", 0)) < 0
-                     and _after(approval.get("grantedOn", 0), upload_time)]
-        comments = [comment for comment in change.get("comments") or []
-                    if not _identity_matches(comment.get("reviewer"), identifiers)
-                    and _after(comment.get("timestamp", 0), upload_time)]
+        uploads = [patch_set for patch_set in patch_sets.values()
+                   if _identity_matches(patch_set.get("uploader"), identifiers)]
+        upload = max(uploads, key=lambda patch_set: _time(patch_set.get("createdOn", 0))) if uploads else current
+        upload_time = upload.get("createdOn", 0)
+        negatives = [
+            approval for approval in current.get("approvals") or []
+            if approval.get("type") == "Code-Review"
+            and not _identity_matches(approval.get("by"), identifiers)
+            and (_approval_value(approval) or 0) < 0
+            and _after(approval.get("grantedOn", 0), upload_time)
+        ]
+        comments = [
+            comment for comment in change.get("comments") or []
+            if not _identity_matches(comment.get("reviewer"), identifiers)
+            and _after(comment.get("timestamp", 0), upload_time)
+        ]
         owner_fix = bool(negatives or comments)
         if owner_fix:
             _fired(fired, "owner-fix-round", "owner received a negative vote or comment after the last upload")
@@ -680,102 +1001,104 @@ def triage_change(config, raw, path, number, query_json, include_wip):
             skip = "my Code-Review vote is on the current patch set with no later message naming me"
     if skip:
         _fired(fired, "skip", skip)
+    rank = _order(config, change.get("owner") or {}, gateway, fired)
+    ancestors, unknown_ancestors = _ancestor_lists(config, change, all_changes, query_json)
+    topic, members = _topic_members(change, all_changes)
+    identity = rules_identity(config, raw, path, current["number"] if as_of is not None else None)
+    common = {
+        "rules": identity, "change": change.get("number", number), "project": project, "gateway": gateway,
+        "role": role, "my_last_vote": vote_summary, "wip": wip, "skip": skip,
+        "unmerged_ancestors": ancestors, "unknown_ancestors": unknown_ancestors,
+        "topic_members": {"topic": topic, "changes": members, "atomic": False}, "order": rank,
+    }
+    if as_of is not None:
+        common["as_of_patch_set"] = int(current["number"])
+    if skip:
+        _fired(fired, "legs", "no legs for skip")
+        common.update({"ps_kind": None, "delta_files": None, "lenses": None, "risk_floor": None,
+                       "legs": "none", "review_legs": [], "flags": None, "fired_rules": fired})
+        return common
     clone = config["clones"].get(project)
     if not clone:
         raise InputError("triage: clones has no clone for project %s" % project)
-    repo = Path(clone)
+    repo = Path(os.path.expanduser(clone))
     if not repo.is_dir():
         raise InputError("triage: clone for %s does not exist: %s" % (project, repo))
     _ensure_revision(repo, number, current["number"], current["revision"])
     current_parent = _parent(repo, current)
+    if current_parent != EMPTY_TREE:
+        _ensure_revision(repo, number, current["number"], current_parent)
     current_entries = _diff_entries(repo, current_parent, current["revision"])
     prior = voted_set if voted_set and str(voted_set["number"]) != str(current["number"]) else None
     if prior:
         if not prior.get("revision"):
             raise InputError("change: voted patch set has no revision")
         _ensure_revision(repo, number, prior["number"], prior["revision"])
-        previous_entries = _diff_entries(repo, _parent(repo, prior), prior["revision"])
+        prior_parent = _parent(repo, prior)
+        if prior_parent != EMPTY_TREE:
+            _ensure_revision(repo, number, prior["number"], prior_parent)
+        previous_entries = _diff_entries(repo, prior_parent, prior["revision"])
         delta_entries, pairs = _delta(previous_entries, current_entries)
-        delta_line_data = _between_lines(repo, prior["revision"], current["revision"], delta_entries)
+        moves, only_moves = _tree_renames(repo, prior["revision"], current["revision"], delta_entries)
+        delta_line_data = _between_lines(repo, prior["revision"], current["revision"], delta_entries, moves)
     else:
         delta_entries, pairs = current_entries, [(None, entry) for entry in current_entries]
+        moves, only_moves = [], False
         delta_line_data = _delta_lines(pairs)
     files = [entry["new"] for entry in delta_entries]
+    flags = ["%s: binary" % entry["new"] for entry in delta_entries if entry.get("binary")]
     kinds = {"TRIVIAL_REBASE", "NO_CODE_CHANGE", "NO_CHANGE"}
-    if current.get("kind") in kinds:
-        ps_kind = "carry-over"
-    elif role == "reviewer" and voted_set is None:
+    if role == "reviewer" and voted_set is None:
         ps_kind = "new"
-    elif prior and _is_move_only(repo, prior["revision"], current["revision"], delta_entries):
-        ps_kind = "move-only"
-        flags.extend(_move_checks(config, repo, prior["revision"], current["revision"], delta_entries))
+    elif current.get("kind") in kinds:
+        ps_kind = "carry-over"
     else:
-        ps_kind = "rework"
-        if prior and delta_entries and all(entry["status"].startswith("R") for entry in delta_entries):
-            flags.extend(_move_checks(config, repo, prior["revision"], current["revision"], delta_entries))
+        if only_moves and _is_move_only(repo, prior["revision"], current["revision"], moves):
+            ps_kind = "move-only"
+            flags.extend(_move_checks(config, repo, prior["revision"], current["revision"], moves))
+        else:
+            ps_kind = "rework"
+            if moves:
+                flags.extend(_move_checks(config, repo, prior["revision"], current["revision"], moves))
     _fired(fired, "ps-kind", "patch set is %s" % ps_kind)
     if ps_kind in ("carry-over", "move-only"):
         lenses, risk_floor = [], "inherit"
     else:
         lenses, risk_floor, trigger_flags = _lenses_and_triggers(config, files, delta_line_data, fired)
         flags.extend(trigger_flags)
-    if skip or ps_kind in ("carry-over", "move-only"):
-        legs, review_legs = "none", []
-        _fired(fired, "legs", "no legs for skip, carry-over, or move-only")
-    elif owner_fix:
+    if owner_fix:
         legs, review_legs = "roster", _review_legs({lens["class"] for lens in lenses})[0]
         _fired(fired, "legs", "owner fix round uses the roster")
+    elif ps_kind in ("carry-over", "move-only"):
+        legs, review_legs = "none", []
+        _fired(fired, "legs", "no legs for carry-over or move-only")
+    elif prior and _line_count(delta_line_data) <= config["small_delta_lines"]:
+        legs, review_legs = "own-read", []
+        _fired(fired, "legs", "small delta (%s lines) after my vote uses own-read" % _line_count(delta_line_data))
     else:
-        line_count = len(delta_line_data[0]) + len(delta_line_data[1])
-        if prior and line_count <= config["small_delta_lines"]:
-            legs, review_legs = "own-read", []
-            _fired(fired, "legs", "small delta (%s lines) after my vote uses own-read" % line_count)
-        else:
-            review_legs, selected_lens = _review_legs({lens["class"] for lens in lenses})
-            legs = "roster"
-            _fired(fired, "legs", "roster review legs selected (opencode %s)" % selected_lens)
-    owner = change.get("owner") or {}
-    rank = 99
-    for index, rule in enumerate(config["order"]):
-        if ("owner" in rule and rule["owner"] not in (owner.get("username"), owner.get("email"))) or ("gateway" in rule and rule["gateway"] != gateway):
-            continue
-        rank = rule["rank"]
-        _fired(fired, "order[%s]" % index, "matched rank %s" % rank)
-        break
-    else:
-        _fired(fired, "order", "no order rule matched; rank 99")
-    dependencies = change.get("dependsOn") or []
-    ancestors = [dependency.get("number") for dependency in dependencies if isinstance(dependency, dict)
-                 and dependency.get("status") != "MERGED" and dependency.get("number") is not None]
-    topic = change.get("topic")
-    members = []
-    for row in all_changes:
-        member = row.get("number")
-        if topic and row.get("topic") == topic and member is not None and member not in members:
-            members.append(member)
-    return {
-        "rules": rules_identity(config, raw, path), "change": change.get("number", number),
-        "project": project, "gateway": gateway, "role": role, "my_last_vote": vote_summary,
-        "wip": wip, "skip": skip, "ps_kind": ps_kind, "delta_files": files, "lenses": lenses,
-        "risk_floor": risk_floor, "legs": legs, "review_legs": review_legs, "flags": flags,
-        "unmerged_ancestors": ancestors,
-        "topic_members": {"topic": topic, "changes": members, "atomic": False},
-        "order": rank, "fired_rules": fired,
-    }
+        review_legs, selected_lens = _review_legs({lens["class"] for lens in lenses})
+        legs = "roster"
+        _fired(fired, "legs", "roster review legs selected (opencode %s; delta %s lines)"
+               % (selected_lens, _line_count(delta_line_data)))
+    common.update({
+        "ps_kind": ps_kind, "delta_files": files, "lenses": lenses, "risk_floor": risk_floor,
+        "legs": legs, "review_legs": review_legs, "flags": flags, "fired_rules": fired,
+    })
+    return common
 
 
 def scope(config, raw, path, files, category):
     fired = []
     lenses, risk_floor, _flags = _lenses_and_triggers(config, files, ([], []), fired, path_only=True)
     if risk_floor == "HIGH":
-        implementer = "HIGH risk or ambiguous spec | the lead implements directly"
-        reviewers = "HIGH risk, any implementer | two independent reviewers from two families"
+        implementer = "HIGH risk or ambiguous spec | **the lead implements directly** — delegation adds a supervision layer exactly where supervision is hardest"
+        reviewers = "HIGH risk, any implementer | **two independent reviewers from two families** — measured: two families independently converging on the same root cause was itself the strongest signal the finding was real"
     elif risk_floor == "MEDIUM":
         implementer = "MEDIUM, needs design judgment | a mid/high paid tier; or a second-pool model whose quota is otherwise idle"
-        reviewers = "MEDIUM risk, when a free leg is available | take the second reviewer anyway"
+        reviewers = "MEDIUM risk, when a free leg is available | **take the second reviewer anyway.** Measured: on a MEDIUM change, two families each returned 2 real defects with zero overlap. Convergence is the strong signal when it happens; disjoint coverage is the ordinary case, and a zero-quota second leg costs only wall-clock. Run them concurrently against the same frozen commit"
     else:
-        implementer = "LOW, mechanical sweep, time matters | cheapest capable paid tier"
-        reviewers = "Reviewer | a family different from the implementer"
+        implementer = "LOW, mechanical sweep, time matters | cheapest capable *paid* tier"
+        reviewers = "SKILL.md has no reviewer-table row for LOW risk."
     _fired(fired, "scope", "risk floor %s%s" % (risk_floor, " for " + category if category else ""))
     return {"rules": rules_identity(config, raw, path), "lenses": lenses, "risk_floor": risk_floor,
             "suggestion": {"implementer": implementer, "reviewers": reviewers},
@@ -817,6 +1140,7 @@ def main(argv=None):
     change.add_argument("number")
     change.add_argument("--query-json")
     change.add_argument("--include-wip", action="store_true")
+    change.add_argument("--as-of-ps")
     scope_parser = sub.add_parser("scope")
     scope_parser.add_argument("--files", nargs="+", required=True)
     scope_parser.add_argument("--category")
@@ -828,7 +1152,7 @@ def main(argv=None):
     try:
         config, raw, path = load_config(triage_path())
         if args.cmd == "change":
-            output = triage_change(config, raw, path, args.number, args.query_json, args.include_wip)
+            output = triage_change(config, raw, path, args.number, args.query_json, args.include_wip, args.as_of_ps)
         else:
             output = scope(config, raw, path, args.files, args.category)
     except InputError as exc:

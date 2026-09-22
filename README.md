@@ -231,6 +231,8 @@ Alongside `scripts/roster.py`, `scripts/triage.py` validates machine-local
 `triage.json` rules, patrols Gerrit changes, and suggests a risk floor for
 planned paths. Its path globs treat `**` as crossing `/`, while `*` and `?`
 do not; a pattern with no `/` matches only the basename.
+For a merge-commit patch set, its content delta is compared with the first
+parent, matching Gerrit's displayed diff.
 
 The lead role is portable: all six CLIs can read the same skills directory,
 so a Codex or Gemini lead can follow the same playbook and delegate to

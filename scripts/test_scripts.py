@@ -3882,7 +3882,7 @@ def test_triage(tmp):
         return {"type": "Code-Review", "value": value,
                 "by": {"username": who, "email": who + "@example.com"}, "grantedOn": granted}
 
-    def query(number, records, *, owner="bob", wip=False, comments=None, topic="series", depends=None, status="NEW", extra=None):
+    def query(number, records, *, owner="bob", wip=False, comments=None, topic="series", depends=None, status="NEW", extra=None, extra_rows=None):
         document = {"number": number, "project": "example-sdk",
                     "owner": {"username": owner, "email": owner + "@example.com"},
                     "wip": wip, "topic": topic, "status": status, "patchSets": records,
@@ -3890,11 +3890,12 @@ def test_triage(tmp):
         if extra:
             document.update(extra)
         path = tmp / ("query-%s-%s.json" % (number, records[-1]["number"]))
-        path.write_text(json.dumps(document) + "\n" + json.dumps({"type": "stats", "rowCount": 1}) + "\n", encoding="utf-8")
+        rows = [document] + (extra_rows or []) + [{"type": "stats", "rowCount": 1}]
+        path.write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
         return path
 
-    def changed(number, records, **kwargs):
-        got = run(triage, "change", str(number), "--query-json", query(number, records, **kwargs), env=env)
+    def changed(number, records, *, args=(), test_env=env, **kwargs):
+        got = run(triage, "change", str(number), "--query-json", query(number, records, **kwargs), *args, env=test_env)
         text = got.stdout + got.stderr
         check("triage change: %s exits 0" % number, got.returncode == 0, text)
         return json.loads(got.stdout) if got.returncode == 0 else {}
@@ -3945,6 +3946,67 @@ def test_triage(tmp):
     move_new = commit("move new")
     result = changed(106, [patch(1, move_old, base, approvals=[approval("+1")]), patch(2, move_new, move_old)])
     check("triage change: normalised relative-link move passes", result.get("ps_kind") == "move-only" and not result.get("flags"), result)
+    # Gerrit patch sets amend each other on the same base: the move is "add A"
+    # in PS1's own diff and "add B" in PS2's, never a rename in either. Only a
+    # tree-to-tree diff pairs them (found replaying real move patch sets).
+    git(repo, "checkout", "-q", "-B", "amend-move", base)
+    write("docs/move/amend.md", move_text)
+    amend_old = commit("amend move old")
+    git(repo, "checkout", "-q", "-B", "amend-move-2", base)
+    (repo / "docs/move/deep").mkdir(parents=True, exist_ok=True)
+    write("docs/move/deep/amend.md", move_text.replace("../../links", "../../../links"))
+    amend_new = commit("amend move new")
+    result = changed(136, [patch(1, amend_old, base, approvals=[approval("+1")]), patch(2, amend_new, base)])
+    check("triage change: a move between amended patch sets is move-only",
+          result.get("ps_kind") == "move-only" and result.get("legs") == "none", result)
+    # The same amended move inside a rework (another file changes too, and one
+    # URL in the moved file): the move is still paired, so only its real edit
+    # counts toward small_delta_lines and the move checks still run.
+    long_text = move_text + ("more\n" * 40)
+    git(repo, "checkout", "-q", "-B", "amend-mix", base)
+    write("docs/move/mix.md", long_text)
+    mix_old = commit("amend mix old")
+    git(repo, "checkout", "-q", "-B", "amend-mix-2", base)
+    (repo / "docs/move/deep").mkdir(parents=True, exist_ok=True)
+    write("docs/move/deep/mix.md", long_text.replace("../../links", "../../../links")
+          .replace("https://same.example/item", "https://same.example/other"))
+    write("src/mix.txt", "other file\n")
+    mix_new = commit("amend mix new")
+    # Paired, the delta is 5 lines (link depth -/+, URL -/+, one new line);
+    # unpaired it is the whole file twice.
+    old_limit = config["small_delta_lines"]
+    config["small_delta_lines"] = 5
+    _write_doc(config_file, config)
+    result = changed(156, [patch(1, mix_old, base, approvals=[approval("+1")]), patch(2, mix_new, base)])
+    config["small_delta_lines"] = old_limit
+    _write_doc(config_file, config)
+    check("triage change: a move inside a rework counts only its edited lines and is move-checked",
+          result.get("ps_kind") == "rework" and result.get("legs") == "own-read"
+          and any("absolute URLs changed" in flag for flag in result.get("flags", [])), result)
+    # A link-only move next to another edited file is not move-only: the other
+    # file still needs review.
+    git(repo, "checkout", "-q", "-B", "amend-side", base)
+    write("docs/move/side.md", move_text)
+    side_old = commit("amend side old")
+    git(repo, "checkout", "-q", "-B", "amend-side-2", base)
+    (repo / "docs/move/deep").mkdir(parents=True, exist_ok=True)
+    write("docs/move/deep/side.md", move_text.replace("../../links", "../../../links"))
+    write("src/side.txt", "side edit\n")
+    side_new = commit("amend side new")
+    result = changed(157, [patch(1, side_old, base, approvals=[approval("+1")]), patch(2, side_new, base)])
+    check("triage change: a link-only move beside another edit is rework", result.get("ps_kind") == "rework", result)
+    # A moved file's removed lines belong to its OLD path: a trigger keyword
+    # removed while the file leaves the trigger's glob still fires.
+    spec_text = "# spec\nStatus: Verified\n" + ("keep\n" * 12)
+    git(repo, "checkout", "-q", "-B", "amend-out", base)
+    write("docs/spec/out.md", spec_text)
+    out_old = commit("amend out old")
+    git(repo, "checkout", "-q", "-B", "amend-out-2", base)
+    write("docs/other/out.md", spec_text.replace("Status: Verified\n", ""))
+    out_new = commit("amend out new")
+    result = changed(158, [patch(1, out_old, base, approvals=[approval("+1")]), patch(2, out_new, base)])
+    check("triage change: a keyword removed by a move out of the glob fires at the old path",
+          result.get("risk_floor") == "HIGH", result)
 
     def bad_move(number, replace, naming=None):
         git(repo, "checkout", "-q", "-B", "move-%s" % number, move_old)
@@ -4012,6 +4074,274 @@ def test_triage(tmp):
           got.returncode == 0 and scoped.get("risk_floor") == "HIGH"
           and "lead implements directly" in scoped.get("suggestion", {}).get("implementer", "")
           and scoped.get("note") == "suggestion only; the lead decides, and rules only raise", got.stdout + got.stderr)
+
+    # Fix round 1: glob stars stay within one path segment and slash-less
+    # patterns match basenames, not trailing path fragments.
+    import importlib.util
+    module_spec = importlib.util.spec_from_file_location("triage_under_test", triage)
+    triage_module = importlib.util.module_from_spec(module_spec)
+    module_spec.loader.exec_module(triage_module)
+    check("triage glob: * does not cross slash",
+          triage_module.glob_matches("docs/spec/*.md", "docs/spec/x.md")
+          and not triage_module.glob_matches("docs/spec/*.md", "docs/spec/sub/x.md"))
+    check("triage glob: basename patterns stop at basename",
+          triage_module.glob_matches("*.bb", "dir/x.bb")
+          and not triage_module.glob_matches("*.bb", "dir/x.bb/extra"))
+    # Fix round 1 B7: only headers before @@ are metadata. Content that merely
+    # starts with header-looking punctuation stays in the hunk vectors.
+    _hunks, added_lines, removed_lines = triage_module._patch_lines(
+        "diff --git a/a b/a\n--- a/a\n+++ b/a\n@@ -1 +1 @@\n---- removed\n++++ added\n")
+    check("triage diff parser: header-looking hunk content is kept",
+          added_lines == ["+++ added"] and removed_lines == ["--- removed"])
+    inline_url = chr(96) * 2 + "https://example.invalid/hidden" + chr(96) * 2
+    check("triage move parser: inline code spans are ignored", not triage_module._urls(inline_url))
+    # Fix round 1 B11: rename similarity scores are not different entry kinds.
+    same_rename = {"status": "R058", "old": "a", "new": "b", "signature": "same", "added": [], "removed": []}
+    scored_rename = dict(same_rename, status="R100")
+    check("triage rename status: similarity scores compare as R",
+          not triage_module._delta([same_rename], [scored_rename])[0])
+    # Fix round 1 B15: currentPatchSet augments, rather than replaces, its
+    # patchSets entry when Gerrit gives the two objects different fields.
+    merged_change = {"patchSets": [{"number": 1, "revision": "kept", "parents": ["parent"]}],
+                     "currentPatchSet": {"number": 1, "approvals": [{"value": "+1"}]}}
+    _merged_sets, merged_current = triage_module._patch_sets(merged_change)
+    check("triage patch sets: current object fills missing fields without replacement",
+          merged_current.get("revision") == "kept" and merged_current.get("approvals") == [{"value": "+1"}])
+
+    # Fix round 1 A1: compare each patch set against its own parent; a rebase
+    # leaves an unchanged file out of the next review delta.
+    git(repo, "checkout", "-q", "-B", "rebase-own-patch", base)
+    write("docs/a.md", "base\n")
+    write("docs/b.md", "base\n")
+    rebase_base = commit("rebase base")
+    write("docs/a.md", "ps1 A\n")
+    write("docs/b.md", "ps1 B\n")
+    rebase_ps1 = commit("rebase ps1")
+    git(repo, "checkout", "-q", "-B", "rebase-parent-again", rebase_base)
+    write("unrelated.txt", "parent moved\n")
+    rebase_parent = commit("rebase parent")
+    write("docs/a.md", "ps1 A\n")
+    write("docs/b.md", "ps2 B\n")
+    rebase_ps2 = commit("rebase ps2")
+    result = changed(116, [patch(1, rebase_ps1, rebase_base, approvals=[approval("+1")]),
+                           patch(2, rebase_ps2, rebase_parent)])
+    check("triage rebase: unchanged own-patch file is excluded", result.get("delta_files") == ["docs/b.md"], result)
+
+    # Fix round 1 A1/A3: a rename with one changed line keeps only that hunk;
+    # unchanged trigger text in the moved file cannot be searched as a delta.
+    git(repo, "checkout", "-q", "-B", "rename-hunk", base)
+    write("docs/spec/old.md", "Status Verified\nkeep\nold line\n")
+    rename_ps1 = commit("rename source")
+    git(repo, "mv", "docs/spec/old.md", "docs/spec/new.md")
+    write("docs/spec/new.md", "Status Verified\nkeep\nnew line\n")
+    rename_ps2 = commit("rename with one edit")
+    result = changed(117, [patch(1, rename_ps1, base, approvals=[approval("+1")]),
+                           patch(2, rename_ps2, rename_ps1)])
+    check("triage rename: only the changed hunk is counted",
+          result.get("delta_files") == ["docs/spec/new.md"] and result.get("legs") == "own-read"
+          and "status flip" not in result.get("flags", []), result)
+
+    # Fix round 1 A3: regex lines belong to their file, not the shared pool.
+    git(repo, "checkout", "-q", "-B", "trigger-by-file", base)
+    write("docs/spec/one.md", "ordinary\n")
+    write("src/other.txt", "ordinary\n")
+    per_file_ps1 = commit("per-file source")
+    write("docs/spec/one.md", "still ordinary\n")
+    write("src/other.txt", "Status Verified\n")
+    per_file_ps2 = commit("keyword elsewhere")
+    result = changed(118, [patch(1, per_file_ps1, base, approvals=[approval("+1")]),
+                           patch(2, per_file_ps2, per_file_ps1)])
+    check("triage trigger: keyword in a different delta file does not fire",
+          "status flip" not in result.get("flags", []) and result.get("risk_floor") == "MEDIUM", result)
+    git(repo, "checkout", "-q", "-B", "removed-trigger", per_file_ps1)
+    write("docs/spec/one.md", "Status Verified\n")
+    removed_source = commit("removed trigger source")
+    write("docs/spec/one.md", "ordinary\n")
+    removed_keyword = commit("remove trigger keyword")
+    result = changed(119, [patch(1, removed_source, per_file_ps1, approvals=[approval("+1")]),
+                           patch(2, removed_keyword, removed_source)])
+    check("triage trigger: a removed keyword fires", "status flip" in result.get("flags", []), result)
+
+    # Fix round 1 A2: a reviewer with no vote must read a trivial rebase.
+    result = changed(120, [patch(1, rename_ps2, rename_ps1, kind="TRIVIAL_REBASE")])
+    check("triage ps-kind: unread trivial rebase is new and has legs",
+          result.get("ps_kind") == "new" and result.get("legs") == "roster", result)
+
+    # Fix round 1 B6: only another person's post-upload feedback makes an
+    # owner fix round, and it overrides small/carry-over leg shortcuts.
+    result = changed(121, [patch(1, rename_ps2, rename_ps1, created=20)], owner="alice",
+                     comments=[{"timestamp": 21, "reviewer": {"username": "bob"}, "message": "please adjust"}])
+    check("triage owner fix: comment only uses roster",
+          result.get("legs") == "roster" and any(rule["rule"] == "owner-fix-round" for rule in result.get("fired_rules", [])), result)
+    result = changed(122, [patch(1, per_file_ps1, base, created=10),
+                           patch(2, per_file_ps2, per_file_ps1, created=20)], owner="alice",
+                     comments=[{"timestamp": 21, "reviewer": {"username": "bob"}, "message": "small fix"}])
+    check("triage owner fix: small post-vote delta still uses roster", result.get("legs") == "roster", result)
+    result = changed(123, [patch(1, rename_ps2, rename_ps1, kind="TRIVIAL_REBASE", created=20)], owner="alice",
+                     comments=[{"timestamp": 21, "reviewer": {"username": "bob"}, "message": "rebase fix"}])
+    check("triage owner fix: trivial rebase still uses roster", result.get("legs") == "roster", result)
+    result = changed(124, [patch(1, rename_ps2, rename_ps1, approvals=[approval("-1", 21)], created=20)], owner="alice")
+    check("triage owner fix: my own negative vote does not trigger it",
+          not any(rule["rule"] == "owner-fix-round" for rule in result.get("fired_rules", [])), result)
+
+    # Fix round 1: only a later comment by somebody else that names me wakes a
+    # current-vote skip; first matching order rule need not be rank zero.
+    result = changed(125, [current_vote], comments=[{"timestamp": 30, "reviewer": {"username": "bob"}, "message": "no name here"}])
+    check("triage skip: later comment without my name keeps skip", result.get("skip") is not None, result)
+    result = changed(126, [current_vote], comments=[{"timestamp": 30, "reviewer": {"username": "alice"}, "message": "alice revisited"}])
+    check("triage skip: my own later comment keeps skip", result.get("skip") is not None, result)
+    result = changed(127, [patch(1, small, trigger_old)], owner="carol")
+    check("triage order: rule zero can miss and rank one can win", result.get("order") == 1, result)
+
+    # Fix round 1 B5: a latest zero or malformed vote withdraws my active vote.
+    result = changed(141, [patch(1, rename_ps1, base, approvals=[approval("+1")]),
+                           patch(2, rename_ps2, rename_ps1, approvals=[approval("0", 30)])])
+    check("triage votes: a latest zero means no active vote", result.get("my_last_vote") is None, result)
+    result = changed(142, [patch(1, small, trigger_old, approvals=[approval("not-a-vote", 30)])])
+    check("triage votes: a malformed value means no active vote", result.get("my_last_vote") is None, result)
+
+    # Fix round 1: the threshold itself is inclusive.
+    old_limit = config["small_delta_lines"]
+    config["small_delta_lines"] = 2
+    _write_doc(config_file, config)
+    result = changed(128, [patch(1, trigger_old, base, approvals=[approval("+1")]), patch(2, small, trigger_old)])
+    check("triage legs: delta equal to threshold is own-read", result.get("legs") == "own-read", result)
+    config["small_delta_lines"] = old_limit
+    _write_doc(config_file, config)
+
+    # Fix round 1 B13: only _comment keys are permitted in nested objects and
+    # public maps; validation never accidentally hides a typo behind '_'.
+    expect_bad("nested-lens-key", lambda doc: doc["lenses"][0].update({"typo": 1}), "unknown key")
+    expect_bad("nested-trigger-key", lambda doc: doc["delta_triggers"][0].update({"typo": 1}), "unknown key")
+    expect_bad("nested-naming-key", lambda doc: doc["move_check"]["naming"].append({"glob": "x", "regex": "x", "typo": 1}), "unknown key")
+    expect_bad("trigger-risk", lambda doc: doc["delta_triggers"][0].update({"risk": "SEVERE"}), "LOW, MEDIUM, or HIGH")
+    expect_bad("trigger-lens", lambda doc: doc["delta_triggers"][0].update({"lenses": ["missing"]}), "unknown lens")
+    expect_bad("naming-regex", lambda doc: doc["move_check"]["naming"].append({"glob": "x", "regex": "["}), "invalid regex")
+    expect_bad("bad-glob", lambda doc: doc["lenses"][0].update({"glob": ""}), "non-empty")
+    expect_bad("clone-underscore", lambda doc: doc["clones"].update({"_not_comment": "/tmp/x"}), "unknown key")
+    expect_bad("comment-as-lens", lambda doc: doc["lenses"][0].update({"lenses": ["_comment"]}), "unknown lens")
+
+    # Fix round 1: the judgment class chooses exactly the roster's judgment
+    # opencode model, while every configured r1 adapter remains visible.
+    result = changed(129, [patch(1, trigger_old, base, approvals=[approval("+1")]), patch(2, large, small)])
+    live_review = _live_roster()["rounds"]["r1"]["review"]
+    expected_adapters = {name for name, leg in live_review.items() if not name.startswith("_") and leg is not None}
+    output_legs = {leg["adapter"]: leg["model"] for leg in result.get("review_legs", [])}
+    check("triage review legs: every r1 adapter is present and judgment model is selected",
+          set(output_legs) == expected_adapters
+          and output_legs.get("opencode") == live_review["opencode"]["by_lens"]["judgment"]["model"], result)
+
+    # Fix round 1 B8: binary patches are a flagged zero-line delta, and a
+    # CRLF-to-LF rewrite beneath a rename is content, not a move-only change.
+    git(repo, "checkout", "-q", "-B", "binary", base)
+    (repo / "docs").mkdir(exist_ok=True)
+    (repo / "docs" / "binary.bin").write_bytes(b"one\x00two")
+    binary_ps1 = commit("binary one")
+    (repo / "docs" / "binary.bin").write_bytes(b"one\x00three")
+    binary_ps2 = commit("binary two")
+    result = changed(130, [patch(1, binary_ps1, base, approvals=[approval("+1")]), patch(2, binary_ps2, binary_ps1)])
+    check("triage binary: delta is flagged without a crash",
+          any(flag == "docs/binary.bin: binary" for flag in result.get("flags", [])), result)
+    git(repo, "checkout", "-q", "-B", "crlf-rename", base)
+    (repo / "docs").mkdir(exist_ok=True)
+    (repo / "docs" / "old-crlf.md").write_bytes(b"line\r\n")
+    crlf_ps1 = commit("crlf source")
+    git(repo, "mv", "docs/old-crlf.md", "docs/new-crlf.md")
+    (repo / "docs" / "new-crlf.md").write_bytes(b"line\n")
+    crlf_ps2 = commit("crlf rewritten")
+    result = changed(131, [patch(1, crlf_ps1, base, approvals=[approval("+1")]), patch(2, crlf_ps2, crlf_ps1)])
+    check("triage move: CRLF rewrite is not move-only", result.get("ps_kind") != "move-only", result)
+
+    # Fix round 1 B9: code spans/fences do not participate in move-link
+    # checks; query/title syntax is removed before relative-link resolution.
+    git(repo, "checkout", "-q", "-B", "move-link-syntax", base)
+    write("docs/move/code.md", "```\nhttps://old.example/item\n```\n[ok](../links/ok.md \"title\")\n")
+    move_syntax_ps1 = commit("move syntax source")
+    (repo / "docs" / "move" / "deep").mkdir(parents=True)
+    git(repo, "mv", "docs/move/code.md", "docs/move/deep/code.md")
+    write("docs/move/deep/code.md", "```\nhttps://new.example/item\n```\n[ok](../../links/ok.md \"title\")\n")
+    move_syntax_ps2 = commit("move syntax target")
+    result = changed(132, [patch(1, move_syntax_ps1, base, approvals=[approval("+1")]), patch(2, move_syntax_ps2, move_syntax_ps1)])
+    check("triage move links: fenced URL is ignored and titled link resolves",
+          not any("absolute URL" in flag or "does not resolve" in flag for flag in result.get("flags", [])), result)
+    git(repo, "checkout", "-q", "-B", "move-query", base)
+    query_text = "[missing](missing.md?x=1)\nhttps://same.example/item.\n" + ("same\n" * 12)
+    write("docs/move/query.md", query_text)
+    move_query_ps1 = commit("query source")
+    (repo / "docs" / "move" / "deep").mkdir(parents=True)
+    git(repo, "mv", "docs/move/query.md", "docs/move/deep/query.md")
+    write("docs/move/deep/query.md", query_text)
+    move_query_ps2 = commit("query target")
+    result = changed(133, [patch(1, move_query_ps1, base, approvals=[approval("+1")]), patch(2, move_query_ps2, move_query_ps1)])
+    check("triage move links: unresolved query link is flagged but sentence punctuation is not a URL change",
+          any("relative link missing.md does not resolve" in flag for flag in result.get("flags", []))
+          and not any("absolute URL" in flag for flag in result.get("flags", [])), result)
+
+    # Fix round 1 B4: --as-of-ps restores the decision as it stood before a
+    # later patch set and vote arrived.
+    git(repo, "checkout", "-q", "-B", "as-of", base)
+    write("src/asof.txt", "one\n")
+    asof_ps1 = commit("as of one")
+    write("src/asof.txt", "two\n")
+    asof_ps2 = commit("as of two")
+    result = changed(134, [patch(1, asof_ps1, base, created=10),
+                           patch(2, asof_ps2, asof_ps1, approvals=[approval("+1", 25)], created=20)],
+                     args=("--as-of-ps", "1"))
+    check("triage as-of: PS1 ignores later vote and names selected patch set",
+          result.get("as_of_patch_set") == 1 and result.get("my_last_vote") is None
+          and result.get("rules", {}).get("as_of_patch_set") == 1, result)
+    # A replay of a patch set I reviewed must not see my own vote on it: the
+    # patrol triaged it before reading it, so the vote came after.
+    result = changed(135, [patch(1, asof_ps1, base, approvals=[approval("-1", 15)], created=10),
+                           patch(2, asof_ps2, asof_ps1, created=20)],
+                     args=("--as-of-ps", "1"))
+    check("triage as-of: my own vote on the replayed patch set is excluded",
+          result.get("my_last_vote") is None and result.get("skip") is None, result)
+
+    # Fix round 1 B2/B3: a skip succeeds without a clone; ~/ clone paths are
+    # accepted after expansion and work when HOME points at the fixture root.
+    no_clone_config = json.loads(json.dumps(config))
+    no_clone_config["clones"]["example-sdk"] = str(tmp / "no-such-clone")
+    _write_doc(config_file, no_clone_config)
+    result = changed(135, [current_vote])
+    check("triage skip: missing clone leaves git-dependent fields null",
+          result.get("skip") is not None and result.get("delta_files") is None and result.get("ps_kind") is None, result)
+    home_config = json.loads(json.dumps(config))
+    home_config["clones"]["example-sdk"] = "~/example-sdk"
+    _write_doc(config_file, home_config)
+    home_env = dict(env, HOME=str(tmp))
+    home_check = run(triage, "check", "--file", config_file, env=home_env)
+    result = changed(136, [patch(1, asof_ps1, base)], test_env=home_env)
+    check("triage clone: ~/ expands for check and change", home_check.returncode == 0 and result.get("change") == 136, home_check.stdout + home_check.stderr + repr(result))
+    _write_doc(config_file, config)
+
+    # Fix round 1 A4: dependencies omit status in real Gerrit output. Query
+    # JSON supplies ancestor rows; absent rows remain explicitly unknown.
+    result = changed(137, [patch(1, asof_ps1, base)], depends=[{"number": 501}])
+    check("triage ancestors: an absent row is unknown, not unmerged", result.get("unknown_ancestors") == [501] and not result.get("unmerged_ancestors"), result)
+    result = changed(138, [patch(1, asof_ps1, base)], depends=[{"number": 502}],
+                     extra_rows=[{"number": 502, "status": "NEW"}])
+    check("triage ancestors: NEW ancestor is unmerged", result.get("unmerged_ancestors") == [502] and not result.get("unknown_ancestors"), result)
+    result = changed(139, [patch(1, asof_ps1, base)], depends=[{"number": 503}],
+                     extra_rows=[{"number": 503, "status": "MERGED"}])
+    check("triage ancestors: MERGED ancestor is neither list", not result.get("unmerged_ancestors") and not result.get("unknown_ancestors"), result)
+
+    # Fix round 1 B12: the first commit has no parent and is diffed against
+    # Git's empty tree rather than making rev-parse fail.
+    root_patch = {"number": 1, "revision": base, "parents": [], "kind": "REWORK", "createdOn": 10,
+                  "uploader": {"username": "alice"}, "approvals": [], "files": []}
+    result = changed(143, [root_patch])
+    check("triage root patch set: diffs against the empty tree", result.get("delta_files") is not None, result)
+
+    # Fix round 1 B10: literal pathspecs accept ordinary filenames containing
+    # a colon rather than treating them as pathspec magic.
+    git(repo, "checkout", "-q", "-B", "literal-pathspec", base)
+    write("docs/a:b.md", "old\n")
+    colon_ps1 = commit("colon source")
+    write("docs/a:b.md", "new\n")
+    colon_ps2 = commit("colon target")
+    result = changed(140, [patch(1, colon_ps1, base, approvals=[approval("+1")]), patch(2, colon_ps2, colon_ps1)])
+    check("triage literal pathspec: colon path is handled", result.get("delta_files") == ["docs/a:b.md"], result)
 
 
 # ------------------------------------------------ line-ending renormalization ----
