@@ -3472,8 +3472,14 @@ def test_leg_log_check(tmp):
         ("a refusal the leg worked around, then a report", "opencode",
          "Error: The user rejected permission to use this specific tool call.\n" + report, 0),
         ("a report quoting the refusal words mid-line", "opencode",
-         "The leg ends on `auto-rejecting` and a rejected permission. HOLDS\n", 0),
+         "The leg ends on `auto-rejecting` and a rejected permission.\n## Claim 1 -- HOLDS\n", 0),
+        ("an enumerated verdict (**A. FIXED.**)", "cursor-free", "**A. FIXED.** quoted at x.py:3\n", 0),
         ("codex: a Verdict line", "codex", "# Codex Adversarial Review\n\nVerdict: approve\n", 0),
+        ("an error sentence containing a verdict word", "opencode",
+         "Error: review stream BROKEN before any claims were evaluated\n" * 3, 1),
+        ("codex: a Verdict line that is not a verdict", "codex",
+         "# Codex Adversarial Review\n\nVerdict: could not be determined (rate limit)\n", 1),
+        ("NOT-REACHED spelled with a hyphen", "agy", "## Claim 1 -- NOT-REACHED\n", 0),
         ("codex: the usage-limit failure", "codex",
          "# Codex Adversarial Review\n\nCodex did not return valid structured JSON.\n", 1),
     ]
@@ -3493,14 +3499,22 @@ def test_leg_log_check(tmp):
     r = run(script, "agy", logs["agy's own denial line"])
     check("leg-log-check: the agy denial is named as the cause", "refused" in r.stderr, r.stderr)
     # cursor: result objects, a banner, two objects, and an error object
+    ok = {"type": "result", "subtype": "success", "is_error": False, "request_id": "r1"}
     for label, body, want in (
-        ("cursor: one result object", json.dumps({"type": "result", "result": report}), 0),
+        ("cursor: one result object", json.dumps({**ok, "result": report}), 0),
         ("cursor: a banner line before the object",
-         "cursor-agent v1 (pid 1)\n" + json.dumps({"type": "result", "result": report}), 0),
+         "cursor-agent v1 (pid 1)\n" + json.dumps({**ok, "result": report}), 0),
         ("cursor: two objects (duplicate dispatch)",
-         json.dumps({"result": "tail only"}) + "\n" + json.dumps({"result": report}), 0),
+         json.dumps({**ok, "result": "tail only"}) + "\n" + json.dumps({**ok, "result": report}), 0),
+        ("cursor: the verdicts are in the SHORTER of two objects",
+         json.dumps({**ok, "result": report}) + "\n"
+         + json.dumps({**ok, "result": "a long summary with no verdicts " * 20}), 0),
         ("cursor: an error object, however long", json.dumps({"type": "error", "message": "HOLDS " * 200}), 1),
-        ("cursor: a result without a verdict", json.dumps({"result": "I could not read the files."}), 1),
+        ("cursor: a result without a verdict", json.dumps({**ok, "result": "I could not read the files."}), 1),
+        ("cursor: an is_error result carrying verdict words",
+         json.dumps({**ok, "is_error": True, "result": report}), 1),
+        ("cursor: a result without a request_id",
+         json.dumps({"type": "result", "result": report}), 1),
     ):
         log = tmp / ("llc-c" + str(len(logs)))
         logs[label] = log

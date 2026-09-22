@@ -48,7 +48,16 @@ ADAPTER="$adapter" LOG="$log" EXPECT="$expect" python3 - <<'PY'
 import json, os, re, sys
 
 adapter, log = os.environ["ADAPTER"], os.environ["LOG"]
-expect = os.environ.get("EXPECT") or r"\b(HOLDS|BROKEN|NOT REACHED|FIXED)\b|^\s*Verdict:"
+# A verdict word counts only in VERDICT POSITION: at the start of a line or
+# right after markup/punctuation (`**HOLDS**`, `## Claim 1 -- HOLDS`,
+# `Status: BROKEN`, `| HOLDS |`, `**A. FIXED.**`) -- not inside a sentence, where an error
+# message can carry it ("review stream BROKEN before ..."; codex re-review,
+# 2026-09-22). Still a heuristic, and stated as one: it catches a leg that
+# delivered no verdicts, not every error that happens to look like one.
+expect = os.environ.get("EXPECT") or (
+    r"(?:^[ \t*#>|-]*(?:\w{1,3}[.)])?|[*#|:(\u2014\u2013]|--|-\s)[ \t*]*"
+    r"(HOLDS|BROKEN|NOT[ _-]REACHED|NOT FIXED|FIXED)\b"
+    r"|^\s*Verdict:\s*(approve|needs-attention)\b")
 try:
     verdict = re.compile(expect, re.M)
 except re.error as e:
@@ -76,15 +85,21 @@ if adapter == "cursor":
         except ValueError:
             i = j + 1
             continue
-        if isinstance(obj, dict) and isinstance(obj.get("result"), str):
+        # A SUCCESSFUL result object only: cursor-runtime.md says certify on
+        # `result` AND `request_id`, and the CLI marks success itself -- an
+        # error can arrive in a result-shaped object too.
+        if (isinstance(obj, dict) and isinstance(obj.get("result"), str)
+                and obj.get("request_id") and obj.get("is_error") is not True
+                and obj.get("subtype", "success") == "success"):
             results.append(obj["result"])
         i = end
     if not results:
-        fail("no JSON object with a `result` in the output -- the leg did not deliver a review")
+        fail("no successful JSON result object (result + request_id, not is_error) -- the leg did not deliver a review")
     if len(results) > 1:
         sys.stderr.write("leg-log-check: WARNING (cursor): %d result objects -- a duplicate "
-                         "dispatch; reading the longest\n" % len(results))
-    text = max(results, key=len)
+                         "dispatch; reading all of them\n" % len(results))
+    # all of them: the longest is not necessarily the one carrying the verdicts
+    text = "\n".join(results)
 
 # Known refusal shapes, matched as the whole lines the CLIs write, so a review
 # that merely mentions the words is not one.

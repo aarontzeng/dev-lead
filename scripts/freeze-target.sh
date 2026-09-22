@@ -74,6 +74,11 @@ dirty=$(printf '%s\n' "$status" | "$here/renorm-only.sh" --filter "$dest") \
 [ -z "$dirty" ] \
   || refuse "freshly created worktree is not clean -- refusing to call it frozen:
 $dirty"
+# From here on only output remains. SIGPIPE ignored so a closed stdout or
+# stderr is an EPIPE error the lines below handle, not a silent kill that
+# skips cleanup (review, 2026-09-22).
+trap '' PIPE
+
 # Informational only, so best-effort: a failure writing it must not exit past
 # the cleanup guarantee above.
 if [ -n "$status" ]; then
@@ -83,7 +88,5 @@ if [ -n "$status" ]; then
 fi
 
 # The SHA is the result: a caller that cannot receive it has no frozen target,
-# so failing to write it cleans up too. SIGPIPE ignored so a closed stdout is
-# an EPIPE error here, not a silent kill.
-trap '' PIPE
+# so failing to write it cleans up too.
 printf '%s\n' "$sha" || refuse "could not write the SHA to stdout"
