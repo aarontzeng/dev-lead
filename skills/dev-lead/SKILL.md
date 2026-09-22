@@ -758,6 +758,13 @@ two rounds and would have run a third on no principle at all.
    "$DEV_LEAD/scripts/verify-target.sh" "$FROZEN_DIR" "$REVIEW_HEAD"   # before AND after
    ```
 
+   A repo that committed CRLF files and later added `eol=lf` shows them as
+   ` M` on every fresh checkout. Both scripts excuse exactly those files --
+   bytes and mode identical to the commit ([`renorm-only.sh`](../../scripts/renorm-only.sh)) -- and
+   freeze prints which. The per-leg skills' raw `git status --porcelain`
+   brackets predate that excuse and will show those files; the scripts are
+   the authority.
+
    **Tear the frozen directories down only after every leg has actually
    returned, and read the leg's own exit line rather than the wrapper's.**
    A background launcher usually runs with its cwd inside the frozen

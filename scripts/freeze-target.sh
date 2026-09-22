@@ -38,28 +38,36 @@ esac
 
 [ -e "$dest" ] && die "destination already exists: $dest (refusing to touch it)"
 
-# --detach: no branch, so nothing can advance this worktree under the reviewer.
-git -C "$repo" worktree add --detach "$dest" "$sha" >/dev/null \
-  || die "git worktree add failed"
-
 # A refusal from here on must not leave the worktree registered behind it: the
 # caller got a non-zero exit and no SHA, so nothing will ever clean it up, and
 # the next freeze to the same path dies on "already exists". Measured
-# 2026-09-22 (SITL-bench, QCS9075-QLI2.0-SDK).
+# 2026-09-22 (SITL-bench, QCS9075-QLI2.0-SDK). Every command below that can
+# fail is guarded with `|| refuse` -- a bare failure under `set -e` exits
+# WITHOUT cleaning up (found by two review legs, 2026-09-22). $dest did not
+# exist before this point (checked above), so whatever is removed here is
+# ours.
 refuse() {
-  git -C "$repo" worktree remove --force "$dest" >/dev/null 2>&1 || true
+  git -C "$repo" worktree remove --force --force "$dest" >/dev/null 2>&1 || true
   die "$* (the worktree was removed again)"
 }
 
+# --detach: no branch, so nothing can advance this worktree under the reviewer.
+# A failed add can still have registered the path, hence refuse, not die.
+git -C "$repo" worktree add --detach "$dest" "$sha" >/dev/null \
+  || refuse "git worktree add failed"
+
 # Verify what we created rather than assuming it: cheap, and the whole point.
-actual=$(git -C "$dest" rev-parse HEAD)
+actual=$(git -C "$dest" rev-parse HEAD 2>/dev/null) \
+  || refuse "cannot read HEAD of the new worktree"
 [ "$actual" = "$sha" ] || refuse "created worktree is at $actual, expected $sha"
 
 # Line-ending renormalization is not a change to what a reviewer reads: those
 # files hold the commit's exact bytes (renorm-only.sh checks that, byte for
 # byte, mode included). Everything else still refuses.
 here=$(dirname -- "${BASH_SOURCE[0]}")
-status=$(git -C "$dest" status --porcelain=v1 2>/dev/null) \
+# core.quotePath=false: renorm-only.sh lists raw paths, so a non-ASCII name
+# must arrive raw here too or it can never match (and stays dirty).
+status=$(git -C "$dest" -c core.quotePath=false status --porcelain=v1 2>/dev/null) \
   || refuse "git status failed in the new worktree"
 dirty=$(printf '%s\n' "$status" | "$here/renorm-only.sh" --filter "$dest") \
   || refuse "could not check the worktree for line-ending-only changes"

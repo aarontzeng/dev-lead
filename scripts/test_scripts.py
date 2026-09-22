@@ -2637,6 +2637,13 @@ def test_leg_cmd():
     r = subprocess.run([str(script), "cursor", "review", "--model", "x", "--add-dir", ""],
                        capture_output=True, text=True)
     check("leg-cmd: an empty --add-dir is refused", r.returncode != 0, r.stdout)
+    r = subprocess.run([str(script), "cursor", "review", "--model", "x", "--add-dir", "--yolo"],
+                       capture_output=True, text=True)
+    check("leg-cmd: an --add-dir value that reads as a flag is refused",
+          r.returncode != 0 and "--yolo" not in r.stdout, r.stdout + r.stderr)
+    r = subprocess.run([str(script), "agy", "review", "--model", "gemini-3.8-flash-medium",
+                        "--target", "/tmp/x", "--add-dir", "/ctx"], capture_output=True, text=True)
+    check("leg-cmd: an adapter without add_dir_flag refuses (agy too)", r.returncode != 0, r.stdout)
     r = subprocess.run([str(script)], capture_output=True, text=True)
     check("leg-cmd: the usage line says options are per adapter",
           "only where the adapter takes it" in r.stderr, r.stderr)
@@ -3343,8 +3350,12 @@ def _crlf_repo(path):
     git(path, "init", "-q")
     git(path, "config", "user.email", "test@example.invalid")
     git(path, "config", "user.name", "Test")
+    # a runner whose global autocrlf=true would store LF and void the fixture
+    git(path, "config", "core.autocrlf", "false")
     (path / "crlf.txt").write_bytes(b"a\r\nb\r\n")
     (path / "sp ace.txt").write_bytes(b"c\r\n")
+    # non-ASCII: porcelain escapes it unless core.quotePath=false (review, 2026-09-22)
+    (path / "\u6587\u6a94.txt").write_bytes(b"d\r\n")
     (path / "plain.txt").write_text("x\n")
     (path / "run.sh").write_text("echo\n")
     git(path, "add", "-A")
@@ -3368,8 +3379,8 @@ def test_renorm(tmp):
     check("renorm: ...and says which files it excused",
           "crlf.txt" in r.stderr and "sp ace.txt" in r.stderr, r.stderr)
     r = run(renorm, dest)
-    check("renorm: the list is exactly the byte-identical files, spaces included",
-          sorted(r.stdout.splitlines()) == ["crlf.txt", "sp ace.txt"], r.stdout)
+    check("renorm: the list is exactly the byte-identical files, spaces and non-ASCII included",
+          sorted(r.stdout.splitlines()) == ["crlf.txt", "sp ace.txt", "\u6587\u6a94.txt"], r.stdout)
     r = run(verify, dest, sha)
     check("renorm: verify certifies the same tree", r.returncode == 0, r.stderr)
 
@@ -3440,6 +3451,24 @@ def test_leg_log_check(tmp):
         ("a refusal loop is not report text",
          "Error: The user rejected permission to use this specific tool call\n" * 20, 1),
         ("a real report", "timestamp=1 INFO x\n" + report + "exit=0\n", 0),
+        # each strip rule pinned by 400+ characters of ONLY that shape
+        ("400+ chars of log lines only",
+         "timestamp=2026-09-22T00:00:00 INFO service=session step=1 waiting\n" * 10, 1),
+        ("400+ chars of tool trace only",
+         (esc + "\u2192 " + esc + "Read src/some/long/path/to/a/file.py [limit=90, offset=5020]\n") * 10, 1),
+        ("400+ chars of error noise",
+         "ERROR service=llm UnknownError: Unexpected server error step=0\n" * 5
+         + "Traceback (most recent call last):\n" + '  File "x.py", line 3, in <module>\n' * 5
+         + "    at run (/usr/lib/node_modules/opencode/dist/index.js:12:5)\n" * 5
+         + '{"name":"UnknownError","data":{"message":"Unexpected server error"}}\n' * 3
+         + "> build \u00b7 glm-5.2\n", 1),
+        ("400+ chars of Error: lines only",
+         'Error: {"name":"UnknownError","data":{"message":"Unexpected server error"}} step=0\n' * 6, 1),
+        ("a report quoting the refusal words is not a refusal",
+         "The leg ends on `auto-rejecting` and a `rejected permission` error.\n" + report, 0),
+        ("report lines starting with $VAR are kept",
+         "".join("$VAR%d is unquoted at scripts/x.sh:%d and word-splits a path.\n" % (i, i)
+                 for i in range(12)), 0),
         ("a refusal the leg worked around, then a report",
          "Error: The user rejected permission to use this specific tool call\n" + report, 0),
     ]
@@ -3453,6 +3482,17 @@ def test_leg_log_check(tmp):
     r = run(script, "opencode", tmp / ("log-" + "a_refusal_the_leg_worked_around_then_a_report"))
     check("leg-log-check: a worked-around refusal is still WARNED about",
           "WARNING" in r.stderr, r.stderr)
+    r = run(script, "opencode", tmp / ("log-" + "a_report_quoting_the_refusal_words_is_not_a_refusal"))
+    check("leg-log-check: ...but quoting the words draws no warning", "WARNING" not in r.stderr, r.stderr)
+    # cursor --output-format json: the report is `result`; an error document is not a review
+    jlog = tmp / "log-cursor-ok"
+    jlog.write_text(json.dumps({"type": "result", "result": report}))
+    r = run(script, "cursor", jlog)
+    check("leg-log-check: cursor JSON with a result passes", r.returncode == 0, r.stderr)
+    jlog = tmp / "log-cursor-err"
+    jlog.write_text(json.dumps({"type": "error", "message": "x" * 800}))
+    r = run(script, "cursor", jlog)
+    check("leg-log-check: cursor JSON without a result fails", r.returncode == 1, r.stdout)
 
 
 def main():

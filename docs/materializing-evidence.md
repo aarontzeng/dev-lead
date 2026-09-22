@@ -19,7 +19,9 @@ does not.
 
 **Never the frozen target**, unless the leg genuinely cannot put it elsewhere.
 `verify-target.sh` refuses to certify a directory with any
-`git status --porcelain=v1` output; a leg that must keep scaffolding inside the
+`git status --porcelain=v1` output except one: a ` M` whose bytes and mode are
+exactly the commit's (line-ending renormalization, `scripts/renorm-only.sh`);
+a leg that must keep scaffolding inside the
 target declares those exact paths as trailing arguments, which permits them and
 nothing else.
 

@@ -40,33 +40,61 @@ def fail(why):
 # measured above. A leg can also be refused one command (its read-only config
 # denies most of bash) and still deliver a full review; failing that would
 # throw away a real leg, so it passes with a warning instead.
-refused = None
-if adapter == "opencode":
-    refused = next((n for n in ("rejected permission", "auto-rejecting") if n in raw), None)
+#
+# Detected by the LINE SHAPES opencode writes, never by the words anywhere: a
+# review that quotes "auto-rejecting" while discussing permissions is not a
+# refused run (found by two review legs, 2026-09-22 -- one of their own logs
+# tripped the substring version).
+REFUSAL = (re.compile(r"^Error: The user rejected permission"),
+           re.compile(r"^(timestamp=\S+ |(INFO|WARN|DEBUG|ERROR)\b).*permission requested: .*auto-rejecting"))
 
 text = re.sub(r"\x1b\[[0-9;]*m", "", raw)
+
+# cursor --output-format json: the report is the `result` field. A JSON
+# document without one is an error payload, not a review.
+stripped_all = text.strip()
+if stripped_all.startswith("{"):
+    try:
+        import json
+        doc = json.loads(stripped_all)
+    except ValueError:
+        doc = None
+    if isinstance(doc, dict):
+        text = str(doc.get("result") or "")
+
+# Noise a failed run is made of: log lines, the tool-call trace (marker + a
+# space -- a report line starting "$VAR" is kept), the wrapper's exit=, error
+# and traceback lines, a run banner, and one-line JSON payloads.
+NOISE = (re.compile(r"^timestamp="),
+         re.compile(r"^(INFO|DEBUG|WARN|ERROR|TRACE|FATAL)\b"),
+         re.compile(r"^[\u2192\u2731\u2717\u2699$] "),
+         re.compile(r"^exit=\d+$"),
+         re.compile(r"^(Error|error|Traceback|Caused by)\b"),
+         re.compile(r"^at \S.*\(.*:\d+(:\d+)?\)$"),
+         re.compile(r'^File ".*", line \d+'),
+         re.compile(r"^> \S+ \u00b7 "),
+         re.compile(r"^\{.*\}$"))
+
+refused = None
 keep = []
 for line in text.splitlines():
     s = line.strip()
     if not s:
         continue
-    if s.startswith("timestamp=") or re.match(r"^(INFO|DEBUG|WARN)\b", s):
-        continue                        # opencode --print-logs lines
-    if s[:1] in "→✱✗⚙$":
-        continue                        # tool-call trace
-    if re.fullmatch(r"exit=\d+", s):
-        continue                        # the lead's own wrapper
-    if refused and ("rejected permission" in s or "auto-rejecting" in s):
-        continue                        # a refusal is not report text, however many
+    if adapter == "opencode" and any(r.search(s) for r in REFUSAL):
+        refused = refused or s[:80]
+        continue
+    if any(r.search(s) for r in NOISE):
+        continue
     keep.append(s)
 body = "\n".join(keep)
 if len(body) < 400:
     if refused:
-        fail("a tool call was refused (%r in the log) and no report followed -- "
-             "usually a read outside the cwd; put the brief and context inside the "
-             "frozen target and rerun" % refused)
-    fail("only %d characters of report text once logs and tool calls are removed "
-         "-- the leg did not deliver a review" % len(body))
+        fail("a tool call was refused (%r) and no report followed -- usually a "
+             "read outside the cwd; put the brief and context inside the frozen "
+             "target and rerun" % refused)
+    fail("only %d characters of report text once logs, tool calls and error "
+         "noise are removed -- the leg did not deliver a review" % len(body))
 if refused:
     sys.stderr.write("leg-log-check: WARNING (%s): a tool call was refused (%r); the "
                      "report below was written without that call -- check what it "

@@ -19,9 +19,13 @@
 # files under skills/dragonwing-iq/ (reported by the SITL-bench session).
 #
 # The test is BYTE identity against HEAD, not `git diff --ignore-cr-at-eol`:
-# a reviewer reads the working tree, so what must hold is that the bytes it
-# reads are the commit's bytes. Ignoring CR would also excuse a real edit that
-# happens to be line-ending shaped. A mode change is never excused (the raw
+# a reviewer reads the working tree, so an EXCUSED file must hold the commit's
+# bytes. Ignoring CR would also excuse a real edit that happens to be
+# line-ending shaped. Scope, stated so nobody reads more into it: this bounds
+# only what is excused. The certification itself stays `git status`-based, and
+# a tree git calls clean can still differ from the blobs byte for byte (a
+# round-trip smudge/clean filter, `ident`, the caller's global core.autocrlf,
+# skip-worktree) -- pre-existing, not changed here. A mode change is never excused (the raw
 # diff's old and new modes must match), only a ` M` entry is ever excused
 # (never staged, untracked or ignored ones), and a path git has to escape
 # (backslash, control characters) is skipped -- it stays dirty, which fails

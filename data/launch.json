@@ -267,7 +267,7 @@
     "verified": "review probed 2026-09-08; other roles transcribed",
     "model_prefix": "opencode/",
     "model_prefix_note": "The SUGGESTED provider when a model id carries none -- not the only legal one. opencode serves many providers (measured 2026-09-15: 369 openrouter ids, 38 google, 7 opencode), and leg-cmd.sh checks only that SOME provider segment is present. Reading this key as 'the required prefix' is what 0.5.3 did, and it refused every other provider's ids and told callers to prepend, yielding opencode/openrouter/nvidia/... which exists nowhere.",
-    "add_dir_note": "opencode has no add-dir flag, and a read outside its cwd is auto-rejected headless (\"The user rejected permission to use this specific tool call\"), after which the leg ends with EMPTY output that looks like a clean run. Copy the brief and every context file INTO the frozen target (as REVIEW-CLAIMS.md and siblings, declared to verify-target.sh), and run scripts/leg-log-check.sh opencode <log> before reading the result."
+    "add_dir_note": "`opencode run` has no add-dir flag. A read outside its cwd hits the external_directory permission, and in run mode an 'ask' is auto-rejected and ENDS the leg with empty output that looks like a clean run (\"The user rejected permission to use this specific tool call\"). Copy the brief and every context file INTO the frozen target (as REVIEW-CLAIMS.md and siblings, declared to verify-target.sh), or give the leg's opencode.json an explicit external_directory allow rule for that path; then run scripts/leg-log-check.sh opencode <log> before reading the result."
   },
   "grok": {
     "cli": "grok",

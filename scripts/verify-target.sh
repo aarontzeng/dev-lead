@@ -73,7 +73,9 @@ for want in "$@"; do
   esac
 done
 
-dirty=$(git -C "$dir" -c core.excludesFile=/dev/null status --porcelain=v1 --untracked-files=all --ignored=matching)
+# core.quotePath=false so a non-ASCII path arrives raw, as renorm-only.sh
+# lists it and as a caller declares it.
+dirty=$(git -C "$dir" -c core.excludesFile=/dev/null -c core.quotePath=false status --porcelain=v1 --untracked-files=all --ignored=matching)
 # The one excuse, shared with freeze-target.sh: a ` M` whose bytes and mode are
 # exactly the commit's -- line-ending renormalization a fresh checkout already
 # showed (renorm-only.sh). Any other edit to that file, however small, fails.

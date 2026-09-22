@@ -15,9 +15,9 @@
 #
 # Not every option applies to every adapter, and one that does not is REFUSED,
 # never dropped: --target/--base/--prompt-file only where the adapter's template
-# has that slot (--prompt-file: grok and claude; the others read
-# "$RUN_DIR/prompt.md", so give them --run-dir), --add-dir only where
-# data/launch.json names the adapter's add_dir_flag (cursor).
+# has that slot (--prompt-file: grok; the others read "$RUN_DIR/prompt.md", so
+# give them --run-dir), --add-dir only where data/launch.json names the
+# adapter's add_dir_flag (cursor).
 #
 # Prints the command on stdout and the adapter's gotchas on stderr, so
 #   eval "$(leg-cmd.sh agy review --model gemini-3.8-flash-medium --target "$T")"
@@ -43,6 +43,7 @@ while [ $# -gt 0 ]; do
     --prompt-file) PROMPT_FILE=${2:-}; shift 2 ;;
     --run-dir)     RUN_DIR_ARG=${2:-}; shift 2 ;;
     --add-dir)     [ -n "${2:-}" ] || die "--add-dir needs a directory"
+                   case "$2" in -*) die "--add-dir: '$2' starts with '-' and would read as a flag; use ./$2" ;; esac
                    case "$2" in *$'\n'*) die "--add-dir: a directory name may not contain a newline" ;; esac
                    ADD_DIRS="$ADD_DIRS$2"$'\n'; shift 2 ;;
     --check)       CHECK=1; shift ;;
