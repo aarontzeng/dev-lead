@@ -41,20 +41,20 @@ esac
 # A refusal from here on must not leave the worktree registered behind it: the
 # caller got a non-zero exit and no SHA, so nothing will ever clean it up, and
 # the next freeze to the same path dies on "already exists". Measured
-# 2026-09-22 (SITL-bench, QCS9075-QLI2.0-SDK). Every command below that can
-# fail is guarded with `|| refuse` -- a bare failure under `set -e` exits
-# WITHOUT cleaning up (found by two review legs, 2026-09-22). $dest did not
-# exist before this point (checked above), so whatever is removed here is
-# ours.
+# 2026-09-22 (SITL-bench, QCS9075-QLI2.0-SDK). Every command after a
+# SUCCESSFUL add that can fail is guarded with `|| refuse` -- a bare failure
+# under `set -e` exits WITHOUT cleaning up (found by two review legs,
+# 2026-09-22). Only after the add succeeded is the worktree provably ours: a
+# failed add may be failing BECAUSE something else holds that path (a
+# concurrent freeze, a stale registration), so it dies without touching it.
 refuse() {
   git -C "$repo" worktree remove --force --force "$dest" >/dev/null 2>&1 || true
   die "$* (the worktree was removed again)"
 }
 
 # --detach: no branch, so nothing can advance this worktree under the reviewer.
-# A failed add can still have registered the path, hence refuse, not die.
 git -C "$repo" worktree add --detach "$dest" "$sha" >/dev/null \
-  || refuse "git worktree add failed"
+  || die "git worktree add failed (nothing was removed: the path may belong to someone else)"
 
 # Verify what we created rather than assuming it: cheap, and the whole point.
 actual=$(git -C "$dest" rev-parse HEAD 2>/dev/null) \
@@ -74,9 +74,16 @@ dirty=$(printf '%s\n' "$status" | "$here/renorm-only.sh" --filter "$dest") \
 [ -z "$dirty" ] \
   || refuse "freshly created worktree is not clean -- refusing to call it frozen:
 $dirty"
+# Informational only, so best-effort: a failure writing it must not exit past
+# the cleanup guarantee above.
 if [ -n "$status" ]; then
-  echo "freeze-target: NOTE -- files shown as modified only by line-ending renormalization (bytes identical to the commit); verify-target.sh excuses exactly these:" >&2
-  "$here/renorm-only.sh" "$dest" | sed 's/^/  /' >&2
+  { echo "freeze-target: NOTE -- files shown as modified only by line-ending renormalization (bytes identical to the commit); verify-target.sh excuses exactly these:"
+    "$here/renorm-only.sh" "$dest" | sed 's/^/  /'
+  } >&2 || true
 fi
 
-echo "$sha"
+# The SHA is the result: a caller that cannot receive it has no frozen target,
+# so failing to write it cleans up too. SIGPIPE ignored so a closed stdout is
+# an EPIPE error here, not a silent kill.
+trap '' PIPE
+printf '%s\n' "$sha" || refuse "could not write the SHA to stdout"

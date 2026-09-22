@@ -283,9 +283,10 @@ cd "$REVIEW_TARGET_DIR" && \
   "$DEV_LEAD/scripts/leg-log-check.sh" "opencode" "$RUN_DIR/review.log"
   ```
 
-  It exits 1 on an empty log, on a refused tool call with no report after it, and on a log
-  holding no report text once the log lines, tool trace and your wrapper's
-  `exit=` line are removed. A leg it fails is a MISSING leg, never "no
+  It passes only a log whose report carries a per-claim verdict word
+  (HOLDS / BROKEN / NOT REACHED / FIXED, or `--expect <regex>` for another
+  format), so an empty log, an error dump and a refused read with nothing
+  after it all exit 1. A leg it fails is a MISSING leg, never "no
   findings" -- measured 2026-09-22 (SITL-bench): two refused out-of-cwd reads
   and one 20-minute timeout each left a file that looked like a clean run. It
   catches "nothing"; the diagnosis below is still yours.

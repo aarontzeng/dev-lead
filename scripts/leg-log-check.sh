@@ -10,94 +10,107 @@
 # session: twice on 12356 (a read outside the cwd refused) and once on 12157
 # (+3601 lines, 20-minute timeout, no output).
 #
-# Usage: leg-log-check.sh <adapter> <log-file>
+# POSITIVE evidence, not subtraction. The first version stripped known noise
+# and counted what was left; three review legs then built error dumps it
+# passed and real reviews it failed, one shape after another (2026-09-22).
+# A failure has no fixed shape; a dev-lead review does: every brief requires a
+# per-claim verdict word. So a log passes only when its report text carries
+# one. An error dump never says HOLDS; a real review that quotes an error
+# still does.
 #
-# Checks, in order: the file exists and is not empty; (opencode) no tool call
-# was refused; enough report text remains once the tool-call trace, log lines
-# and the wrapper's own exit= line are removed. The threshold is deliberately
-# low (a real report is kilobytes): it catches "nothing", not "short".
+# Usage: leg-log-check.sh <adapter> <log-file> [--expect <regex>]
+#   --expect  what a delivered report must contain (Python regex, multiline).
+#             Default: the verdict vocabulary dev-lead briefs demand, plus
+#             codex adversarial-review's "Verdict:" line. Pass your own when a
+#             brief asks for a different format.
+#
+# Also: cursor --output-format json is read through its `result` field (one
+# launch can write TWO objects -- cursor-runtime.md, 2026-09-04 -- so every
+# object is parsed); a known refusal shape (opencode's auto-reject, agy's
+# "permission check failed") names the cause when no verdict followed it, and
+# is only a WARNING when one did.
 set -euo pipefail
 
-[ $# -eq 2 ] || { echo "usage: leg-log-check.sh <adapter> <log-file>" >&2; exit 2; }
-adapter=$1; log=$2
+usage() { echo "usage: leg-log-check.sh <adapter> <log-file> [--expect <regex>]" >&2; exit 2; }
+[ $# -eq 2 ] || [ $# -eq 4 ] || usage
+adapter=$1; log=$2; expect=""
+if [ $# -eq 4 ]; then
+  { [ "$3" = "--expect" ] && [ -n "$4" ]; } || usage
+  expect=$4
+fi
 
 fail() { echo "leg-log-check: FAILED ($adapter): $*" >&2; exit 1; }
 
 [ -f "$log" ] || fail "no log at $log"
 [ -s "$log" ] || fail "the log is empty -- the leg produced nothing"
 
-ADAPTER="$adapter" LOG="$log" python3 - <<'PY' || exit 1
-import os, re, sys
+ADAPTER="$adapter" LOG="$log" EXPECT="$expect" python3 - <<'PY'
+import json, os, re, sys
 
 adapter, log = os.environ["ADAPTER"], os.environ["LOG"]
+expect = os.environ.get("EXPECT") or r"\b(HOLDS|BROKEN|NOT REACHED|FIXED)\b|^\s*Verdict:"
+try:
+    verdict = re.compile(expect, re.M)
+except re.error as e:
+    sys.stderr.write("leg-log-check: --expect is not a valid regex: %s\n" % e)
+    sys.exit(2)
+
 raw = open(log, encoding="utf-8", errors="replace").read()
+text = re.sub(r"\x1b\[[0-9;]*m", "", raw)
 
 def fail(why):
     sys.stderr.write("leg-log-check: FAILED (%s): %s\n" % (adapter, why))
     sys.exit(1)
 
-# A refused tool call is FATAL only when no report followed it -- the shape
-# measured above. A leg can also be refused one command (its read-only config
-# denies most of bash) and still deliver a full review; failing that would
-# throw away a real leg, so it passes with a warning instead.
-#
-# Detected by the LINE SHAPES opencode writes, never by the words anywhere: a
-# review that quotes "auto-rejecting" while discussing permissions is not a
-# refused run (found by two review legs, 2026-09-22 -- one of their own logs
-# tripped the substring version).
-REFUSAL = (re.compile(r"^Error: The user rejected permission"),
-           re.compile(r"^(timestamp=\S+ |(INFO|WARN|DEBUG|ERROR)\b).*permission requested: .*auto-rejecting"))
+# cursor: the report is the `result` of a JSON object. Decode every object in
+# the stream (there may be two, possibly after a banner line); no object with
+# a result means no review, whatever else the stream says.
+if adapter == "cursor":
+    dec, i, results = json.JSONDecoder(), 0, []
+    while True:
+        j = text.find("{", i)
+        if j < 0:
+            break
+        try:
+            obj, end = dec.raw_decode(text, j)
+        except ValueError:
+            i = j + 1
+            continue
+        if isinstance(obj, dict) and isinstance(obj.get("result"), str):
+            results.append(obj["result"])
+        i = end
+    if not results:
+        fail("no JSON object with a `result` in the output -- the leg did not deliver a review")
+    if len(results) > 1:
+        sys.stderr.write("leg-log-check: WARNING (cursor): %d result objects -- a duplicate "
+                         "dispatch; reading the longest\n" % len(results))
+    text = max(results, key=len)
 
-text = re.sub(r"\x1b\[[0-9;]*m", "", raw)
-
-# cursor --output-format json: the report is the `result` field. A JSON
-# document without one is an error payload, not a review.
-stripped_all = text.strip()
-if stripped_all.startswith("{"):
-    try:
-        import json
-        doc = json.loads(stripped_all)
-    except ValueError:
-        doc = None
-    if isinstance(doc, dict):
-        text = str(doc.get("result") or "")
-
-# Noise a failed run is made of: log lines, the tool-call trace (marker + a
-# space -- a report line starting "$VAR" is kept), the wrapper's exit=, error
-# and traceback lines, a run banner, and one-line JSON payloads.
-NOISE = (re.compile(r"^timestamp="),
-         re.compile(r"^(INFO|DEBUG|WARN|ERROR|TRACE|FATAL)\b"),
-         re.compile(r"^[\u2192\u2731\u2717\u2699$] "),
-         re.compile(r"^exit=\d+$"),
-         re.compile(r"^(Error|error|Traceback|Caused by)\b"),
-         re.compile(r"^at \S.*\(.*:\d+(:\d+)?\)$"),
-         re.compile(r'^File ".*", line \d+'),
-         re.compile(r"^> \S+ \u00b7 "),
-         re.compile(r"^\{.*\}$"))
-
+# Known refusal shapes, matched as the whole lines the CLIs write, so a review
+# that merely mentions the words is not one.
+REFUSAL = {
+    "opencode": (r"^Error: The user rejected permission to use this specific tool call",
+                 r"permission requested: .*; auto-rejecting\s*$"),
+    "agy": (r"^permission check failed for (command|unsandboxed)",),
+}
 refused = None
-keep = []
-for line in text.splitlines():
-    s = line.strip()
-    if not s:
-        continue
-    if adapter == "opencode" and any(r.search(s) for r in REFUSAL):
-        refused = refused or s[:80]
-        continue
-    if any(r.search(s) for r in NOISE):
-        continue
-    keep.append(s)
-body = "\n".join(keep)
-if len(body) < 400:
+for pat in REFUSAL.get(adapter, ()):
+    m = re.search(pat, text, re.M)
+    if m:
+        refused = m.group(0)[:100]
+        break
+
+hits = len(verdict.findall(text))
+if not hits:
     if refused:
-        fail("a tool call was refused (%r) and no report followed -- usually a "
-             "read outside the cwd; put the brief and context inside the frozen "
-             "target and rerun" % refused)
-    fail("only %d characters of report text once logs, tool calls and error "
-         "noise are removed -- the leg did not deliver a review" % len(body))
+        fail("a tool call was refused (%r) and no verdict followed -- usually a read "
+             "outside what the leg may read; put the brief and context where it can "
+             "and rerun" % refused)
+    fail("no verdict in the output (expected /%s/) -- the leg did not deliver a "
+         "review; an error or an empty run looks exactly like this" % expect)
 if refused:
     sys.stderr.write("leg-log-check: WARNING (%s): a tool call was refused (%r); the "
-                     "report below was written without that call -- check what it "
-                     "could not read\n" % (adapter, refused))
-print("leg-log-check: OK (%s): %d characters of report text" % (adapter, len(body)))
+                     "review was written without it -- check what it could not read\n"
+                     % (adapter, refused))
+print("leg-log-check: OK (%s): %d verdict mark(s)" % (adapter, hits))
 PY

@@ -3433,67 +3433,90 @@ def test_freeze_refusal_cleans_up(tmp):
     listed = run("git", "-C", repo, "worktree", "list", "--porcelain").stdout
     check("freeze: ...and from git's worktree list", str(dest) not in listed, listed)
 
+    # A failed ADD must remove nothing: the path may be held by someone else.
+    # Stale registration (dir deleted, registration kept) -- the -e guard passes,
+    # the add fails, and the other registration must survive (review, 2026-09-22;
+    # the same rule covers two concurrent freezes to one path).
+    other = tmp / "held-by-someone-else"
+    git(repo, "worktree", "add", "-q", "--detach", str(other), "HEAD")
+    shutil.rmtree(other)
+    r = run(freeze, repo, "HEAD", other)
+    check("freeze: a failed add is refused", r.returncode != 0, r.stdout)
+    listed = run("git", "-C", repo, "worktree", "list", "--porcelain").stdout
+    check("freeze: ...and leaves the other registration alone", str(other) in listed, listed)
+
 
 # ---------------------------------------------------------- leg-log-check ----
 def test_leg_log_check(tmp):
     """Silent failed legs (SITL-bench, 2026-09-22): a refused read or a timeout
-    left a log that looked like a finished run once the wrapper appended exit=0."""
+    left a log that looked like a finished run once the wrapper appended exit=0.
+    The check is POSITIVE evidence -- a verdict word the brief demanded -- because
+    subtracting known noise lost to every error shape three review legs built."""
     script = SCRIPTS / "leg-log-check.sh"
-    esc = "\x1b[0m"
-    report = "## Claim 1 -- HOLDS\n" + ("src/x.py:12 quoted code and reasoning. " * 30)
+    report = "## Claim 1 -- HOLDS\nsrc/x.py:12 quoted code.\n## Claim 2 -- BROKEN\ntrigger -> consequence\n"
+    long_err = ("ResourceExhausted: 429 Resource has been exhausted (e.g. check quota). "
+                "Quota exceeded for quota metric 'GenerateContent requests'.\n") * 8
     cases = [
-        ("missing file", None, 1),
-        ("empty file", "", 1),
-        ("timeout: logs and exit=124 only", "timestamp=1 INFO start\nexit=124\n", 1),
-        ("refused read, nothing after",
-         "timestamp=1 INFO x\n" + esc + "\u2192 " + esc + "Read ../ctx.md\n"
-         + "Error: The user rejected permission to use this specific tool call\nexit=0\n", 1),
-        ("a refusal loop is not report text",
-         "Error: The user rejected permission to use this specific tool call\n" * 20, 1),
-        ("a real report", "timestamp=1 INFO x\n" + report + "exit=0\n", 0),
-        # each strip rule pinned by 400+ characters of ONLY that shape
-        ("400+ chars of log lines only",
-         "timestamp=2026-09-22T00:00:00 INFO service=session step=1 waiting\n" * 10, 1),
-        ("400+ chars of tool trace only",
-         (esc + "\u2192 " + esc + "Read src/some/long/path/to/a/file.py [limit=90, offset=5020]\n") * 10, 1),
-        ("400+ chars of error noise",
-         "ERROR service=llm UnknownError: Unexpected server error step=0\n" * 5
-         + "Traceback (most recent call last):\n" + '  File "x.py", line 3, in <module>\n' * 5
-         + "    at run (/usr/lib/node_modules/opencode/dist/index.js:12:5)\n" * 5
-         + '{"name":"UnknownError","data":{"message":"Unexpected server error"}}\n' * 3
-         + "> build \u00b7 glm-5.2\n", 1),
-        ("400+ chars of Error: lines only",
-         'Error: {"name":"UnknownError","data":{"message":"Unexpected server error"}} step=0\n' * 6, 1),
-        ("a report quoting the refusal words is not a refusal",
-         "The leg ends on `auto-rejecting` and a `rejected permission` error.\n" + report, 0),
-        ("report lines starting with $VAR are kept",
-         "".join("$VAR%d is unquoted at scripts/x.sh:%d and word-splits a path.\n" % (i, i)
-                 for i in range(12)), 0),
-        ("a refusal the leg worked around, then a report",
-         "Error: The user rejected permission to use this specific tool call\n" + report, 0),
+        # (label, adapter, body or None, expected exit)
+        ("missing file", "opencode", None, 1),
+        ("empty file", "opencode", "", 1),
+        ("timeout: logs and exit=124 only", "opencode", "timestamp=1 INFO start\nexit=124\n", 1),
+        ("refused read, nothing after", "opencode",
+         "timestamp=1 INFO x\nError: The user rejected permission to use this specific tool call.\nexit=0\n", 1),
+        ("a long error dump is not a review (agy quota)", "agy", long_err, 1),
+        ("agy's own denial line", "agy",
+         'permission check failed for command "node -e 1": user denied permission to run command\n' * 8, 1),
+        ("a real report", "opencode", "timestamp=1 INFO x\n" + report + "exit=0\n", 0),
+        ("a real report quoting errors and trace markers", "agy",
+         "\u2717 Error: TypeError at x.js:3 is unhandled -- BROKEN\n\u2192 fix it\n$VAR unquoted\n", 0),
+        ("a refusal the leg worked around, then a report", "opencode",
+         "Error: The user rejected permission to use this specific tool call.\n" + report, 0),
+        ("a report quoting the refusal words mid-line", "opencode",
+         "The leg ends on `auto-rejecting` and a rejected permission. HOLDS\n", 0),
+        ("codex: a Verdict line", "codex", "# Codex Adversarial Review\n\nVerdict: approve\n", 0),
+        ("codex: the usage-limit failure", "codex",
+         "# Codex Adversarial Review\n\nCodex did not return valid structured JSON.\n", 1),
     ]
-    for label, body, want in cases:
-        log = tmp / ("log-" + label.replace(" ", "_").replace(",", "").replace(":", ""))
+    logs = {}
+    for label, adapter, body, want in cases:
+        log = tmp / ("llc-" + str(len(logs)))
+        logs[label] = log
         if body is not None:
             log.write_text(body)
-        r = run(script, "opencode", log)
+        r = run(script, adapter, log)
         check(f"leg-log-check: {label} -> exit {want}", r.returncode == want,
               f"rc={r.returncode} out={r.stdout!r} err={r.stderr!r}")
-    r = run(script, "opencode", tmp / ("log-" + "a_refusal_the_leg_worked_around_then_a_report"))
-    check("leg-log-check: a worked-around refusal is still WARNED about",
-          "WARNING" in r.stderr, r.stderr)
-    r = run(script, "opencode", tmp / ("log-" + "a_report_quoting_the_refusal_words_is_not_a_refusal"))
-    check("leg-log-check: ...but quoting the words draws no warning", "WARNING" not in r.stderr, r.stderr)
-    # cursor --output-format json: the report is `result`; an error document is not a review
-    jlog = tmp / "log-cursor-ok"
-    jlog.write_text(json.dumps({"type": "result", "result": report}))
-    r = run(script, "cursor", jlog)
-    check("leg-log-check: cursor JSON with a result passes", r.returncode == 0, r.stderr)
-    jlog = tmp / "log-cursor-err"
-    jlog.write_text(json.dumps({"type": "error", "message": "x" * 800}))
-    r = run(script, "cursor", jlog)
-    check("leg-log-check: cursor JSON without a result fails", r.returncode == 1, r.stdout)
-
+    r = run(script, "opencode", logs["a refusal the leg worked around, then a report"])
+    check("leg-log-check: a worked-around refusal is still WARNED about", "WARNING" in r.stderr, r.stderr)
+    r = run(script, "opencode", logs["a report quoting the refusal words mid-line"])
+    check("leg-log-check: ...but mentioning the words draws no warning", "WARNING" not in r.stderr, r.stderr)
+    r = run(script, "agy", logs["agy's own denial line"])
+    check("leg-log-check: the agy denial is named as the cause", "refused" in r.stderr, r.stderr)
+    # cursor: result objects, a banner, two objects, and an error object
+    for label, body, want in (
+        ("cursor: one result object", json.dumps({"type": "result", "result": report}), 0),
+        ("cursor: a banner line before the object",
+         "cursor-agent v1 (pid 1)\n" + json.dumps({"type": "result", "result": report}), 0),
+        ("cursor: two objects (duplicate dispatch)",
+         json.dumps({"result": "tail only"}) + "\n" + json.dumps({"result": report}), 0),
+        ("cursor: an error object, however long", json.dumps({"type": "error", "message": "HOLDS " * 200}), 1),
+        ("cursor: a result without a verdict", json.dumps({"result": "I could not read the files."}), 1),
+    ):
+        log = tmp / ("llc-c" + str(len(logs)))
+        logs[label] = log
+        log.write_text(body)
+        r = run(script, "cursor", log)
+        check(f"leg-log-check: {label} -> exit {want}", r.returncode == want,
+              f"rc={r.returncode} err={r.stderr!r}")
+    r = run(script, "cursor", logs["cursor: two objects (duplicate dispatch)"])
+    check("leg-log-check: a duplicate cursor dispatch is warned about", "duplicate" in r.stderr, r.stderr)
+    # --expect overrides the vocabulary
+    log = tmp / "llc-expect"
+    log.write_text("## Findings\nVERDICT-OK\n")
+    check("leg-log-check: default vocabulary refuses a custom format",
+          run(script, "opencode", log).returncode == 1)
+    check("leg-log-check: --expect accepts it",
+          run(script, "opencode", log, "--expect", "VERDICT-OK").returncode == 0)
 
 def main():
     for script in ("freeze-target.sh", "verify-target.sh", "snapshot-refs.sh",
