@@ -3,6 +3,7 @@
 import argparse
 import hashlib
 import json
+import math
 import os
 import posixpath
 import re
@@ -43,6 +44,12 @@ def _is_comment_key(key):
 
 def public_keys(value):
     return [key for key in value if not _is_comment_key(key)]
+
+
+def public_map(value):
+    """Return a map's usable entries, never its reserved comment keys."""
+    return {key: item for key, item in value.items()
+            if not _is_comment_key(key) and not str(key).startswith("_")}
 
 
 def _map_items(value, path, problems):
@@ -137,7 +144,7 @@ def _roster_lens_classes(problems):
     if not isinstance(by_lens, dict):
         problems.error("lens_classes", "roster r1 opencode review by_lens must be an object")
         return set()
-    return set(public_keys(by_lens))
+    return set(public_map(by_lens))
 
 
 def validate(doc):
@@ -177,12 +184,14 @@ def validate(doc):
     if not isinstance(lens_classes, dict):
         problems.error("lens_classes", "must be an object")
         lens_classes = {}
+        public_lens_classes = {}
     else:
         for lens, lens_class in _map_items(lens_classes, "lens_classes", problems):
             if not isinstance(lens, str) or not lens or not isinstance(lens_class, str):
                 problems.error("lens_classes.%s" % lens, "lens and class must be non-empty strings")
             elif lens_class not in roster_classes:
                 problems.error("lens_classes.%s" % lens, "class %r is not in roster opencode by_lens" % lens_class)
+        public_lens_classes = public_map(lens_classes)
     lenses = doc.get("lenses")
     if not isinstance(lenses, list):
         problems.error("lenses", "must be a list")
@@ -199,7 +208,7 @@ def validate(doc):
                 problems.error(path + ".lenses", "must be a list of lens names")
             else:
                 for name in names:
-                    if name not in lens_classes:
+                    if name not in public_lens_classes:
                         problems.error(path + ".lenses", "unknown lens %r" % name)
             if "why" in rule and not isinstance(rule["why"], str):
                 problems.error(path + ".why", "must be a string")
@@ -228,7 +237,7 @@ def validate(doc):
                     problems.error(path + ".lenses", "must be a list of lens names")
                 else:
                     for name in rule["lenses"]:
-                        if name not in lens_classes:
+                        if name not in public_lens_classes:
                             problems.error(path + ".lenses", "unknown lens %r" % name)
             for key in ("flag", "why"):
                 if key in rule and not isinstance(rule[key], str):
@@ -298,7 +307,7 @@ def rules_identity(doc, raw, path, as_of_patch_set=None):
 
 
 def _decoded(value):
-    return value.decode("utf-8", errors="replace")
+    return value.decode("utf-8", errors="surrogateescape")
 
 
 def _git(repo, *args):
@@ -325,9 +334,12 @@ def _ensure_revision(repo, change, patch_set, revision):
     if _object_exists(repo, revision):
         return
     ref = "refs/changes/%02d/%s/%s" % (int(change) % 100, change, patch_set)
-    _git(repo, "fetch", "origin", ref)
+    try:
+        _git(repo, "fetch", "origin", ref)
+    except InputError as exc:
+        raise InputError("git: could not fetch revision %s from %s: %s" % (revision, ref, exc))
     if not _object_exists(repo, revision):
-        raise InputError("git: fetched %s but revision %s is unavailable" % (ref, revision))
+        raise InputError("git: revision %s is unavailable after fetching %s" % (revision, ref))
 
 
 def _identity_matches(person, identifiers):
@@ -337,21 +349,27 @@ def _identity_matches(person, identifiers):
 
 
 def _time(value):
+    """Produce a total timestamp ordering for Gerrit's mixed JSON values."""
     if isinstance(value, (int, float)):
-        return float(value)
+        try:
+            numeric = float(value)
+        except OverflowError:
+            return (1, str(value))
+        if math.isfinite(numeric):
+            return (0, numeric)
     if isinstance(value, str):
         try:
-            return float(value)
+            numeric = float(value)
+            if math.isfinite(numeric):
+                return (0, numeric)
         except ValueError:
-            return value
-    return 0
+            pass
+        return (1, value)
+    return (2, repr(value))
 
 
 def _after(left, right):
-    try:
-        return _time(left) > _time(right)
-    except TypeError:
-        return str(left) > str(right)
+    return _time(left) > _time(right)
 
 
 def _number(value):
@@ -425,7 +443,7 @@ def _paths_for(entry):
 def _hunk_lines(patch):
     """Return only content lines, preserving CR bytes before each newline."""
     lines, in_hunk = [], False
-    for raw_line in patch.splitlines(keepends=True):
+    for raw_line in patch.split("\n"):
         line = raw_line[:-1] if raw_line.endswith("\n") else raw_line
         if line.startswith("diff --git "):
             in_hunk = False
@@ -445,6 +463,19 @@ def _patch_lines(patch):
     added = [line[1:] for line in useful if line.startswith("+")]
     removed = [line[1:] for line in useful if line.startswith("-")]
     return useful, added, removed
+
+
+def _has_binary_header(patch):
+    """Recognise Git's binary marker only where Git can emit metadata."""
+    in_hunk = False
+    for line in patch.split("\n"):
+        if line.startswith("diff --git "):
+            in_hunk = False
+        elif line.startswith("@@"):
+            in_hunk = True
+        elif not in_hunk and re.fullmatch(r"Binary files .* differ", line):
+            return True
+    return False
 
 
 def _diff_entries(repo, parent, revision):
@@ -469,7 +500,7 @@ def _diff_entries(repo, parent, revision):
         useful, added, removed = _patch_lines(patch)
         entries.append({"status": status, "old": old, "new": new,
                         "signature": "\n".join(useful), "added": added, "removed": removed,
-                        "binary": "Binary files " in patch})
+                        "binary": _has_binary_header(patch)})
     return entries
 
 
@@ -560,7 +591,7 @@ def _tree_text(repo, revision, path):
         raise InputError("git: %s" % exc)
     if result.returncode:
         message = _decoded(result.stderr).strip() or _decoded(result.stdout).strip()
-        if "does not exist in" in message:
+        if "does not exist in" in message or "is outside repository" in message:
             return None
         raise InputError("git: %s" % (message or "git show failed"))
     return _decoded(result.stdout)
@@ -571,7 +602,6 @@ def _tree_has(repo, revision, path):
 
 
 URL = re.compile(r"https?://[^\s<>()\[\]\"']+")
-MARKDOWN_LINK = re.compile(r"\]\(([^)]+)\)")
 
 
 def _without_inline_code(line):
@@ -595,19 +625,33 @@ def _without_inline_code(line):
 
 def _visible_markdown(text):
     """Drop fenced blocks and inline code before extracting links or URLs."""
-    lines, fenced, marker = [], False, None
-    for raw_line in text.splitlines(keepends=True):
+    lines, fence, indented, blank = [], None, False, True
+    for raw_line in text.split("\n"):
         line = raw_line[:-1] if raw_line.endswith("\n") else raw_line
-        start = re.match(r"^\s*(`{3,}|~{3,})", line)
-        if start:
-            token = start.group(1)
-            if not fenced:
-                fenced, marker = True, token[0]
-            elif token[0] == marker:
-                fenced, marker = False, None
+        indent = len(line) - len(line.lstrip(" \t"))
+        token = line[indent:]
+        if fence is not None:
+            character, length = fence
+            run = len(token) - len(token.lstrip(character))
+            if run >= length and token[run:].strip(" \t\r") == "":
+                fence = None
             continue
-        if not fenced:
-            lines.append(_without_inline_code(line))
+        if not token:
+            blank = True
+            continue
+        # An indented code block opens only after a blank line: the same indent
+        # under a list item is a continuation, and a link that does not resolve
+        # there must still be flagged.
+        if (indent >= 4 or line.startswith("\t")) and (indented or blank):
+            indented, blank = True, False
+            continue
+        indented, blank = False, False
+        start = re.match(r"(`{3,}|~{3,})", token)
+        if start:
+            marker = start.group(1)
+            fence = (marker[0], len(marker))
+            continue
+        lines.append(_without_inline_code(line))
     return "\n".join(lines)
 
 
@@ -620,14 +664,33 @@ def _urls(text):
     return found
 
 
+def _markdown_targets(text):
+    """Yield balanced Markdown link destinations from visible Markdown."""
+    index = 0
+    while True:
+        start = text.find("](", index)
+        if start < 0:
+            return
+        cursor, depth = start + 2, 1
+        while cursor < len(text) and depth:
+            if text[cursor] == "(":
+                depth += 1
+            elif text[cursor] == ")":
+                depth -= 1
+            cursor += 1
+        if depth == 0:
+            yield text[start + 2:cursor - 1]
+        index = cursor
+
+
 def _relative_targets(text):
-    for target in MARKDOWN_LINK.findall(_visible_markdown(text)):
+    for target in _markdown_targets(_visible_markdown(text)):
         target = target.strip()
         if target.startswith("<"):
             closing = target.find(">")
             target = target[1:closing] if closing >= 0 else target[1:]
         else:
-            target = re.split(r"\s+(?=[\"'])", target, maxsplit=1)[0]
+            target = re.split(r"\s+(?=[\"'(])", target, maxsplit=1)[0]
         if not target or target.startswith("#") or re.match(r"[A-Za-z][A-Za-z0-9+.-]*:", target):
             continue
         target = target.split("#", 1)[0].split("?", 1)[0]
@@ -716,6 +779,7 @@ def _fired(fired, rule, detail):
 
 
 def _lenses_and_triggers(config, files, delta_lines, fired, *, path_only=False):
+    line_data = delta_lines if isinstance(delta_lines, dict) else {}
     matches = {}
     for index, rule in enumerate(config["lenses"]):
         for path in files:
@@ -726,15 +790,17 @@ def _lenses_and_triggers(config, files, delta_lines, fired, *, path_only=False):
     raised = config["risk_default"]
     flags = []
     for index, rule in enumerate(config["delta_triggers"]):
-        paths = [path for path in files if glob_matches(rule["glob"], path)]
+        file_paths = [path for path in files if glob_matches(rule["glob"], path)]
+        line_paths = [path for path in line_data if glob_matches(rule["glob"], path)]
+        paths = list(dict.fromkeys(file_paths + line_paths))
         if not paths:
             continue
-        fires = rule.get("path_only") is True
+        fires = rule.get("path_only") is True and bool(file_paths)
         if not path_only and "added_regex" in rule:
             compiled = re.compile(rule["added_regex"])
             fires = fires or any(compiled.search(line)
-                                for matched_path in paths
-                                for line in sum(delta_lines.get(matched_path, ([], [])), []))
+                                for matched_path in line_paths
+                                for line in sum(line_data.get(matched_path, ([], [])), []))
         if not fires:
             continue
         raised = max(raised, rule["risk"], key=lambda item: RISK_VALUE[item])
@@ -744,7 +810,8 @@ def _lenses_and_triggers(config, files, delta_lines, fired, *, path_only=False):
             flags.append(rule["flag"])
         _fired(fired, "delta_triggers[%s]" % index,
                "%s fired for %s" % (rule.get("why") or rule["glob"], ", ".join(paths)))
-    lens_list = [{"name": name, "class": config["lens_classes"][name], "files": sorted(paths)}
+    classes = public_map(config["lens_classes"])
+    lens_list = [{"name": name, "class": classes[name], "files": sorted(paths)}
                  for name, paths in sorted(matches.items())]
     return lens_list, raised, flags
 
@@ -847,20 +914,16 @@ def _last_vote(change, identifiers):
 
 
 def _at_or_after(left, right):
-    try:
-        return _time(left) >= _time(right)
-    except TypeError:
-        return str(left) >= str(right)
+    return _time(left) >= _time(right)
 
 
-def _as_of_cutoff(change, as_of, identifiers):
-    """The moment just before I acted on patch set N.
+def _as_of_cutoffs(change, as_of):
+    """Return distinct replay cutoffs for everyone and for my own actions.
 
-    That is the earlier of patch set N+1's upload and my first vote or message
-    on patch set N: a replay must see the change as the patrol did before
-    reading it, not the vote I cast after reading it. For a change I own (I
-    do not vote on it) this leaves the N+1 upload, so reviewers' votes on N
-    still count.
+    A replay ends for all accounts when patch set N+1 is uploaded. My approval
+    on N and my messages from N's upload onward are additionally excluded so
+    the replay reflects the decision before I reviewed N, without discarding
+    other reviewers' intervening feedback.
     """
     if as_of is None:
         return None
@@ -872,34 +935,35 @@ def _as_of_cutoff(change, as_of, identifiers):
     entries = list(change.get("patchSets") or [])
     if isinstance(change.get("currentPatchSet"), dict):
         entries.append(change["currentPatchSet"])
-    candidates, created = [], None
+    next_created, created = [], None
     for entry in entries:
         if not isinstance(entry, dict):
             continue
         if _number(entry) == next_number and "createdOn" in entry:
-            candidates.append(entry["createdOn"])
+            next_created.append(entry["createdOn"])
         if _number(entry) == number:
             created = entry.get("createdOn", created)
-            candidates.extend(approval.get("grantedOn", 0) for approval in entry.get("approvals") or []
-                              if _identity_matches(approval.get("by"), identifiers))
-    if created is not None:
-        candidates.extend(comment.get("timestamp", 0) for comment in change.get("comments") or []
-                          if _identity_matches(comment.get("reviewer"), identifiers)
-                          and _at_or_after(comment.get("timestamp", 0), created))
-    return min(candidates, key=_time) if candidates else None
+    return {"everyone": min(next_created, key=_time) if next_created else None,
+            "mine": created, "patch_set": number}
 
 
-def _limit_to_as_of(change, patch_sets, cutoff):
-    if cutoff is None:
+def _limit_to_as_of(change, patch_sets, cutoffs, identifiers):
+    if cutoffs is None:
         return
+    everyone, mine = cutoffs["everyone"], cutoffs["mine"]
+    replayed_patch_set = cutoffs["patch_set"]
     for patch_set in patch_sets.values():
         patch_set["approvals"] = [
             approval for approval in patch_set.get("approvals") or []
-            if not _at_or_after(approval.get("grantedOn", 0), cutoff)
+            if not (everyone is not None and _at_or_after(approval.get("grantedOn", 0), everyone))
+            and not (_number(patch_set) == replayed_patch_set
+                     and _identity_matches(approval.get("by"), identifiers))
         ]
     change["comments"] = [
         comment for comment in change.get("comments") or []
-        if not _at_or_after(comment.get("timestamp", 0), cutoff)
+        if not (everyone is not None and _at_or_after(comment.get("timestamp", 0), everyone))
+        and not (_identity_matches(comment.get("reviewer"), identifiers) and mine is not None
+                 and _at_or_after(comment.get("timestamp", 0), mine))
     ]
 
 
@@ -950,12 +1014,12 @@ def _line_count(line_data):
 
 def triage_change(config, raw, path, number, query_json, include_wip, as_of=None):
     change, all_changes = _query(config, number, query_json)
-    cutoff = _as_of_cutoff(change, as_of, set(config["me"]))
+    identifiers = set(config["me"])
+    cutoffs = _as_of_cutoffs(change, as_of)
     patch_sets, current = _patch_sets(change, as_of)
-    _limit_to_as_of(change, patch_sets, cutoff)
+    _limit_to_as_of(change, patch_sets, cutoffs, identifiers)
     if not current.get("revision"):
         raise InputError("change: current patch set has no revision")
-    identifiers = set(config["me"])
     project = change.get("project")
     gateway = config["gateways"].get(project)
     role = "owner" if _identity_matches(change.get("owner"), identifiers) else "reviewer"
@@ -979,7 +1043,8 @@ def triage_change(config, raw, path, number, query_json, include_wip, as_of=None
         upload = max(uploads, key=lambda patch_set: _time(patch_set.get("createdOn", 0))) if uploads else current
         upload_time = upload.get("createdOn", 0)
         negatives = [
-            approval for approval in current.get("approvals") or []
+            approval for patch_set in patch_sets.values()
+            for approval in patch_set.get("approvals") or []
             if approval.get("type") == "Code-Review"
             and not _identity_matches(approval.get("by"), identifiers)
             and (_approval_value(approval) or 0) < 0
@@ -1140,7 +1205,8 @@ def main(argv=None):
     change.add_argument("number")
     change.add_argument("--query-json")
     change.add_argument("--include-wip", action="store_true")
-    change.add_argument("--as-of-ps")
+    change.add_argument("--as-of-ps", help=("replay before my own vote and messages on that patch set; "
+                                             "those actions are excluded on purpose"))
     scope_parser = sub.add_parser("scope")
     scope_parser.add_argument("--files", nargs="+", required=True)
     scope_parser.add_argument("--category")

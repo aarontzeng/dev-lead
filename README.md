@@ -233,6 +233,8 @@ planned paths. Its path globs treat `**` as crossing `/`, while `*` and `?`
 do not; a pattern with no `/` matches only the basename.
 For a merge-commit patch set, its content delta is compared with the first
 parent, matching Gerrit's displayed diff.
+`change --as-of-ps N` deliberately excludes your own vote and messages on
+patch set N, reproducing the decision you faced before reviewing it.
 
 The lead role is portable: all six CLIs can read the same skills directory,
 so a Codex or Gemini lead can follow the same playbook and delegate to

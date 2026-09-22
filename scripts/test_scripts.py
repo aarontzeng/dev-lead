@@ -4024,7 +4024,9 @@ def test_triage(tmp):
         return output
 
     result = bad_move(107, ("https://same.example/item", "https://other.example/item"))
-    check("triage change: move URL failure is flagged", any("absolute URL" in flag for flag in result.get("flags", [])), result)
+    check("triage change: move URL failure names added and removed URLs",
+          any("absolute URLs changed (added: https://other.example/item; removed: https://same.example/item)" in flag
+              for flag in result.get("flags", [])), result)
     result = bad_move(108, ("../../../links/ok.md", "../../../links/missing.md"))
     check("triage change: move relative-link failure is flagged", any("does not resolve" in flag for flag in result.get("flags", [])), result)
     result = bad_move(109, ("docs/move/deep/new.md", "docs/move/deep/new.md"),
@@ -4173,7 +4175,7 @@ def test_triage(tmp):
                      comments=[{"timestamp": 21, "reviewer": {"username": "bob"}, "message": "please adjust"}])
     check("triage owner fix: comment only uses roster",
           result.get("legs") == "roster" and any(rule["rule"] == "owner-fix-round" for rule in result.get("fired_rules", [])), result)
-    result = changed(122, [patch(1, per_file_ps1, base, created=10),
+    result = changed(122, [patch(1, per_file_ps1, base, approvals=[approval("+1")], created=10),
                            patch(2, per_file_ps2, per_file_ps1, created=20)], owner="alice",
                      comments=[{"timestamp": 21, "reviewer": {"username": "bob"}, "message": "small fix"}])
     check("triage owner fix: small post-vote delta still uses roster", result.get("legs") == "roster", result)
@@ -4219,7 +4221,10 @@ def test_triage(tmp):
     expect_bad("naming-regex", lambda doc: doc["move_check"]["naming"].append({"glob": "x", "regex": "["}), "invalid regex")
     expect_bad("bad-glob", lambda doc: doc["lenses"][0].update({"glob": ""}), "non-empty")
     expect_bad("clone-underscore", lambda doc: doc["clones"].update({"_not_comment": "/tmp/x"}), "unknown key")
-    expect_bad("comment-as-lens", lambda doc: doc["lenses"][0].update({"lenses": ["_comment"]}), "unknown lens")
+    def comment_as_lens(doc):
+        doc["lens_classes"]["_comment"] = "mechanical"
+        doc["lenses"][0]["lenses"] = ["_comment"]
+    expect_bad("comment-as-lens", comment_as_lens, "unknown lens")
 
     # Fix round 1: the judgment class chooses exactly the roster's judgment
     # opencode model, while every configured r1 adapter remains visible.
@@ -4270,7 +4275,7 @@ def test_triage(tmp):
     move_query_ps1 = commit("query source")
     (repo / "docs" / "move" / "deep").mkdir(parents=True)
     git(repo, "mv", "docs/move/query.md", "docs/move/deep/query.md")
-    write("docs/move/deep/query.md", query_text)
+    write("docs/move/deep/query.md", query_text.replace("https://same.example/item.", "https://same.example/item"))
     move_query_ps2 = commit("query target")
     result = changed(133, [patch(1, move_query_ps1, base, approvals=[approval("+1")]), patch(2, move_query_ps2, move_query_ps1)])
     check("triage move links: unresolved query link is flagged but sentence punctuation is not a URL change",
@@ -4342,6 +4347,136 @@ def test_triage(tmp):
     colon_ps2 = commit("colon target")
     result = changed(140, [patch(1, colon_ps1, base, approvals=[approval("+1")]), patch(2, colon_ps2, colon_ps1)])
     check("triage literal pathspec: colon path is handled", result.get("delta_files") == ["docs/a:b.md"], result)
+
+    # Fix round 2 F1: replay keeps other people's feedback before PS N+1,
+    # but excludes my review action on the replayed patch set.
+    replay = {
+        "owner": {"username": "bob"},
+        "patchSets": [{"number": 1, "createdOn": 10, "approvals": [approval("+1", 12)]},
+                      {"number": 2, "createdOn": 20, "approvals": []}],
+        "comments": [{"timestamp": 15, "reviewer": {"username": "carol"}, "message": "please revisit"}],
+    }
+    if hasattr(triage_module, "_as_of_cutoffs"):
+        cutoffs = triage_module._as_of_cutoffs(replay, 1)
+        replay_sets, _replay_current = triage_module._patch_sets(replay, 1)
+        triage_module._limit_to_as_of(replay, replay_sets, cutoffs, {"alice"})
+        replay_ok = not replay_sets["1"]["approvals"] and replay["comments"]
+    else:
+        replay_ok = False
+    check("triage as-of F1: third-party feedback survives while my PS1 vote does not", replay_ok, replay)
+
+    # Fix round 2 F1: an owner's reviewers may still have answered before the
+    # next upload; the owner's own upload message must not erase those votes.
+    result = changed(159, [patch(1, asof_ps1, base, approvals=[approval("-1", 15, "bob")], created=10),
+                           patch(2, asof_ps2, asof_ps1, created=20)], owner="alice",
+                     comments=[{"timestamp": 10, "reviewer": {"username": "alice"}, "message": "Uploaded patch set 1."}],
+                     args=("--as-of-ps", "1"))
+    check("triage as-of F1: owner sees a pre-upload reviewer negative",
+          result.get("legs") == "roster" and any(rule["rule"] == "owner-fix-round" for rule in result.get("fired_rules", [])), result)
+    result = changed(160, [patch(1, asof_ps1, base, approvals=[approval("+1", 15)], created=10),
+                           patch(2, asof_ps2, asof_ps1, created="next-upload")],
+                     comments=[{"timestamp": 16, "reviewer": {"username": "carol"}, "message": "third-party feedback"}],
+                     args=("--as-of-ps", "1"))
+    check("triage as-of F1: mixed string and integer timestamps do not raise",
+          result.get("change") == 160 and result.get("role") == "reviewer" and result.get("my_last_vote") is None, result)
+
+    # Fix round 2 F2: a rename's removed trigger line is searched at its old
+    # path even though delta_files remains the new path.
+    git(repo, "checkout", "-q", "-B", "rename-removed-trigger", base)
+    write("docs/spec/old.md", "Status: Verified\n" + ("keep\n" * 12))
+    rename_removed_ps1 = commit("rename removed trigger source")
+    git(repo, "mv", "docs/spec/old.md", "docs/spec/new.md")
+    write("docs/spec/new.md", "keep\n" * 12)
+    rename_removed_ps2 = commit("rename removes trigger")
+    result = changed(161, [patch(1, rename_removed_ps1, base, approvals=[approval("+1")]),
+                           patch(2, rename_removed_ps2, rename_removed_ps1)])
+    check("triage rename F2: removed trigger in a PS rename raises risk",
+          result.get("delta_files") == ["docs/spec/new.md"] and result.get("risk_floor") == "HIGH", result)
+
+    # Fix round 2 F3: negatives from an owner's older patch set still require
+    # a roster round after someone else uploads the later patch set.
+    result = changed(162, [patch(1, asof_ps1, base, approvals=[approval("-1", 15, "bob")], created=10),
+                           dict(patch(2, asof_ps2, asof_ps1, created=20), uploader={"username": "carol"})], owner="alice")
+    check("triage owner fix F3: older patch-set negative uses roster",
+          result.get("legs") == "roster" and any(rule["rule"] == "owner-fix-round" for rule in result.get("fired_rules", [])), result)
+
+    # Fix round 2 F4: a stray CR is content inside one Git line, not a line
+    # boundary; the trigger sees it and the added line counts once.
+    git(repo, "checkout", "-q", "-B", "stray-cr", base)
+    (repo / "docs" / "spec").mkdir(parents=True, exist_ok=True)
+    (repo / "docs" / "spec" / "cr.md").write_bytes(b"ordinary\rStatus: Verified now\n")
+    stray_cr = commit("stray carriage return")
+    result = changed(163, [patch(1, stray_cr, base)])
+    check("triage hunk F4: stray CR preserves one trigger line",
+          result.get("risk_floor") == "HIGH" and result.get("legs") == "roster", result)
+    _cr_hunks, cr_added, cr_removed = triage_module._patch_lines(
+        "diff --git a/a b/a\n@@ -0,0 +1 @@\n+ordinary\rStatus: Verified now\n")
+    check("triage hunk F4: stray CR line is counted once",
+          cr_added == ["ordinary\rStatus: Verified now"] and not cr_removed, (cr_added, cr_removed))
+
+    # Fix round 2 F5: a moved document's link outside the tree is a flag, not
+    # a fatal git-show error.
+    git(repo, "checkout", "-q", "-B", "outside-link", base)
+    outside_text = "[outside](../../../../outside.md)\n" + ("same\n" * 12)
+    write("docs/v2/outside.md", outside_text)
+    outside_ps1 = commit("outside link source")
+    (repo / "docs" / "v2" / "deep").mkdir(parents=True, exist_ok=True)
+    git(repo, "mv", "docs/v2/outside.md", "docs/v2/deep/outside.md")
+    write("docs/v2/deep/outside.md", outside_text)
+    outside_ps2 = commit("outside link move")
+    result = changed(164, [patch(1, outside_ps1, base, approvals=[approval("+1")]),
+                           patch(2, outside_ps2, outside_ps1)])
+    check("triage move F5: outside-tree relative link is flagged without aborting",
+          any("relative link ../../../../outside.md does not resolve" in flag for flag in result.get("flags", [])), result)
+
+    # Fix round 2 F7/F9: fence runs, parenthetical titles, nested destination
+    # parentheses, and four-space code all receive Markdown-aware treatment.
+    fenced = "```` python\n[hidden](missing.md)\n```\n[also-hidden](missing.md)\n````\n"
+    parser_ok = (not list(triage_module._relative_targets(fenced))
+                 and list(triage_module._relative_targets("[title](a.md (title)) [nested](a(1).md)")) == ["a.md", "a(1).md"]
+                 and not list(triage_module._relative_targets("    [indented](missing.md)\n")))
+    check("triage markdown F7/F9: fence length, titles, parentheses, and indented code work", parser_ok)
+    # Lead review of fix round 2: an indented code block opens only after a
+    # blank line, so a link continuing a list item is still checked.
+    list_doc = "- item\n    [continuation](missing.md)\n\n    [code](hidden.md)\n"
+    check("triage markdown: an indented list continuation is still link-checked",
+          list(triage_module._relative_targets(list_doc)) == ["missing.md"],
+          list(triage_module._relative_targets(list_doc)))
+
+    # Fix round 2 F8: a hunk that quotes Git's binary-file sentence is plain
+    # content, not a binary delta marker.
+    git(repo, "checkout", "-q", "-B", "binary-words", base)
+    write("docs/content.md", "ordinary\n")
+    binary_words_ps1 = commit("binary words source")
+    write("docs/content.md", "git says: Binary files a/foo and b/bar differ\n")
+    binary_words_ps2 = commit("binary words content")
+    result = changed(165, [patch(1, binary_words_ps1, base, approvals=[approval("+1")]),
+                           patch(2, binary_words_ps2, binary_words_ps1)])
+    check("triage binary F8: quoted binary header content is not binary",
+          not any(flag == "docs/content.md: binary" for flag in result.get("flags", [])), result)
+
+    # Fix round 2 F10: Git's NUL-separated name-status stream preserves a
+    # non-UTF-8 filename through subprocess argument re-encoding.
+    check("triage paths F10: decode uses surrogateescape",
+          triage_module._decoded(b"docs/\xff.md") == os.fsdecode(b"docs/\xff.md"))
+
+    # Review test gap: change (not only scope) applies path_only triggers.
+    git(repo, "checkout", "-q", "-B", "path-only-change", base)
+    write("secure/token.txt", "changed\n")
+    path_only = commit("path only trigger")
+    result = changed(166, [patch(1, path_only, base)])
+    check("triage change: path_only trigger raises risk", result.get("risk_floor") == "HIGH", result)
+
+    # Review test gap: a real Git failure is an input error with stderr, not a
+    # traceback or a successful empty result.
+    broken_query = query(167, [patch(1, asof_ps1, "missing-parent")])
+    got = run(triage, "change", "167", "--query-json", broken_query, env=env)
+    check("triage git failure: exits 2 and names the missing parent and ref",
+          got.returncode == 2 and "missing-parent" in got.stderr
+          and "refs/changes/67/167/1" in got.stderr and not got.stdout, got.stdout + got.stderr)
+    got = run(triage, "change", "--help", env=env)
+    check("triage as-of help: says my replayed actions are excluded on purpose",
+          got.returncode == 0 and "excluded on purpose" in got.stdout, got.stdout + got.stderr)
 
 
 # ------------------------------------------------ line-ending renormalization ----
