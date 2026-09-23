@@ -550,9 +550,11 @@ them.** Refusal on an unconsumed value; quoting; a per-delivery-mode branch;
 a place in the emitted order. Each existing parameter is a worked example of
 what the new one owes.
 
-This is the same shape as the sibling-defect rule in §6 — fixing `by_repo` and
-missing `by_tag` — and the same remedy applies: where you find yourself adding
-a fourth branch, prefer one shared helper that cannot be half-applied.
+This is the same shape as the copies rule in dev-lead Phase 2 ("Changing a
+statement OR A PREDICATE? grep for its copies BEFORE you edit") — fixing one
+copy and missing its sibling — and the same remedy applies: where you find
+yourself adding a fourth branch, prefer one shared helper that cannot be
+half-applied.
 
 ### A grep hit is where a STRING is, not where a PROBLEM is
 
