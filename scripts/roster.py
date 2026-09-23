@@ -321,6 +321,9 @@ def _check_effort(leg, adapter, role, path, problems):
     eff = _effort_spec(adapter)
     mech = eff["mechanism"]
     applies = role == eff.get("applies_to_role", role)
+    if "effort" in leg and not isinstance(leg["effort"], str):
+        # A launch word, never a list or number: triage compares and passes it.
+        problems.error(path + ".effort", "must be a string, got %s" % type(leg["effort"]).__name__)
     if mech in ("model_suffix", "none"):
         if "effort" in leg:
             if mech == "model_suffix":

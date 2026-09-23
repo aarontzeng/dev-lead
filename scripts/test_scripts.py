@@ -12,6 +12,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 SCRIPTS = Path(__file__).resolve().parent
@@ -3396,6 +3397,15 @@ def test_roster(tmp):
           got.returncode == 1 and "fallback.fallback" in text
           and "a fallback cannot have its own fallback" in text, text)
 
+    listy = _roster_doc({"opencode": {"model": "opencode/m", "family": "Meta", "effort": ["high"],
+                                      "effort_in": "flag"}})
+    path = tmp / "list-effort.json"
+    _write_doc(path, listy)
+    got = _checked(path)
+    text = got.stdout + got.stderr
+    check("roster check: a non-string effort is refused",
+          got.returncode == 1 and "must be a string, got list" in text and "Traceback" not in text, text)
+
     home = tmp / "home"
     home.mkdir()
     env = _roster_env(home, DEV_LEAD_ROSTER=live)
@@ -5108,6 +5118,36 @@ def test_triage(tmp):
     entry, got = one("cursor", "kimi-k3-low", "medium")
     check("triage effort: a gap in a known menu goes up to the next variant",
           entry["model"] == "kimi-k3-high" and got.get("effort") == "high", (got, entry))
+    # 0.6.27: three edges a review leg found in 0.6.25.
+    entry, got = one("opencode", "opencode/m", "high", "ultra")
+    check("triage effort: a roster effort off the ladder is kept, never replaced by the table's tier",
+          got == {"effort": "ultra", "effort_in": "flag", "effort_source": "roster",
+                  "effort_unmet": {"wanted": "high", "reason": "roster effort 'ultra' is not on the ladder; kept"}}, got)
+    entry, got = one("opencode", "opencode/m", "high", ["high"])
+    check("triage effort: a non-string roster effort does not crash the engine",
+          isinstance(got, dict) and got.get("effort") == "high", got)
+    entry, got = one("cursor", "cursor-grok-4.6-high-fast", "medium")
+    check("triage effort: a -fast twin is read as its tier",
+          got == {"effort": "high", "effort_in": "model_name", "effort_source": "roster"}
+          and entry["model"] == "cursor-grok-4.6-high-fast", (got, entry))
+    entry, got = one("cursor", "cursor-grok-4.6-high-fast", "xhigh")
+    check("triage effort: a -fast twin with no known raised twin keeps its model and says so",
+          entry["model"] == "cursor-grok-4.6-high-fast" and got.get("effort") == "high"
+          and got.get("effort_unmet") == {"wanted": "xhigh", "reason": "variant not known for this adapter"},
+          (got, entry))
+    real_data = triage_module.roster.data
+    def fast_data():
+        launch, families = real_data()
+        launch = json.loads(json.dumps(launch))
+        launch["cursor"]["effort"]["examples"].append("cursor-grok-4.6-xhigh-fast")
+        return launch, families
+    triage_module.roster.data = fast_data
+    try:
+        entry, got = one("cursor", "cursor-grok-4.6-high-fast", "xhigh")
+    finally:
+        triage_module.roster.data = real_data
+    check("triage effort: raising a -fast twin keeps the twin",
+          entry["model"] == "cursor-grok-4.6-xhigh-fast" and got.get("effort") == "xhigh", (got, entry))
     entry, got = one("claude", "claude-sonnet", "high")
     check("triage effort: an adapter with no effort concept says so",
           got == {"effort": None, "effort_in": "none"}, got)
@@ -5121,6 +5161,16 @@ def test_triage(tmp):
         entry, high = one("codex", "gpt-6-luna", "high")
     finally:
         os.environ["HOME"] = saved_home
+    (codex_home / ".codex" / "config.toml").write_text('model_reasoning_effort = "ultra"\n')
+    os.environ["HOME"] = str(codex_home)
+    try:
+        entry, ultra = one("codex", "gpt-6-luna", "xhigh")
+    finally:
+        os.environ["HOME"] = saved_home
+    (codex_home / ".codex" / "config.toml").write_text('model_reasoning_effort = "medium"\n')
+    check("triage effort: a machine effort off the ladder is kept, not reported as a mismatch",
+          ultra.get("effort") == "ultra" and "config_mismatch" not in ultra
+          and ultra.get("effort_unmet", {}).get("wanted") == "xhigh", ultra)
     check("triage effort: config_only keeps the machine's effort when it meets the floor",
           low == {"effort": "medium", "effort_in": "config_only", "effort_source": "roster"}, low)
     check("triage effort: config_only above the machine's effort reports the mismatch, never edits",
@@ -5177,8 +5227,13 @@ def test_renorm(tmp):
     r = run(freeze, repo, sha, dest)
     check("renorm: freeze accepts a checkout dirty ONLY by line-ending renormalization",
           r.returncode == 0 and r.stdout.strip() == sha, r.stderr)
+    # Which renormalized files `git status` flags right after a checkout is
+    # racy (same-second stat): a file whose cached stat still matches is not
+    # re-read. So the NOTE must name only excusable files, and at least one.
+    renorm_set = {"crlf.txt", "sp ace.txt", "\u6587\u6a94.txt"}
+    noted = {line.strip() for line in r.stderr.splitlines()[1:] if line.strip()}
     check("renorm: ...and says which files it excused",
-          "crlf.txt" in r.stderr and "sp ace.txt" in r.stderr, r.stderr)
+          noted and noted <= renorm_set, r.stderr)
     # through a SYMLINKED entrypoint the sibling helper must still be found
     linkdir = tmp / "bin"
     linkdir.mkdir()
@@ -5189,6 +5244,13 @@ def test_renorm(tmp):
     check("renorm: verify via a symlink finds renorm-only.sh", rl.returncode == 0, rl.stderr)
     rl = run(linkdir / "freeze-target.sh", repo, sha, tmp / "crlf-frozen-via-link")
     check("renorm: freeze via a symlink finds renorm-only.sh", rl.returncode == 0, rl.stderr)
+    # Whether git re-reads a file after a fresh checkout depends on its stat
+    # matching the index (racy same-second timestamps). Moving every fixture
+    # file's mtime forward, bytes untouched, makes each stat mismatch the
+    # index, so git compares content for all of them and the list is exact.
+    later = time.time() + 5
+    for name in ("crlf.txt", "sp ace.txt", "\u6587\u6a94.txt", "plain.txt", "run.sh"):
+        os.utime(dest / name, (later, later))
     r = run(renorm, dest)
     check("renorm: the list is exactly the byte-identical files, spaces and non-ASCII included",
           sorted(r.stdout.splitlines()) == ["crlf.txt", "sp ace.txt", "\u6587\u6a94.txt"], r.stdout)

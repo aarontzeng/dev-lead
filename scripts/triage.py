@@ -29,7 +29,8 @@ OPTIONAL_ROOT_KEYS = {"effort"}
 # spelling of it comes from data/launch.json, never from personal rules.
 EFFORT_LADDER = ("low", "medium", "high", "xhigh", "max")
 EFFORT_RANK = {name: number for number, name in enumerate(EFFORT_LADDER)}
-EFFORT_SUFFIX = re.compile(r"-(%s)$" % "|".join(EFFORT_LADDER))
+# cursor lists `-fast` twins of each tier (launch.json); the twin is kept.
+EFFORT_SUFFIX = re.compile(r"-(%s)(-fast)?$" % "|".join(EFFORT_LADDER))
 EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 
 
@@ -1155,18 +1156,25 @@ def _leg_effort(leg, floor):
             return {"effort": None, "effort_in": "model_name",
                     "effort_unmet": {"wanted": floor, "reason": "model id carries no effort suffix"}} if floor else \
                    {"effort": None, "effort_in": "model_name"}
-        base, declared = leg["model"][:match.start()], match.group(1)
+        base, declared, twin = leg["model"][:match.start()], match.group(1), match.group(2) or ""
         if floor is None or EFFORT_RANK[floor] <= EFFORT_RANK[declared]:
             return {"effort": declared, "effort_in": "model_name", "effort_source": "roster"}
-        known = {declared} | {m[len(base) + 1:] for m in examples if m.startswith(base + "-")}
+        known = {declared} | {m[len(base) + 1:len(m) - len(twin)] for m in examples
+                              if m.startswith(base + "-") and m.endswith(twin)
+                              and m[len(base) + 1:len(m) - len(twin)] in EFFORT_RANK}
         tier = _tier_or_next(floor, known)
         if tier is None:
             return {"effort": declared, "effort_in": "model_name", "effort_source": "roster",
                     "effort_unmet": {"wanted": floor, "reason": "variant not known for this adapter"}}
-        leg["model"] = "%s-%s" % (base, tier)
+        leg["model"] = "%s-%s%s" % (base, tier, twin)
         return {"effort": tier, "effort_in": "model_name", "effort_source": "table"}
     if mechanism == "config_only":
         running = roster._config_effort(effort)
+        if isinstance(running, str) and running not in EFFORT_RANK and floor is not None:
+            # A setting off the ladder (e.g. a newer "ultra") cannot be ranked;
+            # raise-only means keeping it, not replacing it with the table's tier.
+            return {"effort": running, "effort_in": "config_only", "effort_source": "roster",
+                    "effort_unmet": {"wanted": floor, "reason": "machine effort %r is not on the ladder; kept" % running}}
         declared = running if running in EFFORT_RANK else None
         if floor is None or (declared and EFFORT_RANK[floor] <= EFFORT_RANK[declared]):
             return {"effort": running, "effort_in": "config_only", "effort_source": "roster"}
@@ -1175,6 +1183,13 @@ def _leg_effort(leg, floor):
                                     "launch": "codex exec -c model_reasoning_effort=%s; state the base "
                                               "revision in the brief (exec does not read it)" % floor}}
     declared = leg.pop("_declared_effort", None)
+    if isinstance(declared, str) and declared not in EFFORT_RANK and floor is not None:
+        # A provider-specific word off the ladder cannot be ranked; raise-only
+        # means keeping it, not replacing it with the table's tier.
+        return {"effort": declared, "effort_in": "flag", "effort_source": "roster",
+                "effort_unmet": {"wanted": floor, "reason": "roster effort %r is not on the ladder; kept" % declared}}
+    if not isinstance(declared, str):
+        declared = None
     if floor is None or (declared in EFFORT_RANK and EFFORT_RANK[floor] <= EFFORT_RANK[declared]):
         return {"effort": declared, "effort_in": "flag", "effort_source": "roster"}
     tier = _tier_or_next(floor, set(examples) | ({declared} if declared else set()))
