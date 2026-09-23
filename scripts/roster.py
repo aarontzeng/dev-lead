@@ -14,7 +14,6 @@ import argparse
 import copy
 import json
 import os
-import re
 import stat
 import sys
 import tempfile
