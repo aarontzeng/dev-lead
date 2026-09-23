@@ -166,8 +166,8 @@ def validate(doc):
         problems.error("gerrit", "must be an object")
     else:
         _unknown_keys(gerrit, {"ssh", "port"}, "gerrit", problems)
-        if not isinstance(gerrit.get("ssh"), str) or not re.fullmatch(r"[^@\s]+@[^@\s]+", gerrit.get("ssh", "")):
-            problems.error("gerrit.ssh", "must be user@host")
+        if not isinstance(gerrit.get("ssh"), str) or not SSH_DESTINATION.fullmatch(gerrit.get("ssh", "")):
+            problems.error("gerrit.ssh", "must be user@host (letters, digits, . _ -; neither part may start with -)")
         if type(gerrit.get("port")) is not int:
             problems.error("gerrit.port", "must be an int")
     for name, values, absolute in (("clones", doc.get("clones"), True), ("gateways", doc.get("gateways"), False)):
@@ -490,29 +490,56 @@ def _has_binary_header(patch):
     return False
 
 
-def _diff_entries(repo, parent, revision):
-    raw = _git(repo, "diff", "--no-ext-diff", "--find-renames", "--name-status", "-z", parent, revision)
-    fields = raw.split("\0")
+REGULAR_MODES = ("100644", "100755")
+
+
+def _raw_diff(repo, before, after, paths=()):
+    """`git diff --raw -z` entries: status, paths, modes and blob ids.
+
+    The raw form carries what name-status drops: a mode change (chmod, a
+    symlink, a submodule) and the blob ids a binary change is only visible
+    through. R and C both carry two paths.
+    """
+    args = ["diff", "--no-ext-diff", "--no-textconv", "--find-renames", "--raw", "-z", "--no-abbrev",
+            before, after]
+    if paths:
+        args = ["--literal-pathspecs"] + args + ["--"] + list(paths)
+    fields = _git(repo, *args).split("\0")
     entries, index = [], 0
     while index < len(fields) - 1:
-        status = fields[index]
+        meta = fields[index]
         index += 1
-        if not status:
+        if not meta.startswith(":"):
             continue
-        if status[0] == "R":
+        old_mode, new_mode, old_blob, new_blob, status = meta[1:].split(" ", 4)
+        if status[0] in "RC":
             old, new = fields[index], fields[index + 1]
             index += 2
         else:
             old = new = fields[index]
             index += 1
+        entries.append({"status": status, "old": old, "new": new, "old_mode": old_mode, "new_mode": new_mode,
+                        "old_blob": old_blob, "new_blob": new_blob})
+    return entries
+
+
+def _diff_entries(repo, parent, revision):
+    entries = []
+    for entry in _raw_diff(repo, parent, revision):
+        old, new = entry["old"], entry["new"]
         if new in ("/COMMIT_MSG", "/MERGE_LIST", "COMMIT_MSG", "MERGE_LIST"):
             continue
-        patch = _git(repo, "--literal-pathspecs", "diff", "--no-ext-diff", "--find-renames",
+        patch = _git(repo, "--literal-pathspecs", "diff", "--no-ext-diff", "--no-textconv", "--find-renames",
                      "--unified=0", "--format=", parent, revision, "--", *_paths_for({"old": old, "new": new}))
         useful, added, removed = _patch_lines(patch)
-        entries.append({"status": status, "old": old, "new": new,
-                        "signature": "\n".join(useful), "added": added, "removed": removed,
-                        "binary": _has_binary_header(patch)})
+        binary = _has_binary_header(patch)
+        # The patch's own lines identify a text change; a mode change and a
+        # binary change have none, so the signature names them explicitly.
+        signature = ["mode %s %s" % (entry["old_mode"], entry["new_mode"])] + useful
+        if binary:
+            signature.append("blob %s %s" % (entry["old_blob"], entry["new_blob"]))
+        entry.update({"signature": "\n".join(signature), "added": added, "removed": removed, "binary": binary})
+        entries.append(entry)
     return entries
 
 
@@ -592,7 +619,7 @@ def _between_lines(repo, before_revision, after_revision, entries, moves=()):
             paths, removed_at, added_at = _paths_for(pair), pair["old"], pair["new"]
         else:
             paths, removed_at, added_at = _paths_for(entry), entry["new"], entry["new"]
-        patch = _git(repo, "--literal-pathspecs", "diff", "--no-ext-diff", "--find-renames",
+        patch = _git(repo, "--literal-pathspecs", "diff", "--no-ext-diff", "--no-textconv", "--find-renames",
                      "--unified=0", "--format=", before_revision, after_revision, "--", *paths)
         _useful, added, removed = _patch_lines(patch)
         _add_line_data(data, removed_at, [], removed)
@@ -601,16 +628,15 @@ def _between_lines(repo, before_revision, after_revision, entries, moves=()):
 
 
 def _tree_text(repo, revision, path):
+    """The blob at that path, raw (no textconv), or None when there is none:
+    a missing path, a directory or a submodule. Decided by git's exit code."""
     try:
-        result = subprocess.run(["git", "-C", str(repo), "show", "%s:%s" % (revision, path)],
+        result = subprocess.run(["git", "-C", str(repo), "cat-file", "blob", "%s:%s" % (revision, path)],
                                 capture_output=True)
     except OSError as exc:
         raise InputError("git: %s" % exc)
     if result.returncode:
-        message = _decoded(result.stderr).strip() or _decoded(result.stdout).strip()
-        if "does not exist in" in message or "is outside repository" in message:
-            return None
-        raise InputError("git: %s" % (message or "git show failed"))
+        return None
     return _decoded(result.stdout)
 
 
@@ -761,8 +787,11 @@ def _move_checks(config, repo, previous_revision, current_revision, entries):
         if old_text is None or new_text is None:
             flags.append("%s: cannot read moved content" % entry["new"])
             continue
-        normalise = lambda text: re.sub(r"(\.\./)+", "../", text)
-        if normalise(old_text) != normalise(new_text):
+        if entry.get("old_mode") != entry.get("new_mode"):
+            flags.append("%s: file mode changed %s -> %s" % (entry["new"], entry.get("old_mode"), entry.get("new_mode")))
+        elif entry.get("new_mode") not in REGULAR_MODES:
+            flags.append("%s: moved entry is not a regular file (mode %s)" % (entry["new"], entry.get("new_mode")))
+        elif not _moved_unchanged(entry, old_text, new_text):
             flags.append("%s: content differs after relative-link-depth normalisation" % entry["new"])
         old_urls, new_urls = _urls(old_text), _urls(new_text)
         if old_urls != new_urls:
@@ -796,22 +825,37 @@ def _tree_renames(repo, previous_revision, current_revision, entries):
                 paths.append(path)
     if not paths:
         return [], False
-    raw = _git(repo, "--literal-pathspecs", "diff", "--no-ext-diff", "--find-renames",
-               "--name-status", "-z", previous_revision, current_revision, "--", *paths)
-    fields = raw.split("\0")
-    pairs, only_renames, index = [], True, 0
-    while index < len(fields) - 1:
-        status = fields[index]
-        index += 1
-        if not status:
-            continue
-        if status[0] == "R":
-            pairs.append({"status": status, "old": fields[index], "new": fields[index + 1]})
-            index += 2
+    pairs, only_renames = [], True
+    for entry in _raw_diff(repo, previous_revision, current_revision, paths):
+        if entry["status"][0] == "R":
+            pairs.append(entry)
         else:
             only_renames = False
-            index += 1
     return pairs, only_renames and bool(pairs)
+
+
+MARKDOWN_SUFFIXES = (".md", ".markdown", ".mdx")
+LINK_DEPTH = re.compile(r"(\]\(\s*<?)(?:\.\./)+")
+REFERENCE_DEPTH = re.compile(r"(?m)^( {0,3}\[[^\]]+\]:[ \t]*<?)(?:\.\./)+")
+
+
+def _fold_link_depth(path, text):
+    """Fold only what a move is expected to change: the ../ depth at the start
+    of a Markdown link destination. Anywhere else -- code, a Makefile, YAML,
+    Markdown prose -- a changed ../ run is an edit and stays visible."""
+    if not path.lower().endswith(MARKDOWN_SUFFIXES):
+        return text
+    text = LINK_DEPTH.sub(r"\1../", text)
+    return REFERENCE_DEPTH.sub(r"\1../", text)
+
+
+def _moved_unchanged(entry, old_text, new_text):
+    """A moved file whose content is the same up to Markdown link depth, with
+    the same regular-file mode: a symlink's target means something else in
+    its new directory, and a mode change is a change."""
+    if entry.get("old_mode") != entry.get("new_mode") or entry.get("new_mode") not in REGULAR_MODES:
+        return False
+    return _fold_link_depth(entry["old"], old_text) == _fold_link_depth(entry["new"], new_text)
 
 
 def _is_move_only(repo, previous_revision, current_revision, entries):
@@ -820,10 +864,7 @@ def _is_move_only(repo, previous_revision, current_revision, entries):
     for entry in entries:
         old_text = _tree_text(repo, previous_revision, entry["old"])
         new_text = _tree_text(repo, current_revision, entry["new"])
-        if old_text is None or new_text is None:
-            return False
-        normalise = lambda text: re.sub(r"(\.\./)+", "../", text)
-        if normalise(old_text) != normalise(new_text):
+        if old_text is None or new_text is None or not _moved_unchanged(entry, old_text, new_text):
             return False
     return True
 
@@ -955,7 +996,13 @@ def _rows_from(text):
 
 
 def _gerrit_rows(config, *query):
-    command = ["ssh", "-p", str(config["gerrit"]["port"]), config["gerrit"]["ssh"],
+    destination = config["gerrit"]["ssh"]
+    # Checked again here, not only in `check`: a destination that starts with
+    # "-" is an ssh OPTION (-oProxyCommand=... runs a program), and `--` makes
+    # ssh read whatever follows as the destination even if a check is skipped.
+    if not isinstance(destination, str) or not SSH_DESTINATION.fullmatch(destination):
+        raise InputError("gerrit.ssh: must be user@host")
+    command = ["ssh", "-p", str(int(config["gerrit"]["port"])), "--", destination,
                "gerrit", "query", "--format=JSON", *query]
     try:
         result = subprocess.run(command, capture_output=True, text=True)
@@ -964,6 +1011,19 @@ def _gerrit_rows(config, *query):
     if result.returncode:
         raise InputError("gerrit query: %s" % (result.stderr.strip() or result.stdout.strip()))
     return _rows_from(result.stdout)
+
+
+SSH_DESTINATION = re.compile(r"[A-Za-z0-9_][A-Za-z0-9._-]*@[A-Za-z0-9][A-Za-z0-9.-]*")
+QUERY_TOPIC = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]*")
+
+
+def _change_number(value, what="change"):
+    """A Gerrit change number: digits only, so it can be neither a query
+    operator nor a crash in the refs/changes arithmetic."""
+    text = str(value)
+    if not text.isdigit():
+        raise InputError("%s: number must be digits, got %r" % (what, text))
+    return text
 
 
 def _query(config, number, query_json):
@@ -984,7 +1044,10 @@ def _query(config, number, query_json):
     else:
         raise InputError("query JSON: change %s not found" % number)
     if not query_json and change.get("topic"):
-        rows += _gerrit_rows(config, "--current-patch-set", "topic:%s" % change["topic"])
+        # The topic is the author's free text, and the remote side splits the
+        # command line itself; only a plain topic goes into a query.
+        if QUERY_TOPIC.fullmatch(str(change["topic"])):
+            rows += _gerrit_rows(config, "--current-patch-set", "topic:%s" % change["topic"])
     return change, rows
 
 
@@ -1039,15 +1102,21 @@ def _as_of_cutoffs(change, as_of):
     entries = list(change.get("patchSets") or [])
     if isinstance(change.get("currentPatchSet"), dict):
         entries.append(change["currentPatchSet"])
-    next_created, created = [], None
+    created = None
     for entry in entries:
-        if not isinstance(entry, dict):
-            continue
-        if ("createdOn" in entry and _later_patch_set(_number(entry), number)
-                and _numeric_time(entry["createdOn"]) is not None):
-            next_created.append(entry["createdOn"])
-        if _number(entry) == number:
+        if isinstance(entry, dict) and _number(entry) == number:
             created = entry.get("createdOn", created)
+    replayed_at = _numeric_time(created)
+    next_created = []
+    for entry in entries:
+        if not isinstance(entry, dict) or "createdOn" not in entry:
+            continue
+        uploaded = _numeric_time(entry["createdOn"])
+        # A cutoff must come AFTER the replayed patch set: a later-numbered one
+        # stamped earlier would otherwise erase feedback given on N.
+        if (_later_patch_set(_number(entry), number) and uploaded is not None
+                and (replayed_at is None or uploaded > replayed_at)):
+            next_created.append(entry["createdOn"])
     return {"everyone": min(next_created, key=_time) if next_created else None,
             "mine": created, "patch_set": number}
 
@@ -1095,7 +1164,7 @@ def _ancestor_lists(config, change, rows, query_json):
         status = dependency.get("status")
         if status is None:
             row = by_number.get(str(number))
-            if row is None and not query_json:
+            if row is None and not query_json and str(number).isdigit():
                 found = _gerrit_rows(config, "change:%s" % number)
                 row = next((item for item in found if str(item.get("number")) == str(number)), None)
             status = row.get("status") if isinstance(row, dict) else None
@@ -1252,7 +1321,7 @@ def triage_change(config, raw, path, number, query_json, include_wip, as_of=None
     elif ps_kind in ("carry-over", "move-only"):
         legs, review_legs = "none", []
         _fired(fired, "legs", "no legs for carry-over or move-only")
-    elif prior and _line_count(delta_line_data) <= config["small_delta_lines"]:
+    elif prior and risk_floor != "HIGH" and _line_count(delta_line_data) <= config["small_delta_lines"]:
         legs, review_legs = "own-read", []
         _fired(fired, "legs", "small delta (%s lines) after my vote uses own-read" % _line_count(delta_line_data))
     else:
@@ -1333,7 +1402,8 @@ def main(argv=None):
     try:
         config, raw, path = load_config(triage_path())
         if args.cmd == "change":
-            output = triage_change(config, raw, path, args.number, args.query_json, args.include_wip, args.as_of_ps)
+            number = _change_number(args.number)
+            output = triage_change(config, raw, path, number, args.query_json, args.include_wip, args.as_of_ps)
         else:
             output = scope(config, raw, path, args.files, args.category)
     except InputError as exc:

@@ -4253,6 +4253,21 @@ def test_triage(tmp):
     result = changed(130, [patch(1, binary_ps1, base, approvals=[approval("+1")]), patch(2, binary_ps2, binary_ps1)])
     check("triage binary: delta is flagged without a crash",
           any(flag == "docs/binary.bin: binary" for flag in result.get("flags", [])), result)
+    # Round-5 review: two AMENDED patch sets change the same binary differently.
+    # Both patches are "Binary files ... differ" with no hunk lines, so only the
+    # blob ids in the signature tell them apart.
+    git(repo, "checkout", "-q", "-B", "binary-amend", base)
+    (repo / "docs").mkdir(exist_ok=True)
+    (repo / "docs" / "amend.bin").write_bytes(b"one\x00two")
+    binary_amend_ps1 = commit("binary amend one")
+    git(repo, "checkout", "-q", "-B", "binary-amend-2", base)
+    (repo / "docs").mkdir(exist_ok=True)
+    (repo / "docs" / "amend.bin").write_bytes(b"one\x00three")
+    binary_amend_ps2 = commit("binary amend two")
+    result = changed(180, [patch(1, binary_amend_ps1, base, approvals=[approval("+1")]),
+                           patch(2, binary_amend_ps2, base)])
+    check("triage binary: a changed binary between amended patch sets is in the delta",
+          "docs/amend.bin" in (result.get("delta_files") or []), result)
     git(repo, "checkout", "-q", "-B", "crlf-rename", base)
     (repo / "docs").mkdir(exist_ok=True)
     (repo / "docs" / "old-crlf.md").write_bytes(b"line\r\n")
@@ -4342,7 +4357,10 @@ def test_triage(tmp):
     root_patch = {"number": 1, "revision": base, "parents": [], "kind": "REWORK", "createdOn": 10,
                   "uploader": {"username": "alice"}, "approvals": [], "files": []}
     result = changed(143, [root_patch])
-    check("triage root patch set: diffs against the empty tree", result.get("delta_files") is not None, result)
+    # The files the root commit adds must be the delta; a parent equal to the
+    # revision itself would give [] and must fail this.
+    check("triage root patch set: diffs against the empty tree",
+          {"src/value.txt", "links/ok.md"} <= set(result.get("delta_files") or []), result)
 
     # Fix round 1 B10: literal pathspecs accept ordinary filenames containing
     # a colon rather than treating them as pathspec magic.
@@ -4537,9 +4555,12 @@ def test_triage(tmp):
 
     # Round-4 review: junk sorts first now, so it must never be PICKED as the
     # replay cutoff and then discarded by the guard.
+    # Two real later times (30, 50) around the comment (35), so min and max
+    # give different answers: only the EARLIEST later upload ends the replay.
     result = changed(173, [patch(1, owner_small_ps1, base, created=10),
                            patch(2, owner_small_ps2, owner_small_ps1, created="rebuilt"),
-                           patch(3, owner_small_ps2, owner_small_ps1, created=30)],
+                           patch(3, owner_small_ps2, owner_small_ps1, created=30),
+                           patch(4, owner_small_ps2, owner_small_ps1, created=50)],
                      owner="alice", args=("--as-of-ps", "1"),
                      comments=[{"timestamp": 35, "reviewer": {"username": "bob"}, "message": "after ps3"}])
     check("triage as-of: one junk timestamp does not discard a real cutoff",
@@ -4600,6 +4621,148 @@ def test_triage(tmp):
           triage_module._tree_has(repo, gitlink_rev, "."), gitlink_rev)
     check("triage tree: a path absent from the revision does not resolve",
           not triage_module._tree_has(repo, gitlink_rev, "nowhere.md"), gitlink_rev)
+
+    # Round-5 review #1: an ssh destination that starts with "-" is an OPTION
+    # (-oProxyCommand=... runs a program). `check` refuses it, and the query
+    # puts `--` before the destination in case a check was ever skipped.
+    expect_bad("ssh-option-injection",
+               lambda doc: doc["gerrit"].__setitem__("ssh", "-oProxyCommand=touch /tmp/x@y"), "gerrit.ssh")
+    expect_bad("ssh-host-option", lambda doc: doc["gerrit"].__setitem__("ssh", "alice@-oProxyCommand=x"), "gerrit.ssh")
+    fake_bin = tmp / "fake-ssh-bin"
+    fake_bin.mkdir(exist_ok=True)
+    argv_log = tmp / "ssh-argv.txt"
+    (fake_bin / "ssh").write_text('#!/bin/sh\nprintf "%%s\\n" "$@" > %s\n' % argv_log)
+    (fake_bin / "ssh").chmod(0o755)
+    saved_path = os.environ.get("PATH", "")
+    os.environ["PATH"] = str(fake_bin) + os.pathsep + saved_path
+    try:
+        triage_module._gerrit_rows({"gerrit": {"ssh": "alice@gerrit.example.com", "port": 29418}}, "change:1")
+    finally:
+        os.environ["PATH"] = saved_path
+    ssh_argv = argv_log.read_text().splitlines() if argv_log.exists() else []
+    check("triage ssh: `--` precedes the destination",
+          ssh_argv[:4] == ["-p", "29418", "--", "alice@gerrit.example.com"], ssh_argv)
+    # The fake ssh would succeed, so only the guard can refuse -- and the
+    # proof is that ssh was never started.
+    argv_log.unlink()
+    os.environ["PATH"] = str(fake_bin) + os.pathsep + saved_path
+    try:
+        triage_module._gerrit_rows({"gerrit": {"ssh": "-oProxyCommand=x@y", "port": 29418}}, "change:1")
+        refused = False
+    except triage_module.InputError:
+        refused = True
+    finally:
+        os.environ["PATH"] = saved_path
+    check("triage ssh: an option-shaped destination is refused at run time too",
+          refused and not argv_log.exists(), argv_log.read_text() if argv_log.exists() else "ssh not started")
+    got = run(triage, "change", "abc", "--query-json", query(101, [patch(1, ps1, base)]), env=env)
+    check("triage change: a non-numeric change number exits 2 without a traceback",
+          got.returncode == 2 and "digits" in got.stderr and "Traceback" not in got.stderr, got.stdout + got.stderr)
+
+    # Round-5 review #2: the ../ fold belongs to Markdown link destinations
+    # only. The same depth change inside a script is an edit.
+    script_text = "#!/bin/sh\nexec ../../tools/build.sh\n" + ("echo same\n" * 12)
+    git(repo, "checkout", "-q", "-B", "move-script", base)
+    write("tools/sub/run.sh", script_text)
+    script_ps1 = commit("script source")
+    (repo / "tools" / "sub" / "deep").mkdir(parents=True, exist_ok=True)
+    git(repo, "mv", "tools/sub/run.sh", "tools/sub/deep/run.sh")
+    write("tools/sub/deep/run.sh", script_text.replace("../../tools/build.sh", "../tools/build.sh"))
+    script_ps2 = commit("script move")
+    result = changed(181, [patch(1, script_ps1, base, approvals=[approval("+1")]), patch(2, script_ps2, script_ps1)])
+    check("triage move: a ../ change in a script is not move-only", result.get("ps_kind") != "move-only", result)
+    prose_text = "# page\n\nRun `../../tools/build.sh` first.\n" + ("same\n" * 12)
+    git(repo, "checkout", "-q", "-B", "move-prose", base)
+    write("docs/prose/page.md", prose_text)
+    prose_ps1 = commit("prose source")
+    (repo / "docs" / "prose" / "deep").mkdir(parents=True, exist_ok=True)
+    git(repo, "mv", "docs/prose/page.md", "docs/prose/deep/page.md")
+    write("docs/prose/deep/page.md", prose_text.replace("../../tools/build.sh", "../tools/build.sh"))
+    prose_ps2 = commit("prose move")
+    result = changed(182, [patch(1, prose_ps1, base, approvals=[approval("+1")]), patch(2, prose_ps2, prose_ps1)])
+    check("triage move: a ../ change in Markdown prose is not move-only", result.get("ps_kind") != "move-only", result)
+
+    # Round-5 review #3 and #5: a move that also changes the mode, or moves a
+    # symlink (same target text, different meaning), is not move-only.
+    git(repo, "checkout", "-q", "-B", "move-chmod", base)
+    write("tools/chmod/tool.sh", script_text)
+    chmod_ps1 = commit("chmod source")
+    (repo / "tools" / "chmod" / "deep").mkdir(parents=True, exist_ok=True)
+    git(repo, "mv", "tools/chmod/tool.sh", "tools/chmod/deep/tool.sh")
+    (repo / "tools" / "chmod" / "deep" / "tool.sh").chmod(0o755)
+    git(repo, "add", "-A")
+    chmod_ps2 = commit("chmod move")
+    result = changed(183, [patch(1, chmod_ps1, base, approvals=[approval("+1")]), patch(2, chmod_ps2, chmod_ps1)])
+    check("triage move: a rename with a mode change is not move-only",
+          result.get("ps_kind") != "move-only"
+          and any("file mode changed" in flag for flag in result.get("flags", [])), result)
+    git(repo, "checkout", "-q", "-B", "move-symlink", base)
+    (repo / "links" / "old").mkdir(parents=True, exist_ok=True)
+    os.symlink("../ok.md", repo / "links" / "old" / "link.md")
+    git(repo, "add", "-A")
+    symlink_ps1 = commit("symlink source")
+    (repo / "links" / "old" / "deep").mkdir(parents=True, exist_ok=True)
+    git(repo, "mv", "links/old/link.md", "links/old/deep/link.md")
+    symlink_ps2 = commit("symlink move")
+    result = changed(184, [patch(1, symlink_ps1, base, approvals=[approval("+1")]), patch(2, symlink_ps2, symlink_ps1)])
+    check("triage move: a moved symlink is not move-only",
+          result.get("ps_kind") != "move-only"
+          and any("not a regular file" in flag for flag in result.get("flags", [])), result)
+
+    # Round-5 review #7: a same-path chmod between amended patch sets has no
+    # hunk lines, so only the mode in the signature puts it in the delta.
+    git(repo, "checkout", "-q", "-B", "chmod-amend", base)
+    write("tools/amend.sh", script_text)
+    chmod_amend_ps1 = commit("chmod amend one")
+    (repo / "tools" / "amend.sh").chmod(0o755)
+    git(repo, "add", "-A")
+    chmod_amend_ps2 = commit("chmod amend two")
+    git(repo, "checkout", "-q", "-B", "chmod-amend-2", base)
+    write("tools/amend.sh", script_text)
+    (repo / "tools" / "amend.sh").chmod(0o755)
+    git(repo, "add", "-A")
+    chmod_amend_amended = commit("chmod amend, amended")
+    result = changed(185, [patch(1, chmod_amend_ps1, base, approvals=[approval("+1")]),
+                           patch(2, chmod_amend_amended, base)])
+    check("triage delta: a chmod between amended patch sets is in the delta",
+          "tools/amend.sh" in (result.get("delta_files") or []), result)
+
+    # Round-5 review #8: porcelain `git diff` applies a textconv driver; the
+    # delta must be the stored bytes, not the driver's rendering.
+    git(repo, "checkout", "-q", "-B", "textconv", base)
+    upper = tmp / "upper-textconv.sh"
+    upper.write_text('#!/bin/sh\ntr a-z A-Z < "$1"\n')  # git passes the file path
+    upper.chmod(0o755)
+    git(repo, "config", "diff.upper.textconv", str(upper))
+    write(".gitattributes", "*.conv diff=upper\n")
+    write("docs/value.conv", "abc\n")
+    textconv_ps1 = commit("textconv one")
+    write("docs/value.conv", "abd\n")
+    textconv_ps2 = commit("textconv two")
+    conv_entries = triage_module._diff_entries(repo, textconv_ps1, textconv_ps2)
+    conv_added = [line for entry in conv_entries if entry["new"] == "docs/value.conv" for line in entry["added"]]
+    git(repo, "config", "--unset", "diff.upper.textconv")
+    check("triage diff: a textconv driver does not change what is compared", conv_added == ["abd"], conv_added)
+
+    # Round-5 review #4: a HIGH risk floor is never settled by the small-delta
+    # shortcut. The trigger keyword arrives in a one-line change after my vote.
+    git(repo, "checkout", "-q", "-B", "high-small", base)
+    write("docs/spec/high.md", "draft\n")
+    high_ps1 = commit("high one")
+    write("docs/spec/high.md", "Status Verified\n")
+    high_ps2 = commit("high two")
+    result = changed(186, [patch(1, high_ps1, base, approvals=[approval("+1")]), patch(2, high_ps2, high_ps1)])
+    check("triage legs: a HIGH risk floor is never own-read",
+          result.get("risk_floor") == "HIGH" and result.get("legs") == "roster", result)
+
+    # Round-5 review #6: a later-numbered patch set stamped BEFORE the replayed
+    # one cannot end the replay and erase feedback given on it.
+    result = changed(187, [patch(1, owner_small_ps1, base, created=10,
+                                 approvals=[approval("-1", 15, who="bob")]),
+                           patch(2, owner_small_ps2, owner_small_ps1, created=5)],
+                     owner="alice", args=("--as-of-ps", "1"))
+    check("triage as-of: a later patch set stamped earlier does not end the replay",
+          any(rule["rule"] == "owner-fix-round" for rule in result.get("fired_rules", [])), result)
 
     # Fix round 2 F8: a hunk that quotes Git's binary-file sentence is plain
     # content, not a binary delta marker.
