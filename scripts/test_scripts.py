@@ -2796,6 +2796,10 @@ def test_config_effort(tmp):
         ("model_reasoning_effort = 'high\\'\n", "high\\", "a literal string has no escapes (TOML)"),
         ('notify = [\n  ["a"],\n]\nmodel_reasoning_effort = "high"\n', "high",
          "a multi-line array element is not a table header"),
+        ('notify = [\n  ["a"],\n  ["b"],\n]\nmodel_reasoning_effort = "high"\n', "high",
+         "an array with SEVERAL element lines is skipped by depth, not by the first ]"),
+        ('model_reasoning_effort = "hi\\\ngh"\n', None,
+         "an unterminated basic string is not read"),
         ('model_reasoning_effort = "\\u0068igh"\n', None,
          "an escape a real parser resolves is not guessed"),
         ('[[t]]\nmodel_reasoning_effort = "high"\n', None, "an array-of-tables header ends the root"),
@@ -2885,6 +2889,14 @@ def test_config_effort_write(tmp):
           cfg.read_text().startswith('model_reasoning_effort = "medium"\n[profiles.fast]'),
           cfg.read_text())
 
+    # the writer uses the SAME walker: an unterminated value is refused, not
+    # half-overwritten (agy leg, 2026-09-23)
+    broken = 'model_reasoning_effort = "hi\\\ngh"\n'
+    cfg.write_text(broken)
+    out = ce("--yes")
+    check("config-effort: an unterminated value is refused, file untouched",
+          out.returncode != 0 and cfg.read_text() == broken, out.stdout)
+
     # a value spanning lines is not guessed at, and nothing is written
     tq = chr(34) * 3
     spanning = 'model_reasoning_effort = %s\nhigh\n%s\n' % (tq, tq)
@@ -2927,6 +2939,60 @@ def test_config_effort_write(tmp):
           any(b.name.rsplit("-", 1)[-1].isdigit() and len(b.name.rsplit("-", 1)[-1]) < 3
               and b.read_text() == original for b in cfgdir.glob("config.toml.bak.*-*")),
           sorted(b.name for b in cfgdir.glob("config.toml.bak.*")))
+
+    # a roster effort that is not a plain word must not reach the file: a quote
+    # or newline would inject further TOML settings
+    cfg.write_text(original)
+    for bad in ('medium"\nother_setting = "x', "high'", "me dium", "HIGH", ""):
+        doc_bad = _live_roster()
+        doc_bad["rounds"]["r1"]["review"]["codex"]["effort"] = bad
+        _write_doc(rpath, doc_bad)
+        out = ce("--yes")
+        check(f"config-effort: refuses a non-word effort {bad!r} with the file byte-identical",
+              out.returncode != 0 and cfg.read_text() == original, out.stdout)
+    _write_doc(rpath, doc)
+
+    # a pre-planted symlink at the OLD guessable temp name must not be followed
+    victim = tmp / "victim.txt"
+    victim.write_text("VICTIM\n")
+    # The old name was config.toml.tmp.<pid>; the child's pid follows ours
+    # closely, so planting the next few thousand makes the old code write
+    # through one of them (mutation-checked: with the old path this goes red).
+    base_pid = os.getpid()
+    for pid in range(base_pid + 1, base_pid + 4000):
+        planted = cfgdir / ("config.toml.tmp.%d" % pid)
+        if not planted.exists():
+            planted.symlink_to(victim)
+    cfg.write_text(original)
+    out = ce("--yes")
+    check("config-effort: a planted temp-name symlink is never written through",
+          out.returncode == 0 and victim.read_text() == "VICTIM\n"
+          and 'model_reasoning_effort = "medium"' in cfg.read_text(), out.stdout)
+    check("config-effort: ...and no temp file is left behind",
+          not [f for f in cfgdir.iterdir() if f.name.startswith(".config.toml.")], 
+          sorted(f.name for f in cfgdir.iterdir()))
+    for planted in cfgdir.glob("config.toml.tmp.*"):
+        planted.unlink()
+
+    # a symlinked config (dotfiles) is edited at its TARGET; the link survives
+    real = tmp / "dotfiles" / "codex-config.toml"
+    real.parent.mkdir()
+    real.write_text(original)
+    cfg.unlink()
+    cfg.symlink_to(real)
+    for bak in cfgdir.glob("config.toml.bak.*"):
+        bak.unlink()
+    out = ce("--yes")
+    check("config-effort: a symlinked config keeps its link",
+          cfg.is_symlink() and os.path.realpath(cfg) == str(real), out.stdout)
+    check("config-effort: ...its target is the file changed, and the report says so",
+          'model_reasoning_effort = "medium"' in real.read_text()
+          and "is a symlink" in out.stdout, out.stdout)
+    check("config-effort: ...and the backup holds the target's old bytes",
+          any(b.read_text() == original for b in real.parent.glob("codex-config.toml.bak.*")),
+          sorted(b.name for b in real.parent.iterdir()))
+    cfg.unlink()
+    cfg.write_text(original)
 
     # a leg that takes effort per call has no config to write
     out = run(SCRIPTS / "roster.py", "config-effort", "r1", "review", "agy", env=env)

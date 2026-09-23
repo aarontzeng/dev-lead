@@ -14,6 +14,7 @@ import argparse
 import copy
 import json
 import os
+import re
 import shutil
 import stat
 import sys
@@ -179,40 +180,36 @@ def _check_family(family, adapter, path, problems):
         problems.warn(path, "%s cannot be the accounting leg" % family)
 
 
-def read_config_value(path, key):
-    """A ROOT-table scalar from a TOML file, or None. Deliberately small, not a
-    TOML parser: this reads one key out of a file another tool owns, on Python
-    3.10 where tomllib does not exist (3.11+ could use it; the fallback would
-    still be needed).
+_TRIPLE_QUOTES = (chr(39) * 3, chr(34) * 3)
+# what a config_only effort may be before it is written into a TOML file
+_EFFORT_WORD = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
 
-    What it gets right, because three review legs built each of these
-    (2026-09-23): the key must match EXACTLY and may be quoted
-    (`model_reasoning_effort_backup` is not the key, `"model_reasoning_effort"`
-    is); an inline comment after the value is not part of the value; a `\\"`
-    inside a basic string does not end it; a key under a `[table]` is not a
-    root key, but a `[` INSIDE a multi-line string is not a table header
-    either. Anything it cannot read confidently -- a value that spans lines, a
-    dotted key -- is None, which every caller treats as "nothing is known",
-    never as a default. A duplicate root key returns the FIRST (TOML forbids
-    duplicates, so the file is already invalid and its owner decides what that
-    means).
+
+def _root_assignments(lines):
+    """Walk a TOML file's ROOT table: yield (index, key, raw_value) for each
+    root assignment, stopping at the first table header. The one walker both
+    the reader and the writer use, so a dry run and --yes can never disagree
+    about which line is THE key (agy leg, 2026-09-23: two walkers had drifted).
+
+    A multi-line array is skipped by bracket DEPTH, not by the first `]`
+    (an element line `["a"],` closes its own bracket, not the array), and a
+    multi-line string by its closing delimiter. raw_value is the text after
+    `=`, stripped; a value that continues on later lines is yielded with
+    raw_value None so callers treat it as unreadable.
     """
-    try:
-        # utf-8-sig: a BOM would otherwise make the first key unrecognisable
-        # and the value read as "not set" while the tool that owns it uses it
-        with open(os.path.expanduser(str(path)), encoding="utf-8-sig") as fh:
-            lines = fh.readlines()
-    except OSError:
-        return None
-    skip_until = None                      # inside a multi-line string
-    for raw in lines:
+    depth = 0
+    closer = None
+    for i, raw in enumerate(lines):
         line = raw.strip()
-        if skip_until is not None:
-            if skip_until in line:
-                skip_until = None
+        if closer is not None:
+            if closer in line:
+                closer = None
             continue
-        if line.startswith("["):           # a table header: the root scope ends
-            return None                    # (an array body is skipped above)
+        if depth > 0:
+            depth += line.count("[") - line.count("]")
+            continue
+        if line.startswith("["):
+            return
         if not line or line.startswith("#"):
             continue
         name, sep, value = line.partition("=")
@@ -220,44 +217,73 @@ def read_config_value(path, key):
             continue
         name = name.strip()
         if name[:1] in ("'", '"') and len(name) > 1 and name[-1] == name[0]:
-            name = name[1:-1]              # a quoted key names the same key
+            name = name[1:-1]
         value = value.strip()
-        if value.startswith("[") and value.count("[") != value.count("]"):
-            skip_until = "]"               # a multi-line array: skip its body,
-            if name == key:                # whose lines can start with "["
-                return None
-            continue
-        opener = value[:3] if value[:3] in ("'''", '"""') else None
+        if value.startswith("["):
+            opened = value.count("[") - value.count("]")
+            if opened > 0:
+                depth = opened
+                yield i, name, None
+                continue
+        opener = value[:3] if value[:3] in _TRIPLE_QUOTES else None
         if opener and value.count(opener) < 2:
-            # a value that spans lines: skip its body so a `[` in there is not
-            # read as a table header, and report nothing for this key
-            skip_until = opener
-            if name == key:
-                return None
+            closer = opener
+            yield i, name, None
             continue
-        if name != key:
-            continue
-        if opener:
-            end = value.find(opener, 3)
-            return value[3:end] if end > 0 else None
-        if value[:1] in ("'", '"'):
-            quote = value[0]
-            i, out = 1, []
-            while i < len(value):
-                c = value[i]
-                if c == "\\" and quote == '"' and i + 1 < len(value):
-                    nxt = value[i + 1]
-                    if nxt not in ('"', "\\"):
-                        return None            # \\u, \\t, ...: a real parser
-                    out.append(nxt)            # resolves these; this one says
-                    i += 2                     # "nothing is known" instead
-                    continue
-                if c == quote:
-                    return "".join(out)
-                out.append(c)
-                i += 1
-            return None                    # unterminated on this line
-        return value.split("#", 1)[0].strip() or None
+        yield i, name, value
+
+
+def _scalar(value):
+    """A root value's scalar text, or None when it cannot be read with
+    confidence (unterminated, an escape a real parser would resolve, ...)."""
+    if value is None:
+        return None
+    opener = value[:3] if value[:3] in _TRIPLE_QUOTES else None
+    if opener:
+        end = value.find(opener, 3)
+        return value[3:end] if end > 0 else None
+    if value[:1] in ("'", '"'):
+        quote = value[0]
+        i, out = 1, []
+        while i < len(value):
+            c = value[i]
+            if c == "\\" and quote == '"' and i + 1 < len(value):
+                nxt = value[i + 1]
+                if nxt not in ('"', "\\"):
+                    return None            # \\u, \\t, ...: a real parser resolves these
+                out.append(nxt)
+                i += 2
+                continue
+            if c == quote:
+                return "".join(out)
+            out.append(c)
+            i += 1
+        return None                        # unterminated on this line
+    return value.split("#", 1)[0].strip() or None
+
+
+def read_config_value(path, key):
+    """A ROOT-table scalar from a TOML file, or None. Deliberately small, not a
+    TOML parser: this reads one key out of a file another tool owns, on Python
+    3.10 where tomllib does not exist.
+
+    Review legs built each of these (2026-09-23) and they are pinned: the key
+    must match EXACTLY and may be quoted; an inline comment is not part of the
+    value; an escaped quote does not end a basic string; a BOM does not hide
+    the first key; a key under a [table] is not a root key, but a `[` inside a
+    multi-line string or array is not a table header. Anything it cannot read
+    confidently is None -- "nothing is known", never a default. A duplicate
+    root key returns the FIRST (the file is already invalid TOML).
+    """
+    try:
+        # utf-8-sig: a BOM would otherwise make the first key unrecognisable
+        with open(os.path.expanduser(str(path)), encoding="utf-8-sig") as fh:
+            lines = fh.readlines()
+    except (OSError, UnicodeDecodeError):
+        return None
+    for _i, name, value in _root_assignments(lines):
+        if name == key:
+            return _scalar(value)
     return None
 
 
@@ -1198,44 +1224,16 @@ def cmd_gate(path, args):
     return _commit(path, doc)
 
 
-_TRIPLE_QUOTES = (chr(39) * 3, chr(34) * 3)
 
 
 def _config_effort_line(lines, key):
     """Index of the ROOT-table line assigning `key`; None when the root has no
-    such key; "ambiguous" when its value spans lines (then nothing is written).
-    Walks the file the same way read_config_value does."""
-    skip_until = None
-    for i, raw in enumerate(lines):
-        line = raw.strip()
-        if skip_until is not None:
-            if skip_until in line:
-                skip_until = None
-            continue
-        if line.startswith("["):
-            return None
-        if not line or line.startswith("#"):
-            continue
-        name, sep, value = line.partition("=")
-        if not sep:
-            continue
-        name = name.strip()
-        if name[:1] in ("'", '"') and len(name) > 1 and name[-1] == name[0]:
-            name = name[1:-1]
-        value = value.strip()
-        if value.startswith("[") and value.count("[") != value.count("]"):
-            if name == key:
-                return "ambiguous"
-            skip_until = "]"
-            continue
-        opener = value[:3] if value[:3] in _TRIPLE_QUOTES else None
-        if opener and value.count(opener) < 2:
-            if name == key:
-                return "ambiguous"
-            skip_until = opener
-            continue
+    such key; "ambiguous" when its value cannot be read with confidence (it
+    spans lines, is unterminated, ...), in which case nothing is written. Uses
+    the same walker as read_config_value, so the dry run and --yes agree."""
+    for i, name, value in _root_assignments(lines):
         if name == key:
-            return i
+            return i if _scalar(value) is not None else "ambiguous"
     return None
 
 
@@ -1269,11 +1267,23 @@ def cmd_config_effort(path, args):
               % (args.round, args.role, args.adapter))
         return 1
     declared = leg["effort"]
-    cfg = Path(os.path.expanduser(eff["config_file"]))
+    # The value is written INTO a TOML file, so it must be a bare word: a quote
+    # or a newline would let a roster value inject further settings (codex
+    # leg, 2026-09-23: `medium"\nother = "x` became two root assignments).
+    if not _EFFORT_WORD.match(str(declared)):
+        print("refused: declared effort %r is not a plain effort word; nothing written"
+              % (declared,))
+        return 1
+    link = Path(os.path.expanduser(eff["config_file"]))
+    # A symlinked config (dotfiles) is edited at its TARGET, so the link
+    # survives; replacing the link path would silently detach it (codex leg).
+    cfg = Path(os.path.realpath(link))
     key = eff["config_key"]
     in_force = read_config_value(cfg, key)
     print("declared (roster): %s" % declared)
     print("in force (%s %s): %s" % (cfg, key, in_force or "not set"))
+    if cfg != link:
+        print("note: %s is a symlink; its target %s is the file changed" % (link, cfg))
     if in_force == declared:
         print("already agree; nothing written")
         return 0
@@ -1316,9 +1326,13 @@ def cmd_config_effort(path, args):
         lines[at] = newline
     mode = (cfg.stat().st_mode & 0o7777) if cfg.exists() else 0o600
     cfg.parent.mkdir(parents=True, exist_ok=True)
-    tmp = cfg.with_name(cfg.name + ".tmp.%d" % os.getpid())
+    # mkstemp: a random name created O_EXCL, so nothing pre-planted (a symlink
+    # at a guessable `.tmp.<pid>`) can redirect this write (codex leg,
+    # 2026-09-23, critical).
+    fd, tmpname = tempfile.mkstemp(prefix="." + cfg.name + ".", dir=str(cfg.parent))
+    tmp = Path(tmpname)
     try:
-        with open(tmp, "w", encoding="utf-8") as fh:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
             fh.write("".join(lines))
         os.chmod(tmp, mode)
         os.replace(tmp, cfg)
