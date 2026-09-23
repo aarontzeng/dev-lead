@@ -129,14 +129,15 @@ actionable" are calibration data. Verify every finding before you count it.
   lead downgraded it to MINOR, reasoning that the sequence advances on confirmed
   device state, so a step's NO_ACK is merely informational and the outcome is
   still correct. State-gating was the hazard, not the mitigation: the command had
-  actually reached the device and only its ACK was lost, so a later status update
-  carried the command out *after* the operator had been told it failed. A second
-  leg's framing corrected the lead. The error has a shape worth naming — the
-  downgrade reasoned about the code ("does it still reach the right state?") when
-  the question was about the operator and the machine ("what were they told, and
-  what did it then do?"). Before you write MINOR on something a leg called
-  serious, state the mechanism you think makes it benign, then attack that
-  mechanism the way you would attack the leg's.
+  actually reached the device and only its ACK was lost, so a later periodic
+  status report advanced the sequence and the device acted *after* the operator
+  had been told it failed. A second leg's framing corrected the lead. The error
+  has a shape worth naming — the downgrade reasoned about the code ("does it
+  still reach the right state?") when the question was about the operator and
+  the machine ("what were they told, and what did it then do?"). Before you
+  write MINOR on something a leg called serious, state the mechanism you think
+  makes it benign, then attack that mechanism the way you would attack the
+  leg's.
 
 - **Verify the evidence STEP, not just the conclusion.** A leg can reach a
   defensible conclusion and invent the check it claims to have run. Measured: a
