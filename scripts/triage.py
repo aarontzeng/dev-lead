@@ -337,9 +337,13 @@ def _ensure_revision(repo, change, patch_set, revision):
     try:
         # --no-write-fetch-head (git 2.29+): the clone may be a person's own
         # working clone, and FETCH_HEAD is theirs -- a patrol that runs
-        # `git fetch ... && use FETCH_HEAD` must never see it overwritten. With
-        # it, the only thing a triage run adds to a clone is objects.
-        _git(repo, "fetch", "--no-write-fetch-head", "origin", ref)
+        # `git fetch ... && use FETCH_HEAD` must never see it overwritten.
+        # --refmap= stops a configured fetch refspec from storing the ref (a
+        # clone that maps refs/changes/* would otherwise gain one), and
+        # --no-tags / --no-recurse-submodules keep tags and submodules out.
+        # The only thing a triage run adds to a clone is objects.
+        _git(repo, "fetch", "--no-write-fetch-head", "--refmap=", "--no-tags", "--no-recurse-submodules",
+             "origin", ref)
     except InputError as exc:
         raise InputError("git: could not fetch revision %s from %s: %s" % (revision, ref, exc))
     if not _object_exists(repo, revision):

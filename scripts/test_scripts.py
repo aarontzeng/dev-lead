@@ -4869,11 +4869,20 @@ def test_triage(tmp):
     git(fh_work, "push", "-q", str(fh_origin), "HEAD:refs/changes/01/1001/1")
     fh_head = fh_clone / ".git" / "FETCH_HEAD"
     fh_head.write_text("sentinel: the clone owner's FETCH_HEAD\n")
+    # A clone that maps refs/changes/* would store the fetched ref unless the
+    # configured refmap is switched off for this fetch.
+    git(fh_clone, "config", "--add", "remote.origin.fetch", "+refs/changes/*:refs/remotes/origin/changes/*")
+    git(fh_work, "tag", "fh-tag")
+    git(fh_work, "push", "-q", str(fh_origin), "refs/tags/fh-tag")
+    fh_refs = git(fh_clone, "for-each-ref", "--format=%(refname) %(objectname)").stdout
     triage_module._ensure_revision(fh_clone, "1001", "1", fh_revision)
     fetched = run("git", "-C", str(fh_clone), "cat-file", "-e", fh_revision + "^{commit}").returncode == 0
     check("triage fetch: a missing patch set is fetched into the clone", fetched, fh_revision)
     check("triage fetch: the clone's FETCH_HEAD is left alone",
           fh_head.read_text() == "sentinel: the clone owner's FETCH_HEAD\n", fh_head.read_text())
+    fh_refs_after = git(fh_clone, "for-each-ref", "--format=%(refname) %(objectname)").stdout
+    check("triage fetch: no ref or tag is created, even with a refspec mapping refs/changes",
+          fh_refs_after == fh_refs, fh_refs_after)
 
     # Review test gap: a real Git failure is an input error with stderr, not a
     # traceback or a successful empty result.
