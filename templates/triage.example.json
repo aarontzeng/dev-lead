@@ -47,6 +47,12 @@
     ]
   },
   "small_delta_lines": 60,
+  "effort": {
+    "LOW": {"mechanical": "medium", "judgment": "medium"},
+    "MEDIUM": {"mechanical": "medium", "judgment": {"default": "high", "codex": "xhigh"}},
+    "HIGH": {"mechanical": {"default": "high", "codex": "xhigh"},
+             "judgment": {"default": "high", "codex": "xhigh"}}
+  },
   "order": [
     {"owner": "bob", "gateway": "alpha", "rank": 0},
     {"gateway": "alpha", "rank": 1},

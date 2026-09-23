@@ -23,6 +23,13 @@ ROOT_KEYS = {
     "lenses", "delta_triggers", "risk_default", "move_check",
     "small_delta_lines", "order",
 }
+# Optional: without it, review legs carry no effort and behave as before.
+OPTIONAL_ROOT_KEYS = {"effort"}
+# An abstract effort ladder. The table names a tier; each adapter's own
+# spelling of it comes from data/launch.json, never from personal rules.
+EFFORT_LADDER = ("low", "medium", "high", "xhigh", "max")
+EFFORT_RANK = {name: number for number, name in enumerate(EFFORT_LADDER)}
+EFFORT_SUFFIX = re.compile(r"-(%s)$" % "|".join(EFFORT_LADDER))
 EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 
 
@@ -147,12 +154,47 @@ def _roster_lens_classes(problems):
     return set(public_map(by_lens))
 
 
+def _check_effort_table(table, classes, problems):
+    """Every risk x lens-class cell, each an abstract tier on EFFORT_LADDER."""
+    if not isinstance(table, dict):
+        problems.error("effort", "must be an object of risk -> {class: tier}")
+        return
+    _unknown_keys(table, set(RISKS), "effort", problems)
+    for risk in RISKS:
+        row = table.get(risk)
+        if not isinstance(row, dict):
+            problems.error("effort.%s" % risk, "required: an object of class -> tier")
+            continue
+        _unknown_keys(row, classes, "effort.%s" % risk, problems)
+        adapters = {name for name in roster.data()[0] if not str(name).startswith("_")}
+        for lens_class in sorted(classes):
+            path = "effort.%s.%s" % (risk, lens_class)
+            cell = row.get(lens_class)
+            if isinstance(cell, dict):
+                # {"default": tier, "<adapter>": tier}: a per-adapter override.
+                _unknown_keys(cell, adapters | {"default"}, path, problems)
+                if "default" not in cell:
+                    problems.error(path + ".default", "required: one of %s" % ", ".join(EFFORT_LADDER))
+                for key, value in cell.items():
+                    if not str(key).startswith("_") and value not in EFFORT_LADDER:
+                        problems.error("%s.%s" % (path, key), "must be one of %s" % ", ".join(EFFORT_LADDER))
+                    elif key != "default" and not str(key).startswith("_") \
+                            and isinstance(cell.get("default"), str) and cell["default"] in EFFORT_RANK \
+                            and EFFORT_RANK[value] < EFFORT_RANK[cell["default"]]:
+                        # An override raises one adapter; the table is a floor.
+                        problems.error("%s.%s" % (path, key), "must not be below the cell's default %r"
+                                       % cell["default"])
+            elif cell not in EFFORT_LADDER:
+                problems.error(path, "required: a tier (%s) or {\"default\": tier, <adapter>: tier}"
+                               % ", ".join(EFFORT_LADDER))
+
+
 def validate(doc):
     problems = Problems()
     if not isinstance(doc, dict):
         problems.error("(root)", "triage must be a JSON object")
         return problems
-    _unknown_keys(doc, ROOT_KEYS, "(root)", problems)
+    _unknown_keys(doc, ROOT_KEYS | OPTIONAL_ROOT_KEYS, "(root)", problems)
     for key in ROOT_KEYS:
         if key not in doc:
             problems.error(key, "required")
@@ -244,6 +286,8 @@ def validate(doc):
                     problems.error(path + "." + key, "must be a string")
     if doc.get("risk_default") not in RISKS:
         problems.error("risk_default", "must be LOW, MEDIUM, or HIGH")
+    if "effort" in doc:
+        _check_effort_table(doc["effort"], set(roster_classes), problems)
     move = doc.get("move_check")
     if not isinstance(move, dict):
         problems.error("move_check", "must be an object")
@@ -997,7 +1041,7 @@ def _lenses_and_triggers(config, files, delta_lines, fired, *, path_only=False):
     return lens_list, raised, flags
 
 
-def _review_legs(lens_classes):
+def _review_legs(lens_classes, config=None, risk_floor=None):
     path = roster.roster_path()
     doc, error = roster.load_roster(path)
     if error:
@@ -1029,16 +1073,115 @@ def _review_legs(lens_classes):
         if not family:
             serves = families.get("adapters", {}).get(adapter, {}).get("serves", [])
             family = serves[0] if len(serves) == 1 else None
-        entry = {"adapter": adapter, "model": chosen["model"], "family": family}
+        entry = {"adapter": adapter, "model": chosen["model"], "family": family,
+                 "_declared_effort": chosen.get("effort")}
         if gate:
             # The roster says this lens's entry is not dispatchable yet; the
             # mechanical entry stands in, and the output says so.
             entry["stands_in_for"] = {"lens": wanted, "gated_on": gate}
             wanted = "%s (%s gated)" % (used, wanted)
         resolved.append(entry)
+    for entry in resolved:
+        if "effort" in (config or {}):
+            floor = _effort_floor(config, risk_floor, lens_classes, entry["adapter"])
+            entry.update(_leg_effort(entry, floor))
+            # A floor set by a cell's override for this adapter says so, so the
+            # output shows why one adapter got more than the default.
+            if entry.get("effort_source") == "table" and \
+                    _effort_overridden(config, risk_floor, lens_classes, entry["adapter"], floor):
+                entry["effort_source"] = "table-override"
+        entry.pop("_declared_effort", None)
     if skipped:
         wanted = "%s; left out: %s" % (wanted, ", ".join(skipped))
     return resolved, wanted
+
+
+def _effort_cell(cell, adapter):
+    """A cell is a tier, or {"default": tier, <adapter>: tier}."""
+    if isinstance(cell, dict):
+        return cell.get(adapter, cell.get("default"))
+    return cell
+
+
+def _effort_overridden(config, risk_floor, lens_classes, adapter, floor):
+    """True when an adapter-named override raised this leg's floor: the floor
+    from the defaults alone, across the same classes, is lower."""
+    if floor not in EFFORT_RANK:
+        return False
+    defaults_only = _effort_floor(config, risk_floor, lens_classes, None)
+    return EFFORT_RANK.get(defaults_only, -1) < EFFORT_RANK[floor]
+
+
+def _effort_floor(config, risk_floor, lens_classes, adapter=None):
+    """The table's tier for this risk floor, the highest across the lens
+    classes present; None when there is no table or no concrete risk. With
+    no lens at all the mechanical cell applies: that is the class the roster
+    legs are chosen by when no judgment lens fired, and returning None would
+    give a HIGH change with no matching lens no floor at all."""
+    table = config.get("effort")
+    if not isinstance(table, dict) or risk_floor not in RISKS:
+        return None
+    row = table.get(risk_floor) or {}
+    cells = {c: _effort_cell(row.get(c), adapter) for c in set(lens_classes) | {"mechanical"}}
+    tiers = [cells[c] for c in lens_classes if cells[c] in EFFORT_RANK]
+    if not tiers and cells["mechanical"] in EFFORT_RANK:
+        tiers = [cells["mechanical"]]
+    return max(tiers, key=EFFORT_RANK.get) if tiers else None
+
+
+def _tier_or_next(wanted, allowed):
+    """`wanted`, or the next higher tier that `allowed` contains; None if none."""
+    for tier in EFFORT_LADDER[EFFORT_RANK[wanted]:]:
+        if tier in allowed:
+            return tier
+    return None
+
+
+def _leg_effort(leg, floor):
+    """Effort fields for one review leg. Raise-only: the table's floor never
+    lowers what the roster (or, for config_only, the machine) would run. A
+    word or model variant is emitted only when it is KNOWN to exist -- the
+    roster's own, or one of launch.json's effort.examples -- else the leg
+    keeps its launch and carries effort_unmet for the lead to decide."""
+    launch, _ = roster.data()
+    effort = (launch.get(leg["adapter"]) or {}).get("effort") or {}
+    mechanism = effort.get("mechanism", "none")
+    examples = [str(item) for item in effort.get("examples") or []]
+    if mechanism == "none":
+        return {"effort": None, "effort_in": "none"}
+    if mechanism == "model_suffix":
+        match = EFFORT_SUFFIX.search(leg["model"])
+        if not match:
+            return {"effort": None, "effort_in": "model_name",
+                    "effort_unmet": {"wanted": floor, "reason": "model id carries no effort suffix"}} if floor else \
+                   {"effort": None, "effort_in": "model_name"}
+        base, declared = leg["model"][:match.start()], match.group(1)
+        if floor is None or EFFORT_RANK[floor] <= EFFORT_RANK[declared]:
+            return {"effort": declared, "effort_in": "model_name", "effort_source": "roster"}
+        known = {declared} | {m[len(base) + 1:] for m in examples if m.startswith(base + "-")}
+        tier = _tier_or_next(floor, known)
+        if tier is None:
+            return {"effort": declared, "effort_in": "model_name", "effort_source": "roster",
+                    "effort_unmet": {"wanted": floor, "reason": "variant not known for this adapter"}}
+        leg["model"] = "%s-%s" % (base, tier)
+        return {"effort": tier, "effort_in": "model_name", "effort_source": "table"}
+    if mechanism == "config_only":
+        running = roster._config_effort(effort)
+        declared = running if running in EFFORT_RANK else None
+        if floor is None or (declared and EFFORT_RANK[floor] <= EFFORT_RANK[declared]):
+            return {"effort": running, "effort_in": "config_only", "effort_source": "roster"}
+        return {"effort": floor, "effort_in": "config_only", "effort_source": "table",
+                "config_mismatch": {"config": running, "wanted": floor,
+                                    "launch": "codex exec -c model_reasoning_effort=%s; state the base "
+                                              "revision in the brief (exec does not read it)" % floor}}
+    declared = leg.pop("_declared_effort", None)
+    if floor is None or (declared in EFFORT_RANK and EFFORT_RANK[floor] <= EFFORT_RANK[declared]):
+        return {"effort": declared, "effort_in": "flag", "effort_source": "roster"}
+    tier = _tier_or_next(floor, set(examples) | ({declared} if declared else set()))
+    if tier is None:
+        return {"effort": declared, "effort_in": "flag", "effort_source": "roster",
+                "effort_unmet": {"wanted": floor, "reason": "effort word not known for this adapter"}}
+    return {"effort": tier, "effort_in": "flag", "effort_source": "table"}
 
 
 def _rows_from(text):
@@ -1378,7 +1521,7 @@ def triage_change(config, raw, path, number, query_json, include_wip, as_of=None
         lenses, risk_floor, trigger_flags = _lenses_and_triggers(config, files, delta_line_data, fired)
         flags.extend(trigger_flags)
     if owner_fix:
-        review_legs, selected_lens = _review_legs({lens["class"] for lens in lenses})
+        review_legs, selected_lens = _review_legs({lens["class"] for lens in lenses}, config, risk_floor)
         legs = "roster"
         _fired(fired, "legs", "owner fix round uses the roster (opencode %s)" % selected_lens)
     elif ps_kind in ("carry-over", "move-only"):
@@ -1388,7 +1531,7 @@ def triage_change(config, raw, path, number, query_json, include_wip, as_of=None
         legs, review_legs = "own-read", []
         _fired(fired, "legs", "small delta (%s lines) after my vote uses own-read" % _line_count(delta_line_data))
     else:
-        review_legs, selected_lens = _review_legs({lens["class"] for lens in lenses})
+        review_legs, selected_lens = _review_legs({lens["class"] for lens in lenses}, config, risk_floor)
         legs = "roster"
         _fired(fired, "legs", "roster review legs selected (opencode %s; delta %s lines)"
                % (selected_lens, _line_count(delta_line_data)))

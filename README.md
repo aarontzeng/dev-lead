@@ -243,6 +243,28 @@ keep tags and submodules out. The only thing it adds to a clone is objects:
 no refs, no `FETCH_HEAD`, no index or working tree. A person's own working
 clone can therefore serve as the triage clone.
 
+An optional `effort` table sets a minimum review effort per risk floor and
+lens class (`{"MEDIUM": {"mechanical": "medium", "judgment": {"default":
+"high", "codex": "xhigh"}}, ...}`; `check` requires every cell). A cell
+names an abstract tier -- low, medium, high, xhigh, max -- and a patch set
+with lenses of both classes takes the higher cell. A cell may instead be
+`{"default": tier, "<adapter>": tier}`, raising one adapter without the
+others -- an effort a model has been measured to benefit from need not be
+pushed onto adapters that were not. `change` then adds `effort` and
+`effort_in` to each review leg, and `effort_source` (roster, table, or
+table-override when an adapter's override raised it) to every leg whose
+adapter has an effort at all -- a claude leg carries `effort_in: "none"` and
+nothing else. The table only raises: a leg whose roster effort (or, for
+codex review, the machine's `~/.codex/config.toml`) is already at or above
+the floor keeps it. A tier is spelled per adapter from `data/launch.json`: a
+flag word, a model variant, or the codex config key. A word or variant is
+emitted only when it is known to exist -- the roster's own or one of
+launch.json's `effort.examples`, taking the next higher known tier across a
+gap -- otherwise the leg keeps its launch and carries `effort_unmet`. A
+codex review above its config carries `config_mismatch` with the `codex exec
+-c` line to use; nothing edits the config. Without the table, legs carry no
+effort fields.
+
 The lead role is portable: all six CLIs can read the same skills directory,
 so a Codex or Gemini lead can follow the same playbook and delegate to
 Claude via `claude-implement`.

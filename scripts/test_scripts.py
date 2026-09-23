@@ -4994,6 +4994,140 @@ def test_triage(tmp):
     check("triage fetch: no ref or tag is created, even with a refspec mapping refs/changes",
           fh_refs_after == fh_refs, fh_refs_after)
 
+    # 0.6.25: an optional risk x lens-class effort table. A cell is an abstract
+    # tier; each adapter's spelling comes from launch.json.
+    table = {"LOW": {"mechanical": "medium", "judgment": "medium"},
+             "MEDIUM": {"mechanical": "medium", "judgment": "high"},
+             "HIGH": {"mechanical": "xhigh", "judgment": "xhigh"}}
+    expect_bad("effort-missing-cell", lambda doc: doc.update({"effort": {**table, "LOW": {"mechanical": "medium"}}}),
+               "effort.LOW.judgment")
+    expect_bad("effort-bad-tier", lambda doc: doc.update({"effort": {**table, "HIGH": {"mechanical": "xhigh",
+                                                                                          "judgment": "ultra"}}}),
+               "effort.HIGH.judgment")
+    expect_bad("effort-unknown-class", lambda doc: doc.update({"effort": {**table, "LOW": {
+        "mechanical": "medium", "judgment": "medium", "vibes": "low"}}}), "vibes")
+    expect_bad("effort-unknown-risk", lambda doc: doc.update({"effort": {**table, "CRITICAL": {}}}), "CRITICAL")
+    with_table = json.loads(json.dumps(config))
+    with_table["effort"] = table
+    table_file = tmp / "triage-effort.json"
+    _write_doc(table_file, with_table)
+    check("triage check: a full effort table passes", checked(table_file).returncode == 0, checked(table_file).stdout)
+    plain_result = changed(129, [patch(1, trigger_old, base, approvals=[approval("+1")]), patch(2, large, small)])
+    check("triage effort: without a table, review legs carry no effort fields",
+          plain_result.get("review_legs") and not any(k.startswith("effort") for leg in plain_result["review_legs"]
+                                                      for k in leg), plain_result)
+    table_env = _roster_env(tmp, DEV_LEAD_ROSTER=roster_file, DEV_LEAD_TRIAGE=table_file)
+    table_result = changed(129, [patch(1, trigger_old, base, approvals=[approval("+1")]), patch(2, large, small)],
+                           test_env=table_env)
+    check("triage effort: with a table, every review leg carries effort_in",
+          table_result.get("review_legs") and all("effort_in" in leg for leg in table_result["review_legs"]),
+          table_result)
+
+    floor = triage_module._effort_floor
+    cfg = {"effort": table}
+    check("triage effort: the floor takes the higher cell across lens classes",
+          floor(cfg, "MEDIUM", {"mechanical", "judgment"}) == "high"
+          and floor(cfg, "MEDIUM", {"mechanical"}) == "medium", None)
+    check("triage effort: no floor for inherit, or without a table",
+          floor(cfg, "inherit", {"judgment"}) is None and floor({}, "HIGH", {"judgment"}) is None, None)
+    per_adapter = {**table, "MEDIUM": {"mechanical": "medium", "judgment": {"default": "high", "codex": "xhigh"}}}
+    check("triage effort: a per-adapter cell raises only the adapter it names",
+          floor({"effort": per_adapter}, "MEDIUM", {"judgment"}, "codex") == "xhigh"
+          and floor({"effort": per_adapter}, "MEDIUM", {"judgment"}, "opencode") == "high"
+          and floor({"effort": per_adapter}, "MEDIUM", {"mechanical"}, "codex") == "medium", None)
+    expect_bad("effort-cell-no-default", lambda doc: doc.update({"effort": {**table, "MEDIUM": {
+        "mechanical": "medium", "judgment": {"codex": "xhigh"}}}}), "effort.MEDIUM.judgment.default")
+    expect_bad("effort-cell-unknown-adapter", lambda doc: doc.update({"effort": {**table, "MEDIUM": {
+        "mechanical": "medium", "judgment": {"default": "high", "codexx": "xhigh"}}}}), "codexx")
+    expect_bad("effort-cell-bad-tier", lambda doc: doc.update({"effort": {**table, "MEDIUM": {
+        "mechanical": "medium", "judgment": {"default": "high", "codex": "ultra"}}}}), "effort.MEDIUM.judgment.codex")
+    per_file = tmp / "triage-effort-per-adapter.json"
+    per_doc = json.loads(json.dumps(config)); per_doc["effort"] = per_adapter
+    _write_doc(per_file, per_doc)
+    check("triage check: a per-adapter cell with a default passes", checked(per_file).returncode == 0,
+          checked(per_file).stdout)
+    # Change 129 is a HIGH floor with both lens classes; an override on HIGH
+    # for codex alone shows up as table-override on that leg only.
+    high_override = json.loads(json.dumps(per_doc))
+    high_override["effort"]["HIGH"] = {"mechanical": "xhigh", "judgment": {"default": "xhigh", "codex": "max"}}
+    high_file = tmp / "triage-effort-high-override.json"
+    _write_doc(high_file, high_override)
+    per_result = changed(129, [patch(1, trigger_old, base, approvals=[approval("+1")]), patch(2, large, small)],
+                         test_env=_roster_env(tmp, DEV_LEAD_ROSTER=roster_file, DEV_LEAD_TRIAGE=high_file))
+    by_adapter = {leg["adapter"]: leg for leg in per_result.get("review_legs", [])}
+    check("triage effort: only the overridden adapter's leg says table-override",
+          by_adapter.get("codex", {}).get("effort") == "max"
+          and by_adapter["codex"].get("effort_source") == "table-override"
+          and all(leg.get("effort_source") != "table-override" for name, leg in by_adapter.items() if name != "codex"),
+          per_result)
+    other = {**table, "MEDIUM": {"mechanical": "medium", "judgment": {"default": "medium", "opencode": "xhigh"}}}
+    check("triage effort: a model_suffix or config_only adapter not named in the cell gets the default",
+          floor({"effort": other}, "MEDIUM", {"judgment"}, "agy") == "medium"
+          and floor({"effort": other}, "MEDIUM", {"judgment"}, "codex") == "medium"
+          and floor({"effort": other}, "MEDIUM", {"judgment"}, "opencode") == "xhigh", None)
+    overridden = triage_module._effort_overridden
+    check("triage effort: an override that raised the floor is reported as table-override",
+          overridden({"effort": per_adapter}, "MEDIUM", {"judgment"}, "codex", "xhigh")
+          and not overridden({"effort": per_adapter}, "MEDIUM", {"judgment"}, "opencode", "high")
+          and not overridden({"effort": per_adapter}, "MEDIUM", {"mechanical"}, "codex", "medium"), None)
+    same = {**table, "MEDIUM": {"mechanical": "medium", "judgment": {"default": "high", "codex": "high"}}}
+    check("triage effort: an override equal to the default is not reported as an override",
+          not overridden({"effort": same}, "MEDIUM", {"judgment"}, "codex", "high"), None)
+    both = {**table, "MEDIUM": {"mechanical": {"default": "high", "codex": "xhigh"}, "judgment": "xhigh"}}
+    check("triage effort: an override another class already matched is not reported as an override",
+          not overridden({"effort": both}, "MEDIUM", {"mechanical", "judgment"}, "codex", "xhigh"), None)
+    expect_bad("effort-cell-lowering", lambda doc: doc.update({"effort": {**table, "MEDIUM": {
+        "mechanical": "medium", "judgment": {"default": "xhigh", "codex": "medium"}}}}),
+               "must not be below the cell's default")
+    expect_bad("effort-cell-list-default", lambda doc: doc.update({"effort": {**table, "MEDIUM": {
+        "mechanical": "medium", "judgment": {"default": [], "codex": "xhigh"}}}}), "effort.MEDIUM.judgment.default")
+    check("triage effort: a concrete risk with no lens takes the mechanical cell",
+          floor(cfg, "HIGH", set()) == "xhigh" and floor(cfg, "MEDIUM", set()) == "medium", None)
+    leg_effort = triage_module._leg_effort
+    def one(adapter, model, wanted, declared=None):
+        entry = {"adapter": adapter, "model": model, "family": "x", "_declared_effort": declared}
+        return entry, leg_effort(entry, wanted)
+    entry, got = one("opencode", "opencode/m", "high", "xhigh")
+    check("triage effort: the table never lowers a flag leg's roster effort",
+          got == {"effort": "xhigh", "effort_in": "flag", "effort_source": "roster"}, got)
+    entry, got = one("opencode", "opencode/m", "max", "xhigh")
+    check("triage effort: the table raises a flag leg to a known word",
+          got == {"effort": "max", "effort_in": "flag", "effort_source": "table"}, got)
+    entry, got = one("grok", "grok-4", "medium", None)
+    check("triage effort: a flag word the menu lacks goes up to the next known one",
+          got["effort"] == "high" and got["effort_source"] == "table", got)
+    entry, got = one("agy", "gemini-3.8-flash-medium", "high")
+    check("triage effort: a model_suffix leg moves to a known variant",
+          got == {"effort": "high", "effort_in": "model_name", "effort_source": "table"}
+          and entry["model"] == "gemini-3.8-flash-high", (got, entry))
+    entry, got = one("agy", "gemini-3.8-flash-high", "xhigh")
+    check("triage effort: an unknown variant is never emitted; effort_unmet instead",
+          entry["model"] == "gemini-3.8-flash-high" and got.get("effort") == "high"
+          and got.get("effort_unmet") == {"wanted": "xhigh", "reason": "variant not known for this adapter"},
+          (got, entry))
+    entry, got = one("cursor", "kimi-k3-low", "medium")
+    check("triage effort: a gap in a known menu goes up to the next variant",
+          entry["model"] == "kimi-k3-high" and got.get("effort") == "high", (got, entry))
+    entry, got = one("claude", "claude-sonnet", "high")
+    check("triage effort: an adapter with no effort concept says so",
+          got == {"effort": None, "effort_in": "none"}, got)
+    codex_home = tmp / "codex-home"
+    (codex_home / ".codex").mkdir(parents=True, exist_ok=True)
+    (codex_home / ".codex" / "config.toml").write_text('model_reasoning_effort = "medium"\n')
+    saved_home = os.environ.get("HOME")
+    os.environ["HOME"] = str(codex_home)
+    try:
+        entry, low = one("codex", "gpt-6-luna", "low")
+        entry, high = one("codex", "gpt-6-luna", "high")
+    finally:
+        os.environ["HOME"] = saved_home
+    check("triage effort: config_only keeps the machine's effort when it meets the floor",
+          low == {"effort": "medium", "effort_in": "config_only", "effort_source": "roster"}, low)
+    check("triage effort: config_only above the machine's effort reports the mismatch, never edits",
+          high.get("effort") == "high" and high.get("config_mismatch", {}).get("config") == "medium"
+          and "model_reasoning_effort=high" in high["config_mismatch"]["launch"]
+          and (codex_home / ".codex" / "config.toml").read_text() == 'model_reasoning_effort = "medium"\n', high)
+
     # Review test gap: a real Git failure is an input error with stderr, not a
     # traceback or a successful empty result.
     broken_query = query(167, [patch(1, asof_ps1, "missing-parent")])
