@@ -237,7 +237,8 @@ if eff["mechanism"] == "config_only" and applies:
     _in_force = _roster.read_config_value(_cfg, _key)
     print("# effort IN FORCE on this machine: %s (%s %s) -- the roster can only "
           "declare it; to pin one per call use `codex exec -c %s=<effort>` "
-          "(references/codex-runtime.md), never an edit of that shared file."
+          "(references/codex-runtime.md); to change the machine, /dev-lead:config "
+          "offers `roster.py config-effort` on your explicit yes, with a backup."
           % (_in_force or "not set", os.path.expanduser(_cfg), _key, _key), file=w)
 note = eff.get("note", "") if applies else eff.get("implement_note", eff.get("note", ""))
 print("# effort: %s -- %s" % (mech, note.split(".")[0]), file=w)

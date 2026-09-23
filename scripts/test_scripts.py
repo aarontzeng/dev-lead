@@ -2756,9 +2756,9 @@ def test_config_effort(tmp):
               "--base", "abc", "--run-dir", str(tmp), env=env)
     check("config effort: leg-cmd prints what is IN FORCE, not what is declared",
           "IN FORCE on this machine: high" in out.stderr, out.stderr)
-    check("config effort: ...and names the per-call escape hatch, not an edit",
+    check("config effort: ...names the per-call escape hatch, and the machine change only on a yes",
           "codex exec -c model_reasoning_effort" in out.stderr
-          and "never an edit" in out.stderr, out.stderr)
+          and "explicit yes" in out.stderr and "backup" in out.stderr, out.stderr)
 
     doc = _live_roster()
     doc["rounds"]["r1"]["review"]["codex"]["effort"] = "medium"
@@ -2823,6 +2823,93 @@ def test_config_effort(tmp):
               "--base", "abc", "--run-dir", str(tmp), env=env)
     check("config effort: leg-cmd says 'not set' rather than inventing one",
           "IN FORCE on this machine: not set" in out.stderr, out.stderr)
+
+
+def test_config_effort_write(tmp):
+    """`roster.py config-effort` -- the ONE path that writes a user's config
+    (Aaron, 2026-09-23: "做，但要先備份並回報前後值"). Dry run by default;
+    --yes backs up first, changes one line, reads back, reports old -> new.
+    Position: after test_config_effort."""
+    home = tmp / "cehome"
+    cfgdir = home / ".codex"
+    cfgdir.mkdir(parents=True)
+    cfg = cfgdir / "config.toml"
+    original = ('# my codex config\nmodel = "gpt-x"\n'
+                'model_reasoning_effort = "high"  # I like it high\n'
+                '[profiles.fast]\nmodel_reasoning_effort = "low"\n')
+    cfg.write_text(original)
+    os.chmod(cfg, 0o640)
+    doc = _live_roster()
+    doc["rounds"]["r1"]["review"]["codex"]["effort"] = "medium"
+    rpath = tmp / "ce-roster.json"
+    _write_doc(rpath, doc)
+    env = _roster_env(home, DEV_LEAD_ROSTER=str(rpath))
+    ce = lambda *extra: run(SCRIPTS / "roster.py", "config-effort", "r1", "review", "codex",
+                           *extra, env=env)
+
+    out = ce()
+    check("config-effort: reports both values", "declared (roster): medium" in out.stdout
+          and "in force" in out.stdout and ": high" in out.stdout, out.stdout)
+    check("config-effort: without --yes nothing is written",
+          out.returncode == 0 and cfg.read_text() == original
+          and not list(cfgdir.glob("config.toml.bak.*")), out.stdout)
+    check("config-effort: ...and says what WOULD change", "would change: high -> medium" in out.stdout,
+          out.stdout)
+
+    out = ce("--yes")
+    backups = list(cfgdir.glob("config.toml.bak.*"))
+    check("config-effort --yes: writes and reports old -> new",
+          out.returncode == 0 and "changed: high -> medium" in out.stdout, out.stdout)
+    check("config-effort --yes: exactly one backup, byte-identical to the old file",
+          len(backups) == 1 and backups[0].read_text() == original, [b.name for b in backups])
+    check("config-effort --yes: names the backup in its report",
+          len(backups) == 1 and str(backups[0]) in out.stdout, out.stdout)
+    new = cfg.read_text()
+    check("config-effort --yes: only the root key's line changed",
+          new == original.replace('model_reasoning_effort = "high"  # I like it high\n',
+                                  'model_reasoning_effort = "medium"\n'), new)
+    check("config-effort --yes: the [profiles.fast] value is untouched",
+          'model_reasoning_effort = "low"' in new, new)
+    check("config-effort --yes: file mode kept", (cfg.stat().st_mode & 0o777) == 0o640,
+          oct(cfg.stat().st_mode & 0o777))
+
+    out = ce("--yes")
+    check("config-effort: agreeing values are a no-op with no new backup",
+          "already agree" in out.stdout and len(list(cfgdir.glob("config.toml.bak.*"))) == 1,
+          out.stdout)
+
+    # absent from the root: inserted BEFORE the first table, never under it
+    cfg.write_text('[profiles.fast]\nmodel_reasoning_effort = "low"\n')
+    out = ce("--yes")
+    check("config-effort: an absent root key is inserted above the first table",
+          cfg.read_text().startswith('model_reasoning_effort = "medium"\n[profiles.fast]'),
+          cfg.read_text())
+
+    # a value spanning lines is not guessed at, and nothing is written
+    tq = chr(34) * 3
+    spanning = 'model_reasoning_effort = %s\nhigh\n%s\n' % (tq, tq)
+    cfg.write_text(spanning)
+    out = ce("--yes")
+    check("config-effort: a multi-line value is refused, file untouched",
+          out.returncode != 0 and cfg.read_text() == spanning, out.stdout)
+
+    # a failed backup is a STOP: nothing written over an un-backed-up file
+    cfg.write_text(original)
+    for b in cfgdir.glob("config.toml.bak.*"):
+        b.unlink()
+    os.chmod(cfgdir, 0o500)
+    try:
+        out = ce("--yes")
+    finally:
+        os.chmod(cfgdir, 0o700)
+    check("config-effort: a failed backup refuses and writes nothing",
+          out.returncode != 0 and "backup failed" in out.stdout and cfg.read_text() == original,
+          out.stdout)
+
+    # a leg that takes effort per call has no config to write
+    out = run(SCRIPTS / "roster.py", "config-effort", "r1", "review", "agy", env=env)
+    check("config-effort: refuses an adapter whose effort is not config_only",
+          out.returncode != 0 and "per call" in out.stdout, out.stdout)
 
 
 def _roster_doc(review, fix=None, implement=None):
@@ -3806,6 +3893,9 @@ def main():
     print("config_only effort (leg-cmd + roster check)")
     with tempfile.TemporaryDirectory() as td:
         test_config_effort(Path(td))
+    print("roster.py config-effort (the consented config write)")
+    with tempfile.TemporaryDirectory() as td:
+        test_config_effort_write(Path(td))
 
     print("lint.py check_version")
     with tempfile.TemporaryDirectory() as td:

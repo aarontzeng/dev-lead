@@ -14,10 +14,11 @@ import argparse
 import copy
 import json
 import os
+import shutil
 import stat
 import sys
 import tempfile
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -298,8 +299,9 @@ def _check_effort(leg, adapter, role, path, problems):
         if declared and in_force and declared != in_force:
             problems.warn(path + ".effort",
                           "declares %r but %s %s on this machine says %r -- this leg "
-                          "will run at %r (to pin one per call: `codex exec -c %s=%s`, "
-                          "never an edit of that shared file)"
+                          "will run at %r (pin one per call: `codex exec -c %s=%s`; or "
+                          "align this machine: `roster.py config-effort ... --yes`, "
+                          "backed up first)"
                           % (declared, eff.get("config_file"), eff.get("config_key"),
                              in_force, in_force, eff.get("config_key"), declared))
     elif mech == "config_only":
@@ -1196,6 +1198,146 @@ def cmd_gate(path, args):
     return _commit(path, doc)
 
 
+_TRIPLE_QUOTES = (chr(39) * 3, chr(34) * 3)
+
+
+def _config_effort_line(lines, key):
+    """Index of the ROOT-table line assigning `key`; None when the root has no
+    such key; "ambiguous" when its value spans lines (then nothing is written).
+    Walks the file the same way read_config_value does."""
+    skip_until = None
+    for i, raw in enumerate(lines):
+        line = raw.strip()
+        if skip_until is not None:
+            if skip_until in line:
+                skip_until = None
+            continue
+        if line.startswith("["):
+            return None
+        if not line or line.startswith("#"):
+            continue
+        name, sep, value = line.partition("=")
+        if not sep:
+            continue
+        name = name.strip()
+        if name[:1] in ("'", '"') and len(name) > 1 and name[-1] == name[0]:
+            name = name[1:-1]
+        value = value.strip()
+        if value.startswith("[") and value.count("[") != value.count("]"):
+            if name == key:
+                return "ambiguous"
+            skip_until = "]"
+            continue
+        opener = value[:3] if value[:3] in _TRIPLE_QUOTES else None
+        if opener and value.count(opener) < 2:
+            if name == key:
+                return "ambiguous"
+            skip_until = opener
+            continue
+        if name == key:
+            return i
+    return None
+
+
+def cmd_config_effort(path, args):
+    """Offer, then (only with --yes) make, the machine's config agree with the
+    roster's declared effort for a config_only leg.
+
+    Aaron, 2026-09-23: "做，但要先備份並回報前後值". This is the ONE place
+    dev-lead writes a user's config file, and only on an explicit yes given in
+    /dev-lead:config: the file is shared with the user's interactive CLI and
+    with other sessions, which is why no skill RUN ever touches it. Backup
+    first (a failed backup is a stop), atomic replace keeping the mode, one
+    line changed, read back, and old -> new reported.
+    """
+    doc, err = load_roster(path)
+    if err:
+        print(err)
+        return 1
+    rounds = doc.get("rounds") if isinstance(doc.get("rounds"), dict) else {}
+    rnd, _inherited = _resolved_round(rounds, args.round)
+    block = rnd.get(args.role) if isinstance(rnd, dict) else None
+    leg = block.get(args.adapter) if isinstance(block, dict) else None
+    eff = _effort_spec(args.adapter)
+    applies = args.role == eff.get("applies_to_role", args.role)
+    if eff.get("mechanism") != "config_only" or not applies:
+        print("roster: %s %s takes its effort per call, not from a config file; "
+              "nothing to write" % (args.adapter, args.role))
+        return 1
+    if not isinstance(leg, dict) or not leg.get("effort"):
+        print("roster: rounds.%s.%s.%s declares no effort; nothing to compare"
+              % (args.round, args.role, args.adapter))
+        return 1
+    declared = leg["effort"]
+    cfg = Path(os.path.expanduser(eff["config_file"]))
+    key = eff["config_key"]
+    in_force = read_config_value(cfg, key)
+    print("declared (roster): %s" % declared)
+    print("in force (%s %s): %s" % (cfg, key, in_force or "not set"))
+    if in_force == declared:
+        print("already agree; nothing written")
+        return 0
+    try:
+        raw = cfg.read_bytes() if cfg.exists() else b""
+        text = raw.decode("utf-8-sig")
+    except (OSError, UnicodeDecodeError) as exc:
+        print("refused: cannot read %s (%s); nothing written" % (cfg, exc))
+        return 1
+    lines = text.splitlines(keepends=True)
+    at = _config_effort_line(lines, key)
+    if at == "ambiguous":
+        print("refused: %s's %s spans lines; edit it by hand. Nothing written." % (cfg, key))
+        return 1
+    newline = '%s = "%s"\n' % (key, declared)
+    if not args.yes:
+        print("would change: %s -> %s  (run again with --yes to write; a backup is taken first)"
+              % (in_force or "not set", declared))
+        return 0
+    backup = None
+    if cfg.exists():
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        backup = cfg.with_name(cfg.name + ".bak." + stamp)
+        n = 1
+        while backup.exists():           # two changes in one second: never
+            n += 1                        # overwrite an earlier backup
+            backup = cfg.with_name("%s.bak.%s-%d" % (cfg.name, stamp, n))
+        try:
+            shutil.copy2(cfg, backup)
+            if backup.read_bytes() != raw:
+                raise OSError("backup does not match the original")
+        except OSError as exc:
+            print("refused: backup failed (%s); nothing written" % (exc,))
+            return 1
+    if at is None:
+        lines.insert(0, newline)     # a root key must come before any table
+    else:
+        if lines[at] and not lines[at].endswith("\n"):
+            newline = newline.rstrip("\n")
+        lines[at] = newline
+    mode = (cfg.stat().st_mode & 0o7777) if cfg.exists() else 0o600
+    cfg.parent.mkdir(parents=True, exist_ok=True)
+    tmp = cfg.with_name(cfg.name + ".tmp.%d" % os.getpid())
+    try:
+        with open(tmp, "w", encoding="utf-8") as fh:
+            fh.write("".join(lines))
+        os.chmod(tmp, mode)
+        os.replace(tmp, cfg)
+    except OSError as exc:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        print("refused: write failed (%s); %s is unchanged" % (exc, cfg))
+        return 1
+    after = read_config_value(cfg, key)
+    print("changed: %s -> %s  (%s %s)" % (in_force or "not set", after, cfg, key))
+    print("backup: %s" % (backup if backup else "none (the file did not exist)"))
+    if after != declared:
+        print("WARNING: read back %r, expected %r -- restore from the backup" % (after, declared))
+        return 1
+    return 0
+
+
 def cmd_unset(path, args):
     if args.round not in ("r1", "fix"):
         print("roster: rounds.%s: unknown round %r" % (args.round, args.round))
@@ -1244,6 +1386,12 @@ def main(argv=None):
     p_set.add_argument("--why")
     p_set.add_argument("--inherit")
 
+    p_ce = sub.add_parser("config-effort")
+    p_ce.add_argument("round", choices=("r1", "fix"))
+    p_ce.add_argument("role")
+    p_ce.add_argument("adapter")
+    p_ce.add_argument("--yes", action="store_true")
+
     p_gate = sub.add_parser("gate")
     p_gate.add_argument("mode", choices=MERGE_GATE_MODES)
     p_gate.add_argument("--why")
@@ -1266,6 +1414,8 @@ def main(argv=None):
         return cmd_plan(path, args.round, args.implement, args.review, args.lens)
     if args.cmd == "gate":
         return cmd_gate(path, args)
+    if args.cmd == "config-effort":
+        return cmd_config_effort(path, args)
     if args.cmd == "set":
         return cmd_set(path, args)
     if args.cmd == "unset":

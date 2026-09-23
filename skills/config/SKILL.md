@@ -60,6 +60,18 @@ DEV_LEAD=${DEV_LEAD_ROOT:-$(ls -d "$HOME"/.claude/plugins/cache/dev-lead/dev-lea
    [`data/launch.json`](../../data/launch.json), and free text. Ask whether
    the fix round inherits r1 or differs.
 
+   **A config_only leg (codex review): offer to align the machine.** Its
+   effort is read from a file on THIS machine, so after setting it run
+   `"$DEV_LEAD/scripts/roster.py" config-effort <round> review codex` (no
+   `--yes`): it prints the declared value, the value in force, and what
+   would change. If they differ, ask with the multiple-choice tool —
+   "update `~/.codex/config.toml` from X to Y? It is shared with your
+   interactive codex and other sessions." Only on an explicit yes run it
+   again with `--yes`, then report exactly what it printed: old -> new and
+   the backup path. On a no, say plainly which value the leg will actually
+   run at. This is the ONLY place dev-lead writes that file; a skill run
+   never does.
+
 3. **Probe a new model once, with a real call.** A model that has never
    been dispatched on this machine gets one cheap real call before it is
    written. A row in a CLI's model listing is not evidence the model can
