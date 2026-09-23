@@ -2906,6 +2906,28 @@ def test_config_effort_write(tmp):
           out.returncode != 0 and "backup failed" in out.stdout and cfg.read_text() == original,
           out.stdout)
 
+    # an existing backup is never overwritten, even by a change in the same
+    # second: occupy the next few seconds' names, then change again
+    from datetime import datetime as _dt, timedelta as _td
+    cfg.write_text(original)
+    for bak in cfgdir.glob("config.toml.bak.*"):
+        bak.unlink()
+    now = _dt.now()
+    squatters = []
+    for sec in range(0, 6):
+        name = cfgdir / ("config.toml.bak." + (now + _td(seconds=sec)).strftime("%Y%m%d-%H%M%S"))
+        name.write_text("EARLIER BACKUP %d\n" % sec)
+        squatters.append(name)
+    out = ce("--yes")
+    check("config-effort: an earlier backup with the same timestamp is never overwritten",
+          out.returncode == 0
+          and all(b.read_text() == "EARLIER BACKUP %d\n" % i for i, b in enumerate(squatters)),
+          out.stdout)
+    check("config-effort: ...the new backup takes a -N name and holds the old bytes",
+          any(b.name.rsplit("-", 1)[-1].isdigit() and len(b.name.rsplit("-", 1)[-1]) < 3
+              and b.read_text() == original for b in cfgdir.glob("config.toml.bak.*-*")),
+          sorted(b.name for b in cfgdir.glob("config.toml.bak.*")))
+
     # a leg that takes effort per call has no config to write
     out = run(SCRIPTS / "roster.py", "config-effort", "r1", "review", "agy", env=env)
     check("config-effort: refuses an adapter whose effort is not config_only",
