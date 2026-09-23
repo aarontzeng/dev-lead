@@ -843,10 +843,11 @@ that refusal is the guard working; never switch to `--no-ff` to get past it.
 Rebase the branch onto the moved target and re-run the ff. The human owns the
 main checkout; assume it moves.
 
-**Which gate is in force comes from the roster file, not from memory**
-(`merge_gate.mode`, added 2026-09-23 on Aaron's ruling; `roster.py show`
-prints it, `roster.py gate <user|lead> --why "…"` changes it, and absent
-means `user`). Read it at the start of Phase 3 — a lead that assumes the
+**Which gate is in force is what `roster.py show` prints, not memory and
+not the raw JSON field** (`merge_gate.mode`, added 2026-09-23 on Aaron's
+ruling; `roster.py gate <user|lead> --why "…"` changes it). Absent means
+`user`, and so does any roster `check` would refuse: `show` then prints
+INVALID and the person's gate, whatever the field says. Read it at the start of Phase 3 — a lead that assumes the
 default lands nothing on a machine configured for `lead`, and a lead that
 assumes `lead` merges work the person wanted to see. **Neither mode changes
 what counts as green**: a verdict with an unanswered review round, a failing

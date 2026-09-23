@@ -2897,6 +2897,31 @@ def test_config_effort_write(tmp):
     check("config-effort: an unterminated value is refused, file untouched",
           out.returncode != 0 and cfg.read_text() == broken, out.stdout)
 
+    # reader and writer split lines the same way: a \v inside a comment line
+    # must not make --yes rewrite a line the dry run never reported
+    tricky = '# c\vmodel_reasoning_effort = "hidden"\nmodel_reasoning_effort = "high"\n'
+    cfg.write_text(tricky)
+    out = ce("--yes")
+    check("config-effort: an odd separator (\\v) does not move the edited line",
+          out.returncode == 0 and '"hidden"' in cfg.read_text()
+          and cfg.read_text().endswith('model_reasoning_effort = "medium"\n'), out.stdout)
+
+    # a DANGLING symlink planted at a backup name is never written through
+    from datetime import datetime as _dt2, timedelta as _td2
+    cfg.write_text(original)
+    for bak in cfgdir.glob("config.toml.bak.*"):
+        bak.unlink()
+    elsewhere = tmp / "should-not-exist.txt"
+    now2 = _dt2.now()
+    for sec in range(0, 6):
+        link = cfgdir / ("config.toml.bak." + (now2 + _td2(seconds=sec)).strftime("%Y%m%d-%H%M%S"))
+        link.symlink_to(elsewhere)
+    out = ce("--yes")
+    check("config-effort: a dangling symlink at the backup name is not followed",
+          out.returncode == 0 and not elsewhere.exists(), out.stdout)
+    for bak in cfgdir.glob("config.toml.bak.*"):
+        bak.unlink()
+
     # a value spanning lines is not guessed at, and nothing is written
     tq = chr(34) * 3
     spanning = 'model_reasoning_effort = %s\nhigh\n%s\n' % (tq, tq)

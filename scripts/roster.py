@@ -185,6 +185,19 @@ _TRIPLE_QUOTES = (chr(39) * 3, chr(34) * 3)
 _EFFORT_WORD = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
 
 
+def _toml_lines(text):
+    """Split on TOML's newlines only (LF, and CRLF via the trailing CR), keeping
+    each terminator. str.splitlines also breaks on \\v, \\f, U+2028 ... and
+    readlines() does not, so the reader and the writer once saw different
+    lines and --yes could change a line the dry run never reported (cursor
+    leg, 2026-09-23). Both now split HERE."""
+    parts = text.split("\n")
+    out = [p + "\n" for p in parts[:-1]]
+    if parts[-1]:
+        out.append(parts[-1])
+    return out
+
+
 def _root_assignments(lines):
     """Walk a TOML file's ROOT table: yield (index, key, raw_value) for each
     root assignment, stopping at the first table header. The one walker both
@@ -277,8 +290,8 @@ def read_config_value(path, key):
     """
     try:
         # utf-8-sig: a BOM would otherwise make the first key unrecognisable
-        with open(os.path.expanduser(str(path)), encoding="utf-8-sig") as fh:
-            lines = fh.readlines()
+        with open(os.path.expanduser(str(path)), encoding="utf-8-sig", newline="") as fh:
+            lines = _toml_lines(fh.read())
     except (OSError, UnicodeDecodeError):
         return None
     for _i, name, value in _root_assignments(lines):
@@ -1293,7 +1306,7 @@ def cmd_config_effort(path, args):
     except (OSError, UnicodeDecodeError) as exc:
         print("refused: cannot read %s (%s); nothing written" % (cfg, exc))
         return 1
-    lines = text.splitlines(keepends=True)
+    lines = _toml_lines(text)
     at = _config_effort_line(lines, key)
     if at == "ambiguous":
         print("refused: %s's %s spans lines; edit it by hand. Nothing written." % (cfg, key))
@@ -1308,7 +1321,9 @@ def cmd_config_effort(path, args):
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         backup = cfg.with_name(cfg.name + ".bak." + stamp)
         n = 1
-        while backup.exists():           # two changes in one second: never
+        # lexists, not exists: a DANGLING symlink planted at the backup's name
+        # would otherwise be followed by copy2 (cursor leg, 2026-09-23)
+        while os.path.lexists(backup):   # two changes in one second: never
             n += 1                        # overwrite an earlier backup
             backup = cfg.with_name("%s.bak.%s-%d" % (cfg.name, stamp, n))
         try:

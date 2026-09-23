@@ -63,14 +63,18 @@ DEV_LEAD=${DEV_LEAD_ROOT:-$(ls -d "$HOME"/.claude/plugins/cache/dev-lead/dev-lea
    **A config_only leg (codex review): offer to align the machine.** Its
    effort is read from a file on THIS machine, so after setting it run
    `"$DEV_LEAD/scripts/roster.py" config-effort <round> review codex` (no
-   `--yes`): it prints the declared value, the value in force, and what
-   would change. If they differ, ask with the multiple-choice tool —
+   `--yes`): it writes nothing, and prints the declared value, the value in
+   force, and either "already agree" or what would change (or a refusal
+   when the file's value cannot be read with confidence — then it is the
+   user's to edit by hand). If they differ, ask with the multiple-choice tool —
    "update `~/.codex/config.toml` from X to Y? It is shared with your
    interactive codex and other sessions." Only on an explicit yes run it
    again with `--yes`, then report exactly what it printed: old -> new and
-   the backup path. On a no, say plainly which value the leg will actually
-   run at. This is the ONLY place dev-lead writes that file; a skill run
-   never does.
+   the backup path — and if it exits non-zero after a `changed:` line, say
+   the read-back disagreed and name the backup to restore from. On a no, say
+   plainly which value the leg will actually run at. This step, on that
+   explicit yes, is the only time dev-lead writes that file; no leg
+   dispatch, review round or other skill ever does.
 
 3. **Probe a new model once, with a real call.** A model that has never
    been dispatched on this machine gets one cheap real call before it is

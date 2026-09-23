@@ -243,10 +243,16 @@ rewritten.
   `grep model_reasoning_effort ~/.codex/config.toml`. Never modify the
   user's config from a skill run. The one exception is `/dev-lead:config`,
   and only on the user's explicit yes (Aaron, 2026-09-23): `roster.py
-  config-effort <round> review codex --yes` backs the file up first (a
-  failed backup writes nothing), changes that one root-table line, reads it
-  back and reports old -> new and the backup path. Without `--yes` it only
-  says what would change. Passing `--effort` explicitly on implement
+  config-effort <round> review codex --yes` backs the existing file up first
+  (a failed backup writes nothing; a file that does not exist yet has no
+  backup), then changes that one root-table line -- or inserts it above the
+  first table when the root has none -- through a symlink's target if the
+  config is a link, reads the value back and reports old -> new and the
+  backup path. It refuses a value it cannot read with confidence and an
+  effort that is not a bare word. Without `--yes` it writes nothing: it
+  prints both values and either "already agree" or what would change. A
+  non-zero exit AFTER a `changed:` line means the read-back disagreed --
+  restore from the named backup. Passing `--effort` explicitly on implement
   runs is what keeps an implement-cheap / review-deep split stable while the
   user tunes their global freely; omitting it is a deliberate act — say so
   in the run log, because the resulting effort then depends on machine
