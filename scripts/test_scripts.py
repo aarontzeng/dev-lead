@@ -2799,6 +2799,10 @@ def test_config_effort(tmp):
         ('model_reasoning_effort = "\\u0068igh"\n', None,
          "an escape a real parser resolves is not guessed"),
         ('[[t]]\nmodel_reasoning_effort = "high"\n', None, "an array-of-tables header ends the root"),
+        ('[t]  # note\nmodel_reasoning_effort = "high"\n', None,
+         "a table header with a trailing comment still ends the root"),
+        ('model_reasoning_effort = "high"\n[t]\nother = 1\n', "high",
+         "a root key BEFORE the first table is still read"),
 
 
         ('other = 1\nmodel_reasoning_effort = "high"\n', "high", "a key after another root key"),

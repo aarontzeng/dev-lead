@@ -179,11 +179,6 @@ def _check_family(family, adapter, path, problems):
         problems.warn(path, "%s cannot be the accounting leg" % family)
 
 
-# A table header is a line that is ONLY [name] or [[name]] -- not an array
-# element line such as `["a"],` inside a multi-line value (cursor leg, 2026-09-23).
-_TABLE_HEADER = re.compile(r"^\[\[?[^\[\]]*\]\]?$")
-
-
 def read_config_value(path, key):
     """A ROOT-table scalar from a TOML file, or None. Deliberately small, not a
     TOML parser: this reads one key out of a file another tool owns, on Python
@@ -216,8 +211,8 @@ def read_config_value(path, key):
             if skip_until in line:
                 skip_until = None
             continue
-        if _TABLE_HEADER.match(line):      # a table header: the root scope ends
-            return None
+        if line.startswith("["):           # a table header: the root scope ends
+            return None                    # (an array body is skipped above)
         if not line or line.startswith("#"):
             continue
         name, sep, value = line.partition("=")
