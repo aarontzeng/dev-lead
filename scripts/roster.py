@@ -1348,7 +1348,14 @@ def cmd_config_effort(path, args):
                 os.fsync(bfh.fileno())
             shutil.copystat(cfg, backup, follow_symlinks=False)
         except OSError as exc:
-            print("refused: backup failed (%s); nothing written" % (exc,))
+            # a half-written backup must not be left looking like a good one
+            # (codex leg, 2026-09-23); it is this run's own file (O_EXCL above)
+            try:
+                backup.unlink()
+                left = "the partial backup was removed"
+            except OSError as exc2:
+                left = "the partial backup %s could NOT be removed (%s) -- do not restore from it" % (backup, exc2)
+            print("refused: backup failed (%s); nothing written; %s" % (exc, left))
             return 1
     if at is None:
         lines.insert(0, newline)     # a root key must come before any table

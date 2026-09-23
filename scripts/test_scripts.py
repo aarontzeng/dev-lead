@@ -3034,6 +3034,38 @@ def test_config_effort_write(tmp):
     cfg.unlink()
     cfg.write_text(original)
 
+    # a backup that fails part-way is removed, not left looking like a good one:
+    # in-process, with fsync forced to fail
+    import importlib.util as _ilu
+    _spec = _ilu.spec_from_file_location("roster_under_test", SCRIPTS / "roster.py")
+    _mod = _ilu.module_from_spec(_spec)
+    _spec.loader.exec_module(_mod)
+    cfg.write_text(original)
+    for bak in cfgdir.glob("config.toml.bak.*"):
+        bak.unlink()
+    saved_home, saved_fsync = os.environ.get("HOME"), os.fsync
+    def _boom(fd):
+        raise OSError(5, "injected fsync failure")
+    import types as _types, contextlib as _ctx, io as _io
+    buf = _io.StringIO()
+    try:
+        os.environ["HOME"] = str(home)
+        os.fsync = _boom
+        with _ctx.redirect_stdout(buf):
+            rc = _mod.cmd_config_effort(rpath, _types.SimpleNamespace(
+                round="r1", role="review", adapter="codex", yes=True))
+    finally:
+        os.fsync = saved_fsync
+        if saved_home is None:
+            os.environ.pop("HOME", None)
+        else:
+            os.environ["HOME"] = saved_home
+    check("config-effort: a backup that fails part-way refuses and leaves the config unchanged",
+          rc != 0 and cfg.read_text() == original, buf.getvalue())
+    check("config-effort: ...and removes its own partial backup",
+          not list(cfgdir.glob("config.toml.bak.*")) and "partial backup was removed" in buf.getvalue(),
+          sorted(b.name for b in cfgdir.glob("config.toml.bak.*")))
+
     # a leg that takes effort per call has no config to write
     out = run(SCRIPTS / "roster.py", "config-effort", "r1", "review", "agy", env=env)
     check("config-effort: refuses an adapter whose effort is not config_only",
