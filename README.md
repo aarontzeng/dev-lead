@@ -173,7 +173,7 @@ flowchart TB
 
     subgraph END["How a run ends"]
         direction LR
-        M["<b>Phase 3 · Merge gate</b><br/>verdict + diff presented<br/>a person approves the result"]
+        M["<b>Phase 3 · Merge gate</b><br/>verdict + diff presented<br/>a person approves the result<br/>(merge_gate.mode=lead: a green verdict approves itself)"]
         F[["🚀 <b>Merge & push</b><br/>the lead, in the same run<br/>then reports the ref"]]
         H["🛑 <b>Report and hold</b><br/>round cap, fix churn, or a survivor<br/>worktree preserved — no merge"]
         M --> F
@@ -315,7 +315,8 @@ mean anything. Each family's runtime reference lists its one-time setup
 rules — adopt them in your own agent instructions if you don't have them:
 
 - **Delegates never push.** They commit locally and report the hash; the
-  lead pushes only after a person has approved the result, and only to the
+  lead pushes only after the result is approved — by a person, or by a fully
+  green verdict where you configured `merge_gate.mode = lead` — and only to the
   ref your project's contract names (a review ref, a topic branch, or the
   target branch where that is allowed).
 - **No AI-authorship trailers** in commit messages (adjust to your team's

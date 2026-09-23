@@ -106,8 +106,10 @@ The same lead sequence as every implement skill, none of it optional:
    is GPT, Gemini, or a named free-pool model. Never another Claude context,
    and not a stealth model whose family might be Claude.
 6. Merge gate: user sees the diff and verified findings; fast-forward, push
-   and tear down only on explicit approval, then report the ref. The
-   delegate never pushes.
+   and tear down only on approval — the person's, or, where the roster sets
+   `merge_gate.mode = lead`, a fully green verdict itself; anything not green,
+   and any stricter project contract, still goes to the person — then report
+   the ref. The delegate never pushes.
 
 The fix-round loop (findings quoted verbatim, same worktree, new commit,
 re-verify) is `dev-lead` Phase 2 — this skill adds nothing to it.

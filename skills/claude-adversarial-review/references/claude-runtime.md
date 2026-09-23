@@ -147,5 +147,6 @@ The pieces you still own, which `claude -p` does not give you:
    stealth model whose family might be Claude.
 4. **Patience calibrated to the work** (see above).
 5. **A person approves the result; the lead lands it.** Present the diff and
-   verified findings; merge and push only on approval — the person's, or
-   (or, with the roster's `merge_gate.mode = lead`, on a fully green verdict itself — anything not green still goes to the person) — then report the ref. The delegate itself never pushes.
+   verified findings; merge and push only on approval — the person's, or, where the roster sets
+   `merge_gate.mode = lead`, a fully green verdict itself; anything not green,
+   and any stricter project contract, still goes to the person — then report the ref. The delegate itself never pushes.

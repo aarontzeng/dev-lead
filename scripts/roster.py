@@ -14,6 +14,7 @@ import argparse
 import copy
 import json
 import os
+import re
 import stat
 import sys
 import tempfile
@@ -178,42 +179,90 @@ def _check_family(family, adapter, path, problems):
         problems.warn(path, "%s cannot be the accounting leg" % family)
 
 
+# A table header is a line that is ONLY [name] or [[name]] -- not an array
+# element line such as `["a"],` inside a multi-line value (cursor leg, 2026-09-23).
+_TABLE_HEADER = re.compile(r"^\[\[?[^\[\]]*\]\]?$")
+
+
 def read_config_value(path, key):
     """A ROOT-table scalar from a TOML file, or None. Deliberately small, not a
     TOML parser: this reads one key out of a file another tool owns, on Python
     3.10 where tomllib does not exist (3.11+ could use it; the fallback would
     still be needed).
 
-    What it gets right, because a review leg built each of these (2026-09-23):
-    the key must match EXACTLY (`model_reasoning_effort_backup` is not
-    `model_reasoning_effort`), an inline comment after the value is not part of
-    the value, and a key under a `[table]` is not a root key. Anything it
-    cannot read confidently -- a multi-line or array value, a quoted key -- is
-    None, which every caller treats as "nothing is known", never as a default.
-    A duplicate root key returns the FIRST (TOML forbids duplicates, so the
-    file is already invalid and the tool that owns it decides what that means).
+    What it gets right, because three review legs built each of these
+    (2026-09-23): the key must match EXACTLY and may be quoted
+    (`model_reasoning_effort_backup` is not the key, `"model_reasoning_effort"`
+    is); an inline comment after the value is not part of the value; a `\\"`
+    inside a basic string does not end it; a key under a `[table]` is not a
+    root key, but a `[` INSIDE a multi-line string is not a table header
+    either. Anything it cannot read confidently -- a value that spans lines, a
+    dotted key -- is None, which every caller treats as "nothing is known",
+    never as a default. A duplicate root key returns the FIRST (TOML forbids
+    duplicates, so the file is already invalid and its owner decides what that
+    means).
     """
     try:
-        with open(os.path.expanduser(str(path)), encoding="utf-8") as fh:
+        # utf-8-sig: a BOM would otherwise make the first key unrecognisable
+        # and the value read as "not set" while the tool that owns it uses it
+        with open(os.path.expanduser(str(path)), encoding="utf-8-sig") as fh:
             lines = fh.readlines()
     except OSError:
         return None
+    skip_until = None                      # inside a multi-line string
     for raw in lines:
         line = raw.strip()
-        if line.startswith("[") :          # a table header: root scope is over
+        if skip_until is not None:
+            if skip_until in line:
+                skip_until = None
+            continue
+        if _TABLE_HEADER.match(line):      # a table header: the root scope ends
             return None
         if not line or line.startswith("#"):
             continue
         name, sep, value = line.partition("=")
-        if not sep or name.strip() != key:
+        if not sep:
             continue
+        name = name.strip()
+        if name[:1] in ("'", '"') and len(name) > 1 and name[-1] == name[0]:
+            name = name[1:-1]              # a quoted key names the same key
         value = value.strip()
-        if value[:1] in ("'", '"'):        # quoted: the value ends at its quote
+        if value.startswith("[") and value.count("[") != value.count("]"):
+            skip_until = "]"               # a multi-line array: skip its body,
+            if name == key:                # whose lines can start with "["
+                return None
+            continue
+        opener = value[:3] if value[:3] in ("'''", '"""') else None
+        if opener and value.count(opener) < 2:
+            # a value that spans lines: skip its body so a `[` in there is not
+            # read as a table header, and report nothing for this key
+            skip_until = opener
+            if name == key:
+                return None
+            continue
+        if name != key:
+            continue
+        if opener:
+            end = value.find(opener, 3)
+            return value[3:end] if end > 0 else None
+        if value[:1] in ("'", '"'):
             quote = value[0]
-            end = value.find(quote, 1)
-            return value[1:end] if end > 0 else None
-        value = value.split("#", 1)[0].strip()   # bare: an inline comment is not it
-        return value or None
+            i, out = 1, []
+            while i < len(value):
+                c = value[i]
+                if c == "\\" and quote == '"' and i + 1 < len(value):
+                    nxt = value[i + 1]
+                    if nxt not in ('"', "\\"):
+                        return None            # \\u, \\t, ...: a real parser
+                    out.append(nxt)            # resolves these; this one says
+                    i += 2                     # "nothing is known" instead
+                    continue
+                if c == quote:
+                    return "".join(out)
+                out.append(c)
+                i += 1
+            return None                    # unterminated on this line
+        return value.split("#", 1)[0].strip() or None
     return None
 
 
@@ -538,8 +587,16 @@ def _check_merge_gate(doc, problems):
 
 
 def merge_gate_mode(doc):
-    """The configured mode, or the default. Read by the skill at Phase 3."""
-    gate = doc.get("merge_gate") if isinstance(doc, dict) else None
+    """The configured mode, or the default. Read by the skill at Phase 3.
+
+    A document that `check` would refuse answers "user", never "lead": this
+    function is the one an in-process caller reaches for, and a standing
+    authorisation must not be readable out of a file the validator rejects
+    (agy leg, 2026-09-23).
+    """
+    if not isinstance(doc, dict) or validate(doc).errors:
+        return "user"
+    gate = doc.get("merge_gate")
     mode = gate.get("mode") if isinstance(gate, dict) else None
     return mode if mode in MERGE_GATE_MODES else "user"
 
@@ -805,15 +862,16 @@ def cmd_show(path, only):
     if err:
         print(err)
         return 1
-    # show is what Phase 3 reads, and it does not run check -- so a block check
-    # would refuse must not be shown as if it were in force (cursor leg,
-    # 2026-09-23: {"mode": "lead", "modee": 1} printed "merge gate: lead").
+    # show is what Phase 3 reads, and it does not run check -- so a roster check
+    # would refuse must not be shown as if its gate were in force. The WHOLE
+    # document, not just the gate block: `version: 2` or a missing rounds.r1
+    # makes check exit non-zero while the block itself is fine (cursor leg then
+    # codex leg, 2026-09-23).
     gate = doc.get("merge_gate") if isinstance(doc.get("merge_gate"), dict) else {}
-    gate_problems = Problems()
-    _check_merge_gate(doc, gate_problems)
+    gate_problems = validate(doc)
     if gate_problems.errors:
-        print("merge gate: INVALID -- the file's merge_gate is refused by check, "
-              "so the gate is the default (user). Run `roster.py check`:")
+        print("merge gate: INVALID -- this roster is refused by check, so the "
+              "gate is the default (user). Run `roster.py check`:")
         for line in gate_problems.errors:
             print("  " + line)
         mode = "user"

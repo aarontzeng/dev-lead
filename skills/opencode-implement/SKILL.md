@@ -165,8 +165,10 @@ The same lead sequence as every implement skill, none of it optional:
    either implement with a named model in the first place or take two
    reviewers from two different KNOWN families.
 6. Merge gate: user sees the diff and verified findings; fast-forward, push
-   and tear down (including the untracked `opencode.json`) only on explicit
-   approval, then report the ref. The delegate never pushes.
+   and tear down (including the untracked `opencode.json`) only on approval
+   — the person's, or, where the roster sets `merge_gate.mode = lead`, a
+   fully green verdict itself; anything not green, and any stricter project
+   contract, still goes to the person. The delegate never pushes.
 
 The fix-round loop (findings quoted verbatim, same worktree, new commit,
 re-verify including new mutations) is `dev-lead` Phase 2 — this skill adds

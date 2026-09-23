@@ -210,8 +210,9 @@ gate. High-risk changes take two non-GPT families.
 
 Verify each finding against code or an executable reproduction. Report the
 verified findings, rejected false positives, test results, exact base SHA,
-and the complete diff scope to the user. Only after that is approved — by the
-user, or (or, with the roster's `merge_gate.mode = lead`, on a fully green verdict itself — anything not green still goes to the person) — may you
+and the complete diff scope to the user. Only after that is approved — by the user, or, where
+the roster sets `merge_gate.mode = lead`, by a fully green verdict itself;
+anything not green, and any stricter project contract, still goes to the person — may you
 fast-forward merge, push to the ref the project's contract names, and remove
 the worktree; report the ref. The delegate never pushes.
 

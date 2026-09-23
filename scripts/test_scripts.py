@@ -2686,6 +2686,16 @@ def test_merge_gate(tmp, roster):
 
     # show is what Phase 3 reads and it does not run check, so it must not
     # present a block check would refuse as the gate in force.
+    # a roster whose GATE is valid but whose document is not: check exits
+    # non-zero, so show must not present lead as in force either
+    doc2 = _live_roster()
+    doc2["merge_gate"] = {"mode": "lead", "why": "x", "set_on": "2026-09-23"}
+    doc2["version"] = 2
+    _write_doc(path, doc2)
+    out = run(SCRIPTS / "roster.py", "show", env=env)
+    check("gate: show refuses when the ROSTER is invalid, not just the gate block",
+          "INVALID" in out.stdout and "merge gate: lead" not in out.stdout, out.stdout)
+
     doc2 = _live_roster(); doc2["merge_gate"] = {"mode": "lead", "modee": 1}
     _write_doc(path, doc2)
     out = run(SCRIPTS / "roster.py", "show", env=env)
@@ -2731,6 +2741,8 @@ def test_merge_gate(tmp, roster):
 
 
 def test_config_effort(tmp):
+    TQ = chr(34) * 3   # a triple-quoted TOML scalar, written this way to keep
+                       # this file readable inside its own heredocs
     """A config_only adapter's effort lives in a file on THAT machine, so the
     roster can only declare it. leg-cmd prints what is in force; check warns on
     a mismatch (measured on a peer's machine 2026-09-23: roster medium, config
@@ -2771,6 +2783,24 @@ def test_config_effort(tmp):
         ('model_reasoning_effort="high"\n', "high", "no spaces around ="),
         ('model_reasoning_effort = high\n', "high", "an unquoted value"),
         ('model_reasoning_effort = high  # note\n', "high", "an inline comment after a BARE value"),
+        ('"model_reasoning_effort" = "high"\n', "high", "a quoted key is the same key"),
+        ("'model_reasoning_effort' = 'high'\n", "high", "a single-quoted key and value"),
+        ('model_reasoning_effort = %shigh%s\n' % (TQ, TQ), "high", "a single-line triple-quoted value"),
+        ('model_reasoning_effort = %s\nhigh\n%s\n' % (TQ, TQ), None, "a MULTI-line value is not guessed"),
+        ('\ufeffmodel_reasoning_effort = "high"\n', "high", "a BOM does not hide the first key"),
+        ('model_reasoning_effort = "high"\r\n', "high", "CRLF line endings"),
+        ('model_reasoning_effort = "high\\"-priority"\n', 'high"-priority',
+         "an escaped quote does not end the value"),
+        ('description = %s\n[not_a_real_table]\n%s\nmodel_reasoning_effort = "high"\n' % (TQ, TQ),
+         "high", "a [ inside a multi-line string is not a table header"),
+        ("model_reasoning_effort = 'high\\'\n", "high\\", "a literal string has no escapes (TOML)"),
+        ('notify = [\n  ["a"],\n]\nmodel_reasoning_effort = "high"\n', "high",
+         "a multi-line array element is not a table header"),
+        ('model_reasoning_effort = "\\u0068igh"\n', None,
+         "an escape a real parser resolves is not guessed"),
+        ('[[t]]\nmodel_reasoning_effort = "high"\n', None, "an array-of-tables header ends the root"),
+
+
         ('other = 1\nmodel_reasoning_effort = "high"\n', "high", "a key after another root key"),
     ):
         (home / ".codex" / "config.toml").write_text(text)
