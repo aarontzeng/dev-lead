@@ -4372,6 +4372,20 @@ def test_triage(tmp):
     result = changed(140, [patch(1, colon_ps1, base, approvals=[approval("+1")]), patch(2, colon_ps2, colon_ps1)])
     check("triage literal pathspec: colon path is handled", result.get("delta_files") == ["docs/a:b.md"], result)
 
+    # A filename that is not UTF-8 (b"caf\xe9.md", Latin-1) must still be
+    # reported, not dropped or crash the run. HANDOFF: verified by hand only
+    # before 0.6.21; pinned here in the release review (2026-09-23).
+    git(repo, "checkout", "-q", "-B", "non-utf8-path", base)
+    latin1 = "docs/caf" + os.fsdecode(b"\xe9") + ".md"
+    write(latin1, "old\n")
+    latin_ps1 = commit("latin-1 name source")
+    write(latin1, "new\n")
+    latin_ps2 = commit("latin-1 name target")
+    result = changed(144, [patch(1, latin_ps1, base, approvals=[approval("+1")]),
+                           patch(2, latin_ps2, latin_ps1)])
+    check("triage non-UTF-8 path: the file is reported, not dropped",
+          result.get("delta_files") == [latin1], result)
+
     # Fix round 2 F1: replay keeps other people's feedback before PS N+1,
     # but excludes my review action on the replayed patch set.
     replay = {
