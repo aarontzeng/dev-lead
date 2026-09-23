@@ -5408,7 +5408,15 @@ def test_renorm(tmp):
     # racy (same-second stat): a file whose cached stat still matches is not
     # re-read. So the NOTE must name only excusable files, and at least one.
     renorm_set = {"crlf.txt", "sp ace.txt", "\u6587\u6a94.txt"}
-    noted = {line.strip() for line in r.stderr.splitlines()[1:] if line.strip()}
+    # Only the indented lines under the NOTE header: git may print its own
+    # "Preparing worktree ..." line first (it does on the CI runner).
+    err_lines = r.stderr.splitlines()
+    at = next((i for i, line in enumerate(err_lines) if "freeze-target: NOTE" in line), len(err_lines))
+    noted = set()
+    for line in err_lines[at + 1:]:
+        if not line.startswith("  ") or not line.strip():
+            break
+        noted.add(line.strip())
     check("renorm: ...and says which files it excused",
           noted and noted <= renorm_set, r.stderr)
     # through a SYMLINKED entrypoint the sibling helper must still be found
