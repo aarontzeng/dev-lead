@@ -4672,6 +4672,10 @@ def test_triage(tmp):
     got = run(triage, "change", "abc", "--query-json", query(101, [patch(1, ps1, base)]), env=env)
     check("triage change: a non-numeric change number exits 2 without a traceback",
           got.returncode == 2 and "digits" in got.stderr and "Traceback" not in got.stderr, got.stdout + got.stderr)
+    for unicode_digits in ("\u00b2", "\uff11\uff12"):
+        got = run(triage, "change", unicode_digits, "--query-json", query(101, [patch(1, ps1, base)]), env=env)
+        check("triage change: Unicode digits %r are refused like any non-ASCII number" % unicode_digits,
+              got.returncode == 2 and "digits" in got.stderr and "Traceback" not in got.stderr, got.stdout + got.stderr)
 
     # Round-5 review #2: the ../ fold belongs to Markdown link destinations
     # only. The same depth change inside a script is an edit.

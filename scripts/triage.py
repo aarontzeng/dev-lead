@@ -1021,7 +1021,8 @@ def _change_number(value, what="change"):
     """A Gerrit change number: digits only, so it can be neither a query
     operator nor a crash in the refs/changes arithmetic."""
     text = str(value)
-    if not text.isdigit():
+    # isdigit() alone admits Unicode digits: "²" passes it and then fails int().
+    if not (text.isascii() and text.isdigit()):
         raise InputError("%s: number must be digits, got %r" % (what, text))
     return text
 
@@ -1164,7 +1165,7 @@ def _ancestor_lists(config, change, rows, query_json):
         status = dependency.get("status")
         if status is None:
             row = by_number.get(str(number))
-            if row is None and not query_json and str(number).isdigit():
+            if row is None and not query_json and str(number).isascii() and str(number).isdigit():
                 found = _gerrit_rows(config, "change:%s" % number)
                 row = next((item for item in found if str(item.get("number")) == str(number)), None)
             status = row.get("status") if isinstance(row, dict) else None
