@@ -543,6 +543,23 @@ def _diff_entries(repo, parent, revision):
     return entries
 
 
+def _mode_flags(pairs):
+    """A mode or file-type change has no hunk lines, so a small delta read by
+    eye would show nothing. Renames are left to the move checks; a deletion
+    has no mode left to judge."""
+    flags = []
+    for before, entry in pairs:
+        if entry["status"][0] in "RD":
+            continue
+        old_mode = before["new_mode"] if before is not None else entry.get("old_mode")
+        new_mode = entry.get("new_mode")
+        if old_mode not in (None, "000000") and old_mode != new_mode:
+            flags.append("%s: file mode changed %s -> %s" % (entry["new"], old_mode, new_mode))
+        elif new_mode not in REGULAR_MODES:
+            flags.append("%s: not a regular file (mode %s)" % (entry["new"], new_mode))
+    return flags
+
+
 def _delta(previous, current):
     """Current PS entries that changed from the last-voted PS's own patch."""
     previous_by_path = {entry["new"]: entry for entry in previous}
@@ -664,7 +681,7 @@ def _tree_has(repo, revision, path):
 URL = re.compile(r"https?://(?:[^\s<>()\[\]\"']|\([^\s<>()\[\]\"']*\))+")
 
 
-def _without_inline_code(line):
+def _without_inline_code(line, code=None):
     kept, index = [], 0
     while True:
         start = line.find("`", index)
@@ -680,11 +697,14 @@ def _without_inline_code(line):
         if end < 0:
             kept.append(line[start:])
             return "".join(kept)
+        if code is not None:
+            code.append(line[start:end + len(marker)])
         index = end + len(marker)
 
 
-def _visible_markdown(text):
-    """Drop fenced blocks and inline code before extracting links or URLs."""
+def _visible_markdown(text, code=None):
+    """Drop fenced blocks and inline code before extracting links or URLs.
+    Given a list as `code`, append what was dropped as code to it."""
     lines, fence, indented, blank = [], None, False, True
     for raw_line in text.split("\n"):
         line = raw_line[:-1] if raw_line.endswith("\n") else raw_line
@@ -695,6 +715,8 @@ def _visible_markdown(text):
             run = len(token) - len(token.lstrip(character))
             if indent <= 3 and run >= length and token[run:].strip(" \t\r") == "":
                 fence = None
+            elif code is not None:
+                code.append(line)
             continue
         if not token.strip(" \t\r"):
             blank = True
@@ -704,14 +726,18 @@ def _visible_markdown(text):
         # there must still be flagged.
         if (indent >= 4 or line.startswith("\t")) and (indented or blank):
             indented, blank = True, False
+            if code is not None:
+                code.append(line)
             continue
         indented, blank = False, False
         start = re.match(r"(`{3,}|~{3,})", token) if indent <= 3 else None
         if start:
             marker = start.group(1)
             fence = (marker[0], len(marker))
+            if code is not None:
+                code.append(line)
             continue
-        lines.append(_without_inline_code(line))
+        lines.append(_without_inline_code(line, code))
     return "\n".join(lines)
 
 
@@ -849,11 +875,21 @@ def _fold_link_depth(path, text):
     return REFERENCE_DEPTH.sub(r"\1../", text)
 
 
+def _markdown_code(text):
+    code = []
+    _visible_markdown(text, code)
+    return code
+
+
 def _moved_unchanged(entry, old_text, new_text):
     """A moved file whose content is the same up to Markdown link depth, with
     the same regular-file mode: a symlink's target means something else in
-    its new directory, and a mode change is a change."""
+    its new directory, and a mode change is a change. Code in Markdown (fenced,
+    indented, inline) must match exactly: a link-shaped ../ run there is text
+    the move did not have to change."""
     if entry.get("old_mode") != entry.get("new_mode") or entry.get("new_mode") not in REGULAR_MODES:
+        return False
+    if entry["new"].lower().endswith(MARKDOWN_SUFFIXES) and _markdown_code(old_text) != _markdown_code(new_text):
         return False
     return _fold_link_depth(entry["old"], old_text) == _fold_link_depth(entry["new"], new_text)
 
@@ -1297,6 +1333,7 @@ def triage_change(config, raw, path, number, query_json, include_wip, as_of=None
         delta_line_data = _delta_lines(pairs)
     files = [entry["new"] for entry in delta_entries]
     flags = ["%s: binary" % entry["new"] for entry in delta_entries if entry.get("binary")]
+    flags.extend(_mode_flags(pairs))
     kinds = {"TRIVIAL_REBASE", "NO_CODE_CHANGE", "NO_CHANGE"}
     if role == "reviewer" and voted_set is None:
         ps_kind = "new"

@@ -4640,7 +4640,7 @@ def test_triage(tmp):
     # (-oProxyCommand=... runs a program). `check` refuses it, and the query
     # puts `--` before the destination in case a check was ever skipped.
     expect_bad("ssh-option-injection",
-               lambda doc: doc["gerrit"].__setitem__("ssh", "-oProxyCommand=touch /tmp/x@y"), "gerrit.ssh")
+               lambda doc: doc["gerrit"].__setitem__("ssh", "-oProxyCommand=x@y"), "gerrit.ssh")
     expect_bad("ssh-host-option", lambda doc: doc["gerrit"].__setitem__("ssh", "alice@-oProxyCommand=x"), "gerrit.ssh")
     fake_bin = tmp / "fake-ssh-bin"
     fake_bin.mkdir(exist_ok=True)
@@ -4699,6 +4699,37 @@ def test_triage(tmp):
     prose_ps2 = commit("prose move")
     result = changed(182, [patch(1, prose_ps1, base, approvals=[approval("+1")]), patch(2, prose_ps2, prose_ps1)])
     check("triage move: a ../ change in Markdown prose is not move-only", result.get("ps_kind") != "move-only", result)
+    # Release review: LINK_DEPTH matched `](../` inside a fenced block too, so
+    # an edited code sample folded away. Real link depth outside it still folds.
+    fence_text = "# page\n\n[up](../../up.md)\n\n```md\n[see](../../docs/a.md)\n```\n" + ("same\n" * 12)
+    git(repo, "checkout", "-q", "-B", "move-fence", base)
+    write("docs/fence/page.md", fence_text)
+    fence_ps1 = commit("fence source")
+    (repo / "docs" / "fence" / "deep").mkdir(parents=True, exist_ok=True)
+    git(repo, "mv", "docs/fence/page.md", "docs/fence/deep/page.md")
+    write("docs/fence/deep/page.md", fence_text.replace("../../", "../../../"))
+    fence_ps2 = commit("fence move")
+    result = changed(190, [patch(1, fence_ps1, base, approvals=[approval("+1")]), patch(2, fence_ps2, fence_ps1)])
+    check("triage move: a ../ change inside a Markdown code fence is not move-only",
+          result.get("ps_kind") != "move-only", result)
+    write("docs/fence/deep/page.md", fence_text.replace("[up](../../up.md)", "[up](../../../up.md)"))
+    fence_ps3 = commit("fence move, code kept")
+    result = changed(191, [patch(1, fence_ps1, base, approvals=[approval("+1")]), patch(2, fence_ps3, fence_ps1)])
+    check("triage move: link depth outside the fence still folds to move-only",
+          result.get("ps_kind") == "move-only", result)
+    for number, label, sample in ((193, "inline code", "Write `[see](../../docs/a.md)` here.\n"),
+                                  (194, "an indented code block", "    [see](../../docs/a.md)\n"),
+                                  (195, "a fence info string", "```md [see](../../docs/a.md)\nbody\n```\n")):
+        code_text = "# page\n\n" + sample + "\n" + ("same\n" * 12)
+        git(repo, "checkout", "-q", "-B", "move-code-%s" % number, base)
+        write("docs/code%s/page.md" % number, code_text)
+        code_ps1 = commit("code source")
+        (repo / "docs" / ("code%s" % number) / "deep").mkdir(parents=True, exist_ok=True)
+        git(repo, "mv", "docs/code%s/page.md" % number, "docs/code%s/deep/page.md" % number)
+        write("docs/code%s/deep/page.md" % number, code_text.replace("../../", "../../../"))
+        code_ps2 = commit("code move")
+        result = changed(number, [patch(1, code_ps1, base, approvals=[approval("+1")]), patch(2, code_ps2, code_ps1)])
+        check("triage move: a ../ change inside %s is not move-only" % label, result.get("ps_kind") != "move-only", result)
 
     # Round-5 review #3 and #5: a move that also changes the mode, or moves a
     # symlink (same target text, different meaning), is not move-only.
@@ -4744,6 +4775,17 @@ def test_triage(tmp):
                            patch(2, chmod_amend_amended, base)])
     check("triage delta: a chmod between amended patch sets is in the delta",
           "tools/amend.sh" in (result.get("delta_files") or []), result)
+    check("triage delta: a chmod between amended patch sets is flagged, not left to a line count",
+          any("tools/amend.sh: file mode changed 100644 -> 100755" in flag for flag in result.get("flags") or []),
+          result)
+    git(repo, "checkout", "-q", "-B", "symlink-add", base)
+    os.symlink("../ok.md", repo / "links" / "added-link.md")
+    git(repo, "add", "-A")
+    symlink_add = commit("symlink add")
+    result = changed(192, [patch(1, symlink_add, base)])
+    check("triage delta: an added symlink is flagged as not a regular file",
+          any("links/added-link.md: not a regular file (mode 120000)" in flag for flag in result.get("flags") or []),
+          result)
 
     # Round-5 review #8: porcelain `git diff` applies a textconv driver; the
     # delta must be the stored bytes, not the driver's rendering.
@@ -4759,8 +4801,11 @@ def test_triage(tmp):
     textconv_ps2 = commit("textconv two")
     conv_entries = triage_module._diff_entries(repo, textconv_ps1, textconv_ps2)
     conv_added = [line for entry in conv_entries if entry["new"] == "docs/value.conv" for line in entry["added"]]
+    conv_between = triage_module._between_lines(repo, textconv_ps1, textconv_ps2, conv_entries)
     git(repo, "config", "--unset", "diff.upper.textconv")
     check("triage diff: a textconv driver does not change what is compared", conv_added == ["abd"], conv_added)
+    check("triage delta: a textconv driver does not change the lines between patch sets",
+          conv_between.get("docs/value.conv", ([], []))[0] == ["abd"], conv_between)
 
     # Round-5 review #4: a HIGH risk floor is never settled by the small-delta
     # shortcut. The trigger keyword arrives in a one-line change after my vote.
