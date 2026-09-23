@@ -3462,6 +3462,71 @@ def test_roster(tmp):
     check("roster plan: unset leg exits 1",
           got.returncode == 1 and "unset" in text and "agy" in text, text)
 
+    # 0.6.24: gated_on was an allowed key that nothing honoured, so plan
+    # handed out a leg the roster itself said was not dispatchable yet.
+    gated = tmp / "gated-plan.json"
+    _write_doc(gated, _live_roster())
+    env = _roster_env(home, DEV_LEAD_ROSTER=gated)
+    got = run(roster, "plan", "--round", "r1", "--implement", "claude=claude-sonnet", "--review", "opencode",
+              "--lens", "judgment", env=env)
+    text = got.stdout + got.stderr
+    by_lens = _live_roster()["rounds"]["r1"]["review"]["opencode"]["by_lens"]
+    shown = run(roster, "show", env=env)
+    judgment_line = next((line for line in shown.stdout.splitlines()
+                          if line.strip().startswith("judgment:") and "(inherited" not in line), "")
+    check("roster show: a gated entry is marked GATED on its own line",
+          "GATED" in judgment_line and by_lens["judgment"]["gated_on"] in judgment_line, shown.stdout)
+    gated_fb = _live_roster()
+    gated_fb["rounds"]["r1"]["review"]["opencode"]["by_lens"]["mechanical"]["fallback"]["gated_on"] = "a fallback probe"
+    gated_fb_file = tmp / "gated-fallback.json"
+    _write_doc(gated_fb_file, gated_fb)
+    shown = run(roster, "show", env=_roster_env(home, DEV_LEAD_ROSTER=gated_fb_file))
+    mechanical_line = next((line for line in shown.stdout.splitlines()
+                            if line.strip().startswith("mechanical:") and "(inherited" not in line), "")
+    check("roster show: a gated fallback is marked GATED too",
+          "fallback GATED: a fallback probe" in mechanical_line, shown.stdout)
+    fb_plan = run(roster, "plan", "--round", "r1", "--implement", "claude=claude-sonnet", "--review", "opencode",
+                  env=_roster_env(home, DEV_LEAD_ROSTER=gated_fb_file))
+    check("roster plan: a gated fallback is marked GATED on the plan line",
+          fb_plan.returncode == 0 and "(fallback GATED: a fallback probe)" in fb_plan.stdout, fb_plan.stdout + fb_plan.stderr)
+    plain = _live_roster()
+    plain["rounds"]["r1"]["review"]["cursor"]["gated_on"] = "a cursor probe"
+    plain_file = tmp / "gated-plain-plan.json"
+    _write_doc(plain_file, plain)
+    plain_plan = run(roster, "plan", "--round", "r1", "--implement", "claude=claude-sonnet", "--review", "cursor",
+                     env=_roster_env(home, DEV_LEAD_ROSTER=plain_file))
+    impl_gated = _live_roster()
+    impl_gated["rounds"]["r1"]["implement"]["cursor"] = {"model": "grok-4.7-high", "family": "Grok",
+                                                          "gated_on": "an implement probe"}
+    impl_file = tmp / "gated-implement-plan.json"
+    _write_doc(impl_file, impl_gated)
+    impl_plan = run(roster, "plan", "--round", "r1", "--implement", "cursor", "--review", "codex",
+                    env=_roster_env(home, DEV_LEAD_ROSTER=impl_file))
+    check("roster plan: a gated implement leg is an error and its model is not printed",
+          impl_plan.returncode == 1 and "gated (an implement probe)" in impl_plan.stdout + impl_plan.stderr
+          and "model=grok-4.7-high" not in impl_plan.stdout, impl_plan.stdout + impl_plan.stderr)
+    check("roster plan: a gated plain leg is an error, not a dispatch",
+          plain_plan.returncode == 1 and "gated (a cursor probe)" in plain_plan.stdout + plain_plan.stderr,
+          plain_plan.stdout + plain_plan.stderr)
+    whole = _live_roster()
+    whole["rounds"]["r1"]["review"]["opencode"]["gated_on"] = "a whole-leg probe"
+    whole_file = tmp / "gated-whole-plan.json"
+    _write_doc(whole_file, whole)
+    whole_plan = run(roster, "plan", "--round", "r1", "--implement", "claude=claude-sonnet", "--review", "opencode",
+                     env=_roster_env(home, DEV_LEAD_ROSTER=whole_file))
+    whole_show = run(roster, "show", env=_roster_env(home, DEV_LEAD_ROSTER=whole_file))
+    heading = next((line for line in whole_show.stdout.splitlines()
+                    if line.strip().startswith("opencode:") and "GATED, every lens" in line), "")
+    check("roster show: a gate on a whole by_lens leg is marked on its heading",
+          "GATED, every lens" in heading and "a whole-leg probe" in heading, whole_show.stdout)
+    check("roster plan: a gate on a whole by_lens leg covers every lens",
+          whole_plan.returncode == 1 and "gated (a whole-leg probe)" in whole_plan.stdout + whole_plan.stderr
+          and "review opencode" not in whole_plan.stdout, whole_plan.stdout + whole_plan.stderr)
+    check("roster plan: a gated judgment entry is replaced by the mechanical one, and says so",
+          got.returncode == 0 and "is gated" in text
+          and "review opencode model=%s " % by_lens["mechanical"]["model"] in text
+          and "review opencode model=%s " % by_lens["judgment"]["model"] not in text, text)
+
     wide = tmp / "cursor-family.json"
     _write_doc(wide, _roster_doc({"codex": _codex_leg()}))
     env = _roster_env(home, DEV_LEAD_ROSTER=wide)
@@ -4232,15 +4297,60 @@ def test_triage(tmp):
         doc["lenses"][0]["lenses"] = ["_comment"]
     expect_bad("comment-as-lens", comment_as_lens, "unknown lens")
 
-    # Fix round 1: the judgment class chooses exactly the roster's judgment
-    # opencode model, while every configured r1 adapter remains visible.
+    # Fix round 1: every configured r1 adapter remains visible. The live
+    # roster's judgment entry carries gated_on, so the mechanical entry stands
+    # in for it and the output says which gate (0.6.24: gated_on was ignored).
     result = changed(129, [patch(1, trigger_old, base, approvals=[approval("+1")]), patch(2, large, small)])
     live_review = _live_roster()["rounds"]["r1"]["review"]
     expected_adapters = {name for name, leg in live_review.items() if not name.startswith("_") and leg is not None}
-    output_legs = {leg["adapter"]: leg["model"] for leg in result.get("review_legs", [])}
-    check("triage review legs: every r1 adapter is present and judgment model is selected",
+    output_legs = {leg["adapter"]: leg for leg in result.get("review_legs", [])}
+    by_lens = live_review["opencode"]["by_lens"]
+    opencode_leg = output_legs.get("opencode") or {}
+    check("triage review legs: every r1 adapter is present; a gated judgment entry is not dispatched",
           set(output_legs) == expected_adapters
-          and output_legs.get("opencode") == live_review["opencode"]["by_lens"]["judgment"]["model"], result)
+          and opencode_leg.get("model") == by_lens["mechanical"]["model"]
+          and opencode_leg.get("stands_in_for") == {"lens": "judgment", "gated_on": by_lens["judgment"]["gated_on"]},
+          result)
+    ungated = _live_roster()
+    del ungated["rounds"]["r1"]["review"]["opencode"]["by_lens"]["judgment"]["gated_on"]
+    ungated_file = tmp / "roster-ungated.json"
+    _write_doc(ungated_file, ungated)
+    ungated_env = _roster_env(tmp, DEV_LEAD_ROSTER=ungated_file, DEV_LEAD_TRIAGE=config_file)
+    result = changed(129, [patch(1, trigger_old, base, approvals=[approval("+1")]), patch(2, large, small)],
+                     test_env=ungated_env)
+    opencode_leg = {leg["adapter"]: leg for leg in result.get("review_legs", [])}.get("opencode") or {}
+    check("triage review legs: an ungated judgment entry is selected as itself",
+          opencode_leg.get("model") == by_lens["judgment"]["model"] and "stands_in_for" not in opencode_leg, result)
+    both_gated = _live_roster()
+    both_gated["rounds"]["r1"]["review"]["opencode"]["by_lens"]["mechanical"]["gated_on"] = "a probe"
+    both_file = tmp / "roster-both-gated.json"
+    _write_doc(both_file, both_gated)
+    both_env = _roster_env(tmp, DEV_LEAD_ROSTER=both_file, DEV_LEAD_TRIAGE=config_file)
+    got = run(triage, "change", "129", "--query-json",
+              query(129, [patch(1, trigger_old, base, approvals=[approval("+1")]), patch(2, large, small)]), env=both_env)
+    plain_gated = _live_roster()
+    plain_gated["rounds"]["r1"]["review"]["cursor"]["gated_on"] = "a cursor probe"
+    plain_file = tmp / "roster-plain-gated.json"
+    _write_doc(plain_file, plain_gated)
+    plain_env = _roster_env(tmp, DEV_LEAD_ROSTER=plain_file, DEV_LEAD_TRIAGE=config_file)
+    result = changed(129, [patch(1, trigger_old, base, approvals=[approval("+1")]), patch(2, large, small)],
+                     test_env=plain_env)
+    whole_gated = _live_roster()
+    whole_gated["rounds"]["r1"]["review"]["opencode"]["gated_on"] = "a whole-leg probe"
+    whole_file = tmp / "roster-whole-gated.json"
+    _write_doc(whole_file, whole_gated)
+    whole_result = changed(129, [patch(1, trigger_old, base, approvals=[approval("+1")]), patch(2, large, small)],
+                           test_env=_roster_env(tmp, DEV_LEAD_ROSTER=whole_file, DEV_LEAD_TRIAGE=config_file))
+    check("triage review legs: a gate on a whole by_lens leg leaves it out",
+          "opencode" not in {leg["adapter"] for leg in whole_result.get("review_legs", [])}
+          and any("left out: opencode (gated: a whole-leg probe)" in rule["detail"]
+                  for rule in whole_result.get("fired_rules", [])), whole_result)
+    check("triage review legs: a gated plain leg is left out and named",
+          "cursor" not in {leg["adapter"] for leg in result.get("review_legs", [])}
+          and any("left out: cursor (gated: a cursor probe)" in rule["detail"] for rule in result.get("fired_rules", [])),
+          result)
+    check("triage review legs: nothing ungated to stand in is an error, not a gated dispatch",
+          got.returncode == 2 and "gated" in got.stderr and "Traceback" not in got.stderr, got.stdout + got.stderr)
 
     # Fix round 1 B8: binary patches are a flagged zero-line delta, and a
     # CRLF-to-LF rewrite beneath a rename is content, not a move-only change.

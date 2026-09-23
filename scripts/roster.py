@@ -860,6 +860,12 @@ def _format_concrete(adapter, role, leg):
     fb = leg.get("fallback")
     if isinstance(fb, dict) and fb.get("model"):
         parts.append("fallback=%s" % fb["model"])
+        if fb.get("gated_on"):
+            parts.append("(fallback GATED: %s)" % fb["gated_on"])
+    if leg.get("gated_on"):
+        # A lead resolves show's output into launch flags by hand: a gated
+        # entry must look gated here, not only in plan and triage.
+        parts.append("GATED (not dispatched until the key is removed): %s" % leg["gated_on"])
     return " ".join(parts)
 
 
@@ -867,7 +873,10 @@ def _show_leg_lines(adapter, role, leg):
     if leg is None or not isinstance(leg, dict):
         return ["%s: unset" % adapter]
     if "by_lens" in leg and isinstance(leg["by_lens"], dict):
-        lines = ["%s:" % adapter]
+        heading = "%s:" % adapter
+        if leg.get("gated_on"):
+            heading += " GATED, every lens (not dispatched until the key is removed): %s" % leg["gated_on"]
+        lines = [heading]
         for lens, sub in leg["by_lens"].items():
             if str(lens).startswith("_"):
                 continue
@@ -980,25 +989,47 @@ def _parse_implement(spec):
     return adapter, model, family, None
 
 
+def resolve_by_lens(by_lens, lens):
+    """The by_lens entry for `lens`, honouring gated_on. An entry that carries
+    gated_on is declared not yet dispatchable: the mechanical entry stands in
+    for it, and the gate text is returned so the caller can say so. Removing
+    the key is how a gate is lifted. Returns (entry or None, lens used, gate
+    text or None); None with a gate text means nothing ungated can stand in."""
+    chosen = lens or "mechanical"
+    sub = by_lens.get(chosen)
+    if isinstance(sub, dict) and sub.get("gated_on"):
+        stand_in = by_lens.get("mechanical")
+        if chosen != "mechanical" and isinstance(stand_in, dict) and not stand_in.get("gated_on"):
+            return stand_in, "mechanical", sub["gated_on"]
+        return None, chosen, sub["gated_on"]
+    return sub, chosen, None
+
+
 def _select_review_leg(adapter, leg, lens):
-    """Return (concrete leg or None, error or None)."""
+    """Return (concrete leg or None, error or None, note or None)."""
     if leg is None:
-        return None, "unset"
+        return None, "unset", None
     if not isinstance(leg, dict):
-        return None, "leg must be null or an object"
+        return None, "leg must be null or an object", None
+    if leg.get("gated_on"):
+        # Checked before by_lens: a gate on the whole leg covers every lens.
+        return None, "gated (%s); nothing stands in for a whole leg" % leg["gated_on"], None
     if "by_lens" in leg:
         if not isinstance(leg["by_lens"], dict):
-            return None, "by_lens must be an object"
+            return None, "by_lens must be an object", None
         chosen = lens or "mechanical"
         if chosen not in leg["by_lens"]:
-            return None, "unset"
-        sub = leg["by_lens"][chosen]
+            return None, "unset", None
+        sub, used, gate = resolve_by_lens(leg["by_lens"], chosen)
+        if sub is None and gate:
+            return None, "by_lens.%s is gated (%s) and no ungated mechanical entry can stand in" % (chosen, gate), None
         if sub is None:
-            return None, "unset"
+            return None, "unset", None
         if not isinstance(sub, dict):
-            return None, "leg must be null or an object"
-        return sub, None
-    return leg, None
+            return None, "leg must be null or an object", None
+        note = "by_lens.%s is gated (%s); the %s entry stands in" % (chosen, gate, used) if gate else None
+        return sub, None, note
+    return leg, None, None
 
 
 def _family_of(adapter, explicit, leg):
@@ -1065,6 +1096,8 @@ def cmd_plan(path, round_name, implement, review, lens):
         else:
             if roster_impl is None or not isinstance(roster_impl, dict):
                 problems.error(impl_path, "unset")
+            elif roster_impl.get("gated_on"):
+                problems.error(impl_path, "gated (%s); name a model explicitly to override" % roster_impl["gated_on"])
             else:
                 impl_model = roster_impl.get("model")
                 if not impl_model:
@@ -1093,7 +1126,9 @@ def cmd_plan(path, round_name, implement, review, lens):
         if "review" not in launch[rev].get("role", {}):
             problems.error(rev_path, "unknown role 'review'")
             continue
-        chosen, sel_err = _select_review_leg(rev, rev_block.get(rev), lens if rev == "opencode" else None)
+        chosen, sel_err, sel_note = _select_review_leg(rev, rev_block.get(rev), lens if rev == "opencode" else None)
+        if sel_note:
+            print("%s: %s" % (rev_path, sel_note))
         if sel_err:
             problems.error(rev_path, sel_err)
             continue
@@ -1163,6 +1198,8 @@ def _plan_line(role, adapter, model, family, effort_value, override, leg):
         bits.append("override")
     if isinstance(leg, dict) and isinstance(leg.get("fallback"), dict) and leg["fallback"].get("model"):
         bits.append("fallback=%s" % leg["fallback"]["model"])
+        if leg["fallback"].get("gated_on"):
+            bits.append("(fallback GATED: %s)" % leg["fallback"]["gated_on"])
     bits.append("args=%s" % args)
     return " ".join(bits)
 

@@ -1008,20 +1008,36 @@ def _review_legs(lens_classes):
     review = doc["rounds"]["r1"].get("review") or {}
     wanted = "judgment" if "judgment" in lens_classes else "mechanical"
     _, families = roster.data()
-    resolved = []
+    resolved, skipped = [], []
     for adapter, leg in review.items():
         if str(adapter).startswith("_") or leg is None:
             continue
-        chosen = leg
+        if isinstance(leg, dict) and leg.get("gated_on"):
+            # A gate on the whole leg (plain or by_lens) has no stand-in: the
+            # leg is left out, and named.
+            skipped.append("%s (gated: %s)" % (adapter, leg["gated_on"]))
+            continue
+        chosen, gate = leg, None
         if adapter == "opencode" and isinstance(leg, dict) and "by_lens" in leg:
-            chosen = leg["by_lens"].get(wanted)
+            chosen, used, gate = roster.resolve_by_lens(leg["by_lens"], wanted)
+            if chosen is None and gate:
+                raise InputError("roster: opencode by_lens.%s is gated (%s) and no ungated mechanical entry "
+                                 "can stand in" % (wanted, gate))
         if not isinstance(chosen, dict) or not chosen.get("model"):
             continue
         family = chosen.get("family")
         if not family:
             serves = families.get("adapters", {}).get(adapter, {}).get("serves", [])
             family = serves[0] if len(serves) == 1 else None
-        resolved.append({"adapter": adapter, "model": chosen["model"], "family": family})
+        entry = {"adapter": adapter, "model": chosen["model"], "family": family}
+        if gate:
+            # The roster says this lens's entry is not dispatchable yet; the
+            # mechanical entry stands in, and the output says so.
+            entry["stands_in_for"] = {"lens": wanted, "gated_on": gate}
+            wanted = "%s (%s gated)" % (used, wanted)
+        resolved.append(entry)
+    if skipped:
+        wanted = "%s; left out: %s" % (wanted, ", ".join(skipped))
     return resolved, wanted
 
 
@@ -1362,8 +1378,9 @@ def triage_change(config, raw, path, number, query_json, include_wip, as_of=None
         lenses, risk_floor, trigger_flags = _lenses_and_triggers(config, files, delta_line_data, fired)
         flags.extend(trigger_flags)
     if owner_fix:
-        legs, review_legs = "roster", _review_legs({lens["class"] for lens in lenses})[0]
-        _fired(fired, "legs", "owner fix round uses the roster")
+        review_legs, selected_lens = _review_legs({lens["class"] for lens in lenses})
+        legs = "roster"
+        _fired(fired, "legs", "owner fix round uses the roster (opencode %s)" % selected_lens)
     elif ps_kind in ("carry-over", "move-only"):
         legs, review_legs = "none", []
         _fired(fired, "legs", "no legs for carry-over or move-only")
