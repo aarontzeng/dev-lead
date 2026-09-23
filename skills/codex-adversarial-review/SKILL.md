@@ -100,6 +100,78 @@ Launch under the host's own background mechanism with output redirected to a
 file, per the runtime's launcher rules (`--background` does not guarantee a
 prompt return; a lossy pipe can destroy the only copy of the report).
 
+### Candidate path: raw `codex exec` with the suite's framing (NOT the default yet)
+
+The companion path above has no effort flag: a review inherits
+`model_reasoning_effort` from the machine's `~/.codex/config.toml`, and the
+triage effort floor can only be reported as `config_mismatch`. The raw CLI
+takes effort per run, and
+[`references/adversarial-framing.md`](references/adversarial-framing.md)
+carries the adversarial framing the companion would otherwise supply. **This
+path replaces the companion only after the equivalence test in the
+calibration journal passes** (same effort, same frozen targets, ≥ 3 runs per
+arm: the exec arm no worse on known-answer recall and false positives).
+Until then use it only when a specific effort is required, and say so in the
+report.
+
+`$RUN_DIR` is the run directory outside the frozen worktree
+([dev-lead Phase 2](../dev-lead/SKILL.md)); `$BASE`, `$REVIEW_HEAD`,
+`$REVIEW_TARGET_DIR` and `$FOCUS` are set as above.
+
+```bash
+set -euo pipefail
+DEV_LEAD=${DEV_LEAD_ROOT:-$(ls -d "$HOME"/.claude/plugins/cache/dev-lead/dev-lead/* 2>/dev/null | sort -V | tail -1)}
+FRAMING="$DEV_LEAD/skills/codex-adversarial-review/references/adversarial-framing.md"
+[ -f "$FRAMING" ] || { echo "dev-lead root unresolved; set DEV_LEAD_ROOT" >&2; exit 1; }
+MODEL="<model from the roster>"   # quoted: an unquoted <...> is a redirection
+TIER="<tier>"                     # low | medium | high | xhigh
+
+# 1. Build the prompt into a file: one pass, unknown placeholders refused.
+B="$BASE" H="$REVIEW_HEAD" L="$FOCUS" OUT="$RUN_DIR/prompt.md" \
+  python3 - "$FRAMING" <<'EOF'
+import os, re, sys
+frame = open(sys.argv[1], encoding="utf-8").read()
+frame = re.sub(r"\A<!--.*?-->\r?\n", "", frame, count=1, flags=re.S)
+values = {"BASE": os.environ["B"], "HEAD": os.environ["H"], "LENS": os.environ["L"]}
+unknown = set(re.findall(r"\{\{([A-Z_]+)\}\}", frame)) - set(values)
+if unknown:
+    sys.exit(f"prompt builder: unknown placeholder(s) {sorted(unknown)}")
+text = re.sub(r"\{\{(BASE|HEAD|LENS)\}\}", lambda m: values[m.group(1)], frame)
+if not text.strip():
+    sys.exit("prompt builder: empty prompt")
+with open(os.environ["OUT"], "w", encoding="utf-8") as f:
+    f.write(text)
+EOF
+
+# 2. Run: prompt on stdin ("-- -"), effort per run, output outside the worktree.
+"$DEV_LEAD/scripts/verify-target.sh" "$REVIEW_TARGET_DIR" "$REVIEW_HEAD"
+rm -f "$RUN_DIR/review.md"
+rc=0
+codex exec -C "$REVIEW_TARGET_DIR" -s read-only -m "$MODEL" \
+  -c "model_reasoning_effort=$TIER" -o "$RUN_DIR/review.md" -- - \
+  < "$RUN_DIR/prompt.md" > "$RUN_DIR/review.log" 2>&1 || rc=$?
+"$DEV_LEAD/scripts/verify-target.sh" "$REVIEW_TARGET_DIR" "$REVIEW_HEAD"
+
+# 3. Fail closed: exit status, the effort actually used, a non-empty report.
+[ "$rc" -eq 0 ] || { echo "codex exec exited $rc; see review.log" >&2; exit 1; }
+used=$(sed -n 's/^reasoning effort: //p' "$RUN_DIR/review.log" | head -1)
+[ "$used" = "$TIER" ] || { echo "effort used '$used', wanted '$TIER'" >&2; exit 1; }
+[ -s "$RUN_DIR/review.md" ] || { echo "no review written" >&2; exit 1; }
+```
+
+- The prompt goes on stdin (`-- -` with a file redirect): no argv length
+  cap, a prompt that starts with `-` is not read as a flag, and codex does
+  not sit waiting on an inherited stdin (verified on codex-cli 0.156.0).
+- `-C` must name a directory inside a git repository; outside one codex
+  prints `Not inside a trusted directory …` and exits without reviewing.
+- `codex exec review --base` is not a substitute: it refuses a custom prompt
+  together with `--base` (codex-cli 0.156.0), so the lens and the framing
+  cannot ride on it.
+- `review.md` holds the final message only; `review.log` holds the tool
+  calls, which is where "did it read the base revision" is checked.
+- Inlining the diff into the prompt showed no gain in the A/B runs; the
+  framing tells the model to collect it.
+
 **Running this leg as a subagent? You are a leaf — block, do not "wait".**
 Nothing will wake you when the job finishes; ending your turn on "waiting for
 the notification" abandons the review. Poll to terminal inside a single tool
@@ -108,8 +180,9 @@ call, and issue another such call immediately if it times out
 
 ## Model choice
 
-The review path takes `--model` only; depth otherwise comes from the user's
-global config (runtime file has the plumbing). Pick per your calibration
+The companion review path takes `--model` only; depth otherwise comes from
+the user's global config (runtime file has the plumbing). The candidate exec
+path above also takes the effort. Pick per your calibration
 journal, with two measured priors:
 
 - Review is the highest-leverage step — when quota allows, spend the
