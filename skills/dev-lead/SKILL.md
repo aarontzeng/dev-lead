@@ -194,8 +194,8 @@ repo's cwd.)
 It reads [`data/launch.json`](../../data/launch.json), prints the exact command on stdout and the
 adapter's gotchas on stderr, and **refuses the spellings that are actually
 got wrong** — an `--effort` flag for a family that puts effort in the model
-name, an `--effort` for codex's review path which has no effort control at
-all, a missing `--variant` for opencode. Every one of those refusals is a
+name, a missing `--effort` on codex's review (which takes it per call since
+0.6.28), a missing `--variant` for opencode. Every one of those refusals is a
 mistake measured in a single session (2026-09-08).
 
 Run it once per leg at dispatch and paste what it prints.

@@ -1,8 +1,9 @@
 # `codex` runtime — shared mechanics for both delegate roles
 
-Family-level operational knowledge for OpenAI Codex driven through its
-Claude Code companion plugin, shared by `codex-adversarial-review`
-(read-only sandbox) and `codex-implement` (`workspace-write`). It sits under
+Family-level operational knowledge for OpenAI Codex -- review through
+`codex exec` with the suite's framing, implement through its Claude Code
+companion plugin -- shared by `codex-adversarial-review` (read-only sandbox)
+and `codex-implement` (`workspace-write`). It sits under
 the review skill's directory for the same reason the other families' runtime
 files do. Every item was paid for with a real incident (companion 1.0.x era;
 re-verify against your installed version).
@@ -233,30 +234,26 @@ rewritten.
 | 2026-09-23 | gpt-6-luna, the SAME brief on the SAME frozen commit at three efforts: medium (companion), high and xhigh (raw `codex exec -c model_reasoning_effort=`; log headers confirm `model: gpt-6-luna` and the effort) | review of a ~240-line Python + docs change (a new config table and its per-adapter spelling), 6 posed properties | **On this one commit (n=1), xhigh bought recall and completeness; high bought completeness only.** medium ~3 min, 1 finding. high 122 s / 66k tokens, the same 1 finding plus a HOLDS-with-reason for every posed item and one test-gap note xhigh did not make — **and it explicitly called the README accurate when it was not.** xhigh 270 s / 82k tokens, the same finding plus that README/code mismatch (a field documented on every leg that one adapter class never emits), with per-item reasons. The shared finding was rebutted in all three. n=1 on one small change; it drove the owner to raise only codex, not every adapter, to xhigh in triage.json's effort table (0.6.25; applied to a codex review through `codex exec -c`, since the companion's review path reads config.toml). **Gotcha, already documented above and still hit: a backgrounded `codex exec` without `< /dev/null` blocked on stdin for ~20 min.** |
 | 2026-09-23 | gpt-6-luna, raw `codex exec -c model_reasoning_effort=xhigh`, header-confirmed (peer session on another machine; reported, verified by that lead, not measured by me) | (a) spec/requirements prose, 2–25 changed lines, 4 runs plus 3 earlier rounds; (b) one large code change (C++17 + SQL migrations + tests, 38 files, +3.9k) as one of four legs with distinct lenses | **Prose (as that lead reports it): high precision, near-zero noise — that lead recommends it as the primary judgment leg there.** Fix-round runs of 1–7 min found a subtle reversed attribution three files agreed on, weighed and accepted a lead's rebuttal with a stated reason, and flagged "not verifiable from the files given" instead of guessing. **Large code (one change, n=1): precise but narrow and lens-bound.** 9 min / ~146k tokens, 2 findings, both mechanisms real but over-rated: it did not trace to the consumer that re-checks (a TOCTOU a later read mitigates), and it reported a defect the parent already had as this change's. It found none of the three blocking defects — the "claims vs tests" leg (cursor grok-4.7-medium) found all three. **Hypotheses from that lead, not yet rules:** on large code always field a claims-vs-tests leg rather than relying on this one for coverage; brief it to separate introduced from pre-existing defects (check the parent) and to trace each defect to its consumer for mitigation. |
 | 2026-09-23 | gpt-6-luna, raw `codex exec -s read-only -c model_reasoning_effort=<tier>` with the suite's own `adversarial-framing.md` (v1), and the companion's adversarial-review prompt pasted verbatim as a local control (CV) | review, known-answer A/B on two frozen public targets | **T1** (triage fetch 3a170dc..27bd163, medium; known answer: a configured refspec still creates refs, fixed with `--refmap=`): own framing 4 runs (1 with the diff inlined), CV 3 runs, **refmap found in 0 of 7**. Six runs each reported one defect against the same "fetch only adds objects" claim — tag auto-follow writing `refs/tags` (3; the real fix also added `--no-tags`), auto-maintenance / commit-graph (2), `.git/shallow` in shallow clones (1) — and the inline-diff run approved. The verbatim companion text did no better than the suite's framing on this path. **T2** (0.6.25 first draft 28c5bc2..2c46cbc; known answer: README promises `effort_source` on every leg, a mechanism-none leg gets none): framed high missed it (only the known empty-lenses FP), also with the diff inlined; framed xhigh found it (528 s) plus three defects the maintainer reproduced and fixed in 0.6.27 (unranked roster effort lowered, non-string roster effort crashing, `-fast` twins unrecognised). n is small and single-machine; the equivalence test (≥ 3 runs per arm per target, companion vs exec+framing at equal effort) is what gates replacing the companion. |
+| 2026-09-23 | gpt-6-luna at xhigh on BOTH arms (the machine's config.toml was xhigh, so the companion arm ran at xhigh and exec was matched to it; exec headers confirm model and effort) | **the equivalence test that gates the exec path**: companion `adversarial-review` vs `codex exec` + framing v1, v2 and v3, 3 runs per arm per target, the same lens text, three frozen targets with known answers: T1 a fetch flag's "adds objects only" claim (known: a configured refspec still stores a ref; a tag-follow sibling also real), T2 a new per-leg effort table (known: a README field promised on every leg that one adapter class never emits; a rebutted empty-lenses item counts as the false positive), T3 a rule engine's fix round (4 known: a Markdown fold reaching into code, missing mode flags, an untested second call site, a vacuous test value) | **Pass.** Known-answer recall out of 21: companion 7, v1 11, v2 7, v3 9. Extra real findings on T2: 1 / 3 / 4 / 7. False positives equal across arms (the rebutted items 3/3 everywhere, v1 2/3 on one). Base revision read (`git show <base>:` in the log): companion 4/9 runs, every exec arm 9/9. v2 added introduced-vs-inherited separation and consumer tracing as FILTERS ("an inherited defect is not a finding") and lost recall — the mode-flag defect, inherited in that range, fell from 3/3 to 1/3; v3 kept both as LABELS (report inherited defects labelled; a mitigation lowers severity, never drops the finding) and recovered it (3/3). The only knowns v1 had and v3 lacks are T1's refspec defect (v1 2/3, every other arm 0/3), which n=3 cannot separate from noise. Cost: exec+framing is slower on a large target (T3 9–25 min vs the companion's 7–11). Adopted: v3 is the default review path from 0.6.28, the companion the fallback. **Lesson worth more than the numbers: an instruction that tells a reviewer what NOT to report is a recall cut you pay for silently; express precision as labels and severity, not as exclusions.** |
 
 ## Model and effort plumbing
 
 - The **task path** takes `--model` and `--effort`
   (`none|minimal|low|medium|high|xhigh` — the flag's maximum is spelled
   `xhigh`).
-- The **review path** takes `--model` only — review depth is expressed
-  through model choice plus the user's global config.
-- Codex itself goes higher than the flag (`max`, `ultra`) but only via
-  `~/.codex/config.toml`'s `model_reasoning_effort`, which any run WITHOUT
-  an explicit `--effort` inherits. Check it when depth matters:
+- The **review path** (since 0.6.28, `codex exec` with the suite's framing)
+  takes `--model` and the effort per run: `-c model_reasoning_effort=<e>`,
+  and the log's `reasoning effort:` header records what actually ran. `max`
+  is accepted there too (a peer measured it, 2026-09-23).
+- The **companion's `adversarial-review`** — now the review FALLBACK — takes
+  `--model` only; its depth is `~/.codex/config.toml`'s
+  `model_reasoning_effort`, which any run without an explicit effort
+  inherits. Check it when that path is used:
   `grep model_reasoning_effort ~/.codex/config.toml`. Never modify the
-  user's config from a skill run. The one exception is `/dev-lead:config`,
-  and only on the user's explicit yes (Aaron, 2026-09-23): `roster.py
-  config-effort <round> review codex --yes` backs the existing file up first
-  (a failed backup writes nothing; a file that does not exist yet has no
-  backup), then changes that one root-table line -- or inserts it above the
-  first table when the root has none -- through a symlink's target if the
-  config is a link, reads the value back and reports old -> new and the
-  backup path. It refuses a value it cannot read with confidence and an
-  effort that is not a bare word. Without `--yes` it writes nothing: it
-  prints both values and either "already agree" or what would change. A
-  non-zero exit AFTER a `changed:` line means the read-back disagreed --
-  restore from the named backup. Passing `--effort` explicitly on implement
+  user's config from a skill run. (Before 0.6.28, `/dev-lead:config` could
+  align it on the user's explicit yes via `roster.py config-effort`; with the
+  review on `codex exec` there is nothing to align, and that command answers
+  "nothing to write" for codex.) Passing `--effort` explicitly on implement
   runs is what keeps an implement-cheap / review-deep split stable while the
   user tunes their global freely; omitting it is a deliberate act — say so
   in the run log, because the resulting effort then depends on machine
@@ -275,16 +272,19 @@ the next.
 
 ## Raw-CLI fallback (no Claude Code on this machine)
 
-The role skills drive codex through its Claude Code **companion plugin** by
-default, because the companion adds real things: tracked jobs
-(`status`/`result`), a managed read-only review sandbox, and the
-adversarial-review command's built-in framing. On a machine without Claude
-Code, the same workflow runs against the codex CLI directly:
+Review legs run the codex CLI directly everywhere since 0.6.28 (the review
+skill's default path; [`scripts/codex-review-prompt.py`](../../../scripts/codex-review-prompt.py) needs only Python and
+git). The implement role drives codex through its Claude Code **companion
+plugin** by default, because the companion adds real things there: tracked
+jobs (`status`/`result`) and `task --write`. On a machine without Claude
+Code, both roles run against the codex CLI directly:
 
 ```bash
-# review leg (read-only) — prompt from a file, output to a file, backgrounded
-codex exec --sandbox read-only --cd "$REVIEW_TARGET_DIR" -m <model> \
-  "$(cat "$RUN_DIR/prompt.md")" > "$RUN_DIR/review.out" 2>&1
+# review leg (read-only) — the lens framed, fed on stdin, output to a file
+python3 "$DEV_LEAD/scripts/codex-review-prompt.py" --base "$BASE" --target "$REVIEW_TARGET_DIR" \
+  < "$RUN_DIR/prompt.md" > "$RUN_DIR/framed-prompt.md" && \
+codex exec --sandbox read-only --cd "$REVIEW_TARGET_DIR" -m <model> -c model_reasoning_effort=<tier> \
+  -o "$RUN_DIR/review.md" -- - < "$RUN_DIR/framed-prompt.md" > "$RUN_DIR/review.log" 2>&1
 
 # implement leg (workspace-write) — inside the worktree the lead created
 codex exec --sandbox workspace-write --cd "$WORKTREE" -m <model> \
@@ -319,14 +319,10 @@ What you lose, honestly:
   delivery channel, and the process's own liveness is the only liveness
   signal. Launch under your host's background mechanism, exactly as the
   launcher rules above already require.
-- **The companion's review framing** — replaceable, not yet replaced.
-  `adversarial-review` supplies an adversarial frame and base/scope
-  handling; on raw exec, a REVIEW leg's prompt is built from
-  [`adversarial-framing.md`](adversarial-framing.md), which carries the
-  base and head itself (the candidate exec path in the review skill). That
-  path is not the default until the equivalence test in the journal
-  passes; until then a raw-exec review should say it ran without the
-  companion.
+- **The companion's review framing** — replaced, not lost: a review leg's
+  prompt is built from [`adversarial-framing.md`](adversarial-framing.md),
+  which carries the base and head itself. It passed the equivalence test
+  (the 2026-09-23 row) and is the default review path since 0.6.28.
 - **Log-based recovery.** No companion job log; session rollouts under
   `~/.codex/sessions/` remain your only after-the-fact recovery channel.
 - Never substitute `--sandbox danger-full-access` (or any bypass spelling)

@@ -1,6 +1,6 @@
 <!--
 Prompt frame for a raw `codex exec` review leg. The lead substitutes
-{{BASE}}, {{HEAD}} and {{LENS}} (see the candidate exec path in SKILL.md)
+{{BASE}}, {{HEAD}} and {{LENS}} (see the launch section in SKILL.md)
 and feeds the result on stdin. Structure modelled on the adversarial-review
 prompt of the OpenAI codex Claude Code plugin (Apache-2.0); the text here
 is this suite's own.
@@ -31,11 +31,13 @@ that it works, to summarize it, or to credit good intentions.
    the old code did that the new code silently stopped doing, or a state the
    old code never wrote.
 3. For each defect, check whether it already exists at `{{BASE}}`
-   (`git show`, `git blame`) and say which. An inherited defect is not a
-   finding against this change unless the change makes it worse or newly
-   reachable.
-4. Before filing a hazard, trace it to the callers or consumers of the
-   changed code and say whether a later check already stops it.
+   (`git show`, `git blame`) and say which. Report inherited defects too,
+   labelled inherited: they matter when they break something the lens or
+   the change claims, or when the change now relies on them. Only an
+   inherited defect that touches neither is a `nit`.
+4. Trace each hazard to the callers or consumers of the changed code and
+   say whether a later check already stops it. If one does, lower the
+   severity and say so; do not drop the finding.
 5. For each test the change adds or edits, ask whether it could fail if the
    code it guards were broken. A test that passes either way is a finding.
 6. Compare what the docs, README, comments and commit message promise with

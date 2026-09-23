@@ -213,7 +213,7 @@ one of them only by accident).
 | `dev-lead` | The orchestration layer: intake → dispatch → bounded review rounds → merge gate |
 | `config` | View and change the leg roster (model and effort per adapter, role, round) and the merge gate: whether a fully green verdict lands itself (`lead`) or waits for the person (`user`, default) |
 | `claude-implement` / `claude-adversarial-review` | Claude Code as a headless delegate (`claude -p`) |
-| `codex-implement` / `codex-adversarial-review` | OpenAI Codex via its Claude Code companion plugin — or the raw CLI |
+| `codex-implement` / `codex-adversarial-review` | OpenAI Codex: implement via its Claude Code companion plugin, review via `codex exec` with the suite's adversarial framing (the companion as fallback) |
 | `agy-implement` / `agy-adversarial-review` | Google Antigravity CLI (Gemini + a separate Claude pool) |
 | `opencode-implement` / `opencode-adversarial-review` | OpenCode's free pool (muse-spark, Nemotron, …) — zero quota cost |
 | `grok-implement` / `grok-adversarial-review` | xAI's Grok Build CLI — a paid pool, tier peer of codex/agy, and a sixth accounting family (integrated 2026-08-13; no field-proven round yet) |
@@ -254,16 +254,15 @@ pushed onto adapters that were not. `change` then adds `effort` and
 `effort_in` to each review leg, and `effort_source` (roster, table, or
 table-override when an adapter's override raised it) to every leg whose
 adapter has an effort at all -- a claude leg carries `effort_in: "none"` and
-nothing else. The table only raises: a leg whose roster effort (or, for
-codex review, the machine's `~/.codex/config.toml`) is already at or above
-the floor keeps it. A tier is spelled per adapter from `data/launch.json`: a
-flag word, a model variant, or the codex config key. A word or variant is
+nothing else. The table only raises: a leg whose roster effort is already
+at or above the floor keeps it. A tier is spelled per adapter from `data/launch.json`: a
+flag word or a model variant (codex review takes it per call since 0.6.28). A word or variant is
 emitted only when it is known to exist -- the roster's own or one of
 launch.json's `effort.examples`, taking the next higher known tier across a
-gap -- otherwise the leg keeps its launch and carries `effort_unmet`. A
-codex review above its config carries `config_mismatch` with the `codex exec
--c` line to use; nothing edits the config. Without the table, legs carry no
-effort fields.
+gap -- otherwise the leg keeps its launch and carries `effort_unmet`. An
+adapter whose effort lives in a config file (none ships since 0.6.28) would
+carry `config_mismatch` instead; nothing edits a config. Without the table,
+legs carry no effort fields.
 
 The lead role is portable: all six CLIs can read the same skills directory,
 so a Codex or Gemini lead can follow the same playbook and delegate to
@@ -387,9 +386,10 @@ dated.
 | 🥉 **Methodology only** | Copilot and other IDE-embedded agents (Cursor's IDE side lands here too — its CLI is a full adapter above) | [docs/methodology.md](docs/methodology.md) and [docs/calibration-journal.md](docs/calibration-journal.md) as rules-file reading material. The workflow's core motion — background delegates, 5–40 min waits, worktree orchestration — is not an IDE agent's interaction shape, and this suite deliberately does not contort itself to change that |
 
 > [!NOTE]
-> Tier-2 caveat: the codex family skills drive codex through its **Claude
-> Code companion plugin** by default (job tracking, managed sandboxes). On a
-> machine without Claude Code, use the **raw-CLI fallback** documented in
+> Tier-2 caveat: codex review runs the codex CLI directly (`codex exec` with
+> the suite's framing) everywhere; codex implement drives codex through its
+> **Claude Code companion plugin** by default (job tracking, `task --write`).
+> On a machine without Claude Code, use the **raw-CLI fallback** documented in
 > [codex-runtime.md](skills/codex-adversarial-review/references/codex-runtime.md)
 > — same workflow, honestly-listed reduced guarantees.
 

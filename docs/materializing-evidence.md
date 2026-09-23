@@ -38,7 +38,7 @@ else.
 |---|---|
 | `agy` | second `--add-dir "$RUN_DIR/evidence"` (the flag is repeatable) |
 | `claude` | the launch cwd is the frozen target; pass absolute paths in the prompt |
-| `codex` | the companion runs in the frozen worktree; absolute paths in the focus text |
+| `codex` | `codex exec -C` runs in the frozen worktree (the companion fallback too); absolute paths in the lens |
 | `cursor` | `--trust` grants the launch cwd; absolute paths in the prompt |
 | `grok` | `--tools` allowlists reads; absolute paths in the prompt file |
 | `opencode` | **cannot take out-of-project paths at all** — see below |

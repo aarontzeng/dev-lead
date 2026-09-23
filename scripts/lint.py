@@ -1104,8 +1104,20 @@ def check_launch():
                 err(rel(skill), f"ships as a {role} leg but data/launch.json has no "
                                 f"{name} role.{role} — `leg-cmd.sh {name} {role}` "
                                 "exits 1, and dev-lead mandates that path")
-            for lineno, cmdline in _launch_commands(skill, spec["cli"].split()[0]):
+            # A role may run a different CLI (codex review is `codex exec` while
+            # codex implement stays on the companion), so detect by the role's.
+            role_cli = (spec.get("role", {}).get(role) or {}).get("cli", spec["cli"])
+            for lineno, cmdline in _launch_commands(skill, role_cli.split()[0]):
                 _check_effort_spelling(skill, lineno, cmdline, name, role, eff)
+            # The adapter's other CLI in this role's skill is a documented
+            # fallback (codex review's companion `adversarial-review`), and that
+            # path has no effort flag: one there is parsed as prompt text.
+            if role_cli.split()[0] != spec["cli"].split()[0]:
+                for lineno, cmdline in _launch_commands(skill, spec["cli"].split()[0]):
+                    if _EFFORT_TOKEN.search(cmdline):
+                        err(f"{rel(skill)}:{lineno}",
+                            f"the {name} {role} fallback launch passes --effort/-e, but that "
+                            f"path has no effort flag -- it is parsed as prompt text")
 
 
 _EFFORT_TOKEN = re.compile(r"(?:^|\s)(--effort|-e)(?:[=\s]|$)")
@@ -1134,6 +1146,11 @@ def _launch_commands(path, cli):
             if not line.endswith("\\"):
                 out.append((start, " ".join(buf))); buf = None
             continue
+        # A leg-cmd.sh call COMPOSES a launch; its --effort is leg-cmd's own
+        # argument, spelled the same for every adapter, not the CLI's flag.
+        if re.search(r"leg-cmd\.sh[\"']?\s+[\w-]+\s+(?:review|implement)\b", line) \
+                and not re.match(rf"^(?:\S*/)?{re.escape(cli)}\s", line):
+            continue
         # a launch starts with the CLI name, or `node .../<cli>` style wrappers
         if re.match(rf"^(?:\S*/)?{re.escape(cli)}\b", line) or f" {cli} " in f" {line} ":
             start, buf = i, [line.rstrip("\\").strip()]
@@ -1160,7 +1177,9 @@ def _check_effort_spelling(skill, lineno, cmdline, adapter, role, eff):
                 f"flag at all (it reads {eff.get('config_key')} from "
                 f"{eff.get('config_file')})")
     elif mech == "flag":
-        want = eff.get("flag")
+        # codex's knob differs by role: `task --effort` to implement, `codex exec
+        # -c model_reasoning_effort=` to review (0.6.28).
+        want = (eff.get("flag_by_role") or {}).get(role, eff.get("flag"))
         # The wrong-flag-name mistake, and it is not "the right knob is
         # missing" -- a command carrying BOTH its own knob and a neighbouring
         # family's is just as wrong, and that is the shape a lead produces
@@ -1173,7 +1192,7 @@ def _check_effort_spelling(skill, lineno, cmdline, adapter, role, eff):
                 err(f"{rel(skill)}:{lineno}",
                     f"launch passes '{other}', but {adapter}'s depth knob is "
                     f"'{want}' -- the wrong-flag-name mistake")
-        if want and not re.search(rf"(?:^|\s){re.escape(want)}(?:[=\s]|$)", cmdline):
+        if want and not re.search(rf"(?:^|[\s\"']){re.escape(want)}(?:[=\s]|$)", cmdline):
             err(f"{rel(skill)}:{lineno}",
                 f"launch omits '{want}'; {adapter} silently takes the provider "
                 f"default without it")

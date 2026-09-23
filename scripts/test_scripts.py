@@ -816,6 +816,36 @@ def test_lint_launch():
     finally:
         lint.ERRORS = real
 
+    # 0.6.28: a role may run another CLI than the adapter's; the review skill's
+    # companion FALLBACK must still not pass an effort flag, and a leg-cmd.sh
+    # composition line is not a launch -- but a real launch stays checked.
+    def codex_review_errors(code):
+        with tempfile.TemporaryDirectory() as td:
+            fake = Path(td)
+            (fake / "data").mkdir()
+            launch = json.loads((SCRIPTS.parent / "data" / "launch.json").read_text(encoding="utf-8"))
+            (fake / "data" / "launch.json").write_text(json.dumps({"codex": launch["codex"]}), encoding="utf-8")
+            d = fake / "skills" / "codex-adversarial-review"
+            d.mkdir(parents=True)
+            (d / "SKILL.md").write_text(fence(code), encoding="utf-8")
+            (fake / "skills" / "codex-implement").mkdir()
+            (fake / "skills" / "codex-implement" / "SKILL.md").write_text("# doc\n", encoding="utf-8")
+            real_root, real_errors = lint.ROOT, lint.ERRORS
+            try:
+                lint.ROOT, lint.ERRORS = fake, []
+                lint.check_launch()
+                return [e for e in lint.ERRORS if "codex-adversarial-review" in str(e)]
+            finally:
+                lint.ROOT, lint.ERRORS = real_root, real_errors
+    got = codex_review_errors('node "$SCRIPT" adversarial-review --base "$B" --effort high "$FOCUS"\n')
+    check("launch: the companion fallback in the review skill may not pass --effort",
+          any("fallback launch passes --effort" in str(e) for e in got), got)
+    got = codex_review_errors('eval "$("$DEV_LEAD/scripts/leg-cmd.sh" codex review --model m --effort high)"\n')
+    check("launch: a leg-cmd.sh composition line is not checked as a codex launch", got == [], got)
+    got = codex_review_errors('codex exec -C "$T" -s read-only -m m -- - < p.md  # leg-cmd.sh codex review\n')
+    check("launch: a real codex exec launch mentioning leg-cmd.sh is still checked",
+          any("model_reasoning_effort" in str(e) for e in got), got)
+
 
 # --------------------------------------------------- lint delegate guardrails ----
 def test_lint_delegate_guardrails():
@@ -2339,9 +2369,9 @@ def test_leg_cmd():
         (["agy", "review", "--model", "gemini-3.8-flash-medium",
           "--effort", "medium", "--target", "/tmp/x"],
          "MODEL NAME", "agy effort belongs in the model name"),
-        (["codex", "review", "--model", "gpt-5.6-terra",
-          "--base", "abc", "--effort", "medium"],
-         "no effort control", "codex review path has no effort knob"),
+        (["codex", "review", "--model", "gpt-6-luna",
+          "--base", "abc", "--target", "/tmp/x"],
+         "needs --effort", "codex review takes its effort per call (0.6.28)"),
         (["opencode", "review", "--model", "opencode/x"],
          "needs --effort", "opencode needs --variant"),
         (["cursor", "review", "--model", "kimi-k3-high", "--effort", "medium"],
@@ -2395,8 +2425,85 @@ def test_leg_cmd():
     # block and not_flags are ADAPTER-scoped but describe the review path only
     # (applies_to_role: "review"), so an implement launch printed "NOT flags on
     # this path ... --effort" directly above an argv passing --effort high.
+    # 0.6.28: codex review is `codex exec` with the suite's framing. The brief is
+    # a lens; the builder wraps it and the framed prompt goes in on stdin.
+    with tempfile.TemporaryDirectory() as td, tempfile.TemporaryDirectory() as rd:
+        r = subprocess.run([str(script), "codex", "review", "--model", "gpt-6-luna", "--effort", "xhigh",
+                            "--base", "abc123", "--target", td, "--run-dir", rd],
+                           capture_output=True, text=True)
+    out = r.stdout
+    check("leg-cmd: codex review runs codex exec, read-only, with the effort per call",
+          r.returncode == 0 and "codex exec -C " in out and "-s read-only" in out
+          and "-c model_reasoning_effort=xhigh" in out, r.stdout + r.stderr)
+    check("leg-cmd: codex review frames the brief before the paid run, chained",
+          "codex-review-prompt.py --base abc123 --target " in out
+          and out.index("codex-review-prompt.py") < out.index("codex exec")
+          and '> "$RUN_DIR/framed-prompt.md" && codex exec' in out, out)
+    check("leg-cmd: codex review reads the framed prompt from stdin after --",
+          out.rstrip().endswith('-- - < "$RUN_DIR/framed-prompt.md"'), out)
+    check("leg-cmd: codex review's -o file expands $RUN_DIR",
+          '-o "$RUN_DIR/review.md"' in out, out)
+    with tempfile.TemporaryDirectory() as td:
+        inside = Path(td) / "run"
+        r = subprocess.run([str(script), "codex", "review", "--model", "gpt-6-luna", "--effort", "high",
+                            "--base", "abc", "--target", td, "--run-dir", str(inside)],
+                           capture_output=True, text=True)
+    check("leg-cmd: a run directory inside the frozen target is refused",
+          r.returncode != 0 and "inside --target" in r.stderr and not r.stdout, r.stderr)
+    r = subprocess.run([str(script), "codex", "implement", "--model", "x", "--effort", "high"],
+                       capture_output=True, text=True, env=dict(os.environ, DEV_LEAD_LAUNCH=str(SCRIPTS.parent / "data" / "launch.json")))
+    check("leg-cmd: a DEV_LEAD_LAUNCH override is announced, never silent",
+          "launch data overridden by DEV_LEAD_LAUNCH" in r.stderr, r.stderr)
+    for missing, argv in (("--target", ["--base", "abc"]), ("--base", ["--target", "/tmp/x"])):
+        r = subprocess.run([str(script), "codex", "review", "--model", "gpt-6-luna", "--effort", "high", *argv],
+                           capture_output=True, text=True)
+        check("leg-cmd: codex review without %s is refused" % missing,
+              r.returncode != 0 and missing.lstrip("-") in r.stderr, r.stderr)
+
+    # The framing builder (0.6.28): one pass, refusals before any paid run.
+    builder = SCRIPTS / "codex-review-prompt.py"
+    sys.path.insert(0, str(SCRIPTS))
+    import importlib.util as _ilu
+    _bspec = _ilu.spec_from_file_location("codex_review_prompt", builder)
+    crp = _ilu.module_from_spec(_bspec)
+    _bspec.loader.exec_module(crp)
+    frame = "<!-- header {{BASE}} -->\nRange {{BASE}}..{{HEAD}}\n{{LENS}}\n<!-- body comment -->\n"
+    built = crp.build(frame, "b0", "h1", "check {{HEAD}} literally")
+    check("framing builder: substitutes in one pass (a {{HEAD}} inside the lens stays literal)",
+          built == "Range b0..h1\ncheck {{HEAD}} literally\n<!-- body comment -->\n", built)
+    for bad in ("{{TARGET}}", "{{base}}", "{{HEAD2}}"):
+        try:
+            crp.build("x " + bad + " {{LENS}}", "b", "h", "l")
+            refused = False
+        except ValueError:
+            refused = True
+        check("framing builder: an unknown placeholder %s is refused" % bad, refused, bad)
+    with tempfile.TemporaryDirectory() as td:
+        empty = subprocess.run([sys.executable, str(builder), "--base", "b", "--target", td],
+                               input="  \n", capture_output=True, text=True)
+        check("framing builder: an empty lens is refused before anything runs",
+              empty.returncode != 0 and "empty lens" in empty.stderr and not empty.stdout, empty.stderr)
+        nohead = subprocess.run([sys.executable, str(builder), "--base", "b", "--target", td],
+                                input="lens", capture_output=True, text=True)
+        check("framing builder: a target that is not a repository is refused",
+              nohead.returncode != 0 and "cannot read HEAD" in nohead.stderr and not nohead.stdout,
+              nohead.stderr)
+    real = subprocess.run([sys.executable, str(builder), "--base", "abc", "--target", str(SCRIPTS.parent)],
+                          input="my lens", capture_output=True, text=True)
+    head = subprocess.run(["git", "-C", str(SCRIPTS.parent), "rev-parse", "HEAD"],
+                          capture_output=True, text=True).stdout.strip()
+    check("framing builder: the shipped framing builds, with the target's HEAD and the lens",
+          real.returncode == 0 and ("abc..%s" % head) in real.stdout and "my lens" in real.stdout
+          and "{{" not in real.stdout and not real.stdout.startswith("<!--")
+          and real.stdout.rstrip().endswith("plain text: no bold, no heading, no backticks."),
+          real.stderr + real.stdout[-300:])
+
+    # The banner gating below is the config_only mechanism, which no shipped
+    # adapter uses since 0.6.28: run it against the pre-0.6.28 codex fixture.
+    legacy_dir = Path(tempfile.mkdtemp())
+    legacy_env = dict(os.environ, DEV_LEAD_LAUNCH=str(_legacy_launch(legacy_dir)))
     r = subprocess.run([str(script), "codex", "implement", "--model", "x",
-                        "--effort", "high"], capture_output=True, text=True)
+                        "--effort", "high"], capture_output=True, text=True, env=legacy_env)
     check("leg-cmd: implement banner does not disown a flag it emits",
           "--effort" not in r.stderr.split("NOT flags")[-1]
           or "NOT flags" not in r.stderr,
@@ -2404,7 +2511,7 @@ def test_leg_cmd():
     check("leg-cmd: implement banner states the role's real effort behaviour",
           "DOES take" in r.stderr, f"stderr={r.stderr!r}")
     r2 = subprocess.run([str(script), "codex", "review", "--model", "x",
-                         "--base", "abc"], capture_output=True, text=True)
+                         "--base", "abc"], capture_output=True, text=True, env=legacy_env)
     check("leg-cmd: ...and the review path keeps its warning",
           "NOT flags" in r2.stderr, f"stderr={r2.stderr!r}")
 
@@ -2763,6 +2870,7 @@ def test_config_effort(tmp):
 
     doc = _live_roster()
     doc["rounds"]["r1"]["review"]["codex"]["effort"] = "medium"
+    doc["rounds"]["r1"]["review"]["codex"]["effort_in"] = "config_only"   # the legacy fixture's mechanism
     path = tmp / "cfg-roster.json"
     _write_doc(path, doc)
     out = run(SCRIPTS / "roster.py", "check", env=_roster_env(home, DEV_LEAD_ROSTER=str(path)))
@@ -3090,11 +3198,55 @@ def _codex_leg():
     return {
         "model": "gpt-5.6-terra",
         "effort": "medium",
-        "effort_in": "config_only",
-        "effort_config_key": "model_reasoning_effort",
+        "effort_in": "flag",
         "family": "GPT",
-        "note": "codex's review path has no effort flag; the value is read from config and REPORTED, never asserted",
+        "note": "codex review runs `codex exec -c model_reasoning_effort=<e>` since 0.6.28",
     }
+
+
+# Before 0.6.28 codex's review path read its effort from config.toml. No
+# shipped adapter uses config_only any more, but the mechanism is still
+# supported, so tests of it point DEV_LEAD_LAUNCH at this fixture.
+_LEGACY_CODEX = {
+    "review": {"argv": ["adversarial-review", "--wait", "--base", "{BASE}", "--scope", "branch",
+                        "--model", "{MODEL}", "{PROMPT}"], "prompt_delivery": "argv"},
+    "effort": {"mechanism": "config_only", "applies_to_role": "review",
+               "config_key": "model_reasoning_effort", "config_file": "~/.codex/config.toml",
+               "note": "The review path has NO effort flag.",
+               "implement_note": "The `task` role DOES take `--effort` (none|minimal|low|medium|high|xhigh)."},
+    "not_flags": ["--help", "--effort"],
+}
+
+
+class _legacy_launch_env:
+    """Point every subprocess at the pre-0.6.28 codex launch data, and the
+    in-process roster module too, for the span of one test."""
+
+    def __init__(self, tmp):
+        self.path = _legacy_launch(tmp)
+
+    def __enter__(self):
+        self.saved = os.environ.get("DEV_LEAD_LAUNCH")
+        os.environ["DEV_LEAD_LAUNCH"] = str(self.path)
+        return self.path
+
+    def __exit__(self, *exc):
+        if self.saved is None:
+            os.environ.pop("DEV_LEAD_LAUNCH", None)
+        else:
+            os.environ["DEV_LEAD_LAUNCH"] = self.saved
+
+
+def _legacy_launch(tmp):
+    """A launch.json whose codex review is the pre-0.6.28 companion path."""
+    doc = json.loads((SCRIPTS.parent / "data" / "launch.json").read_text(encoding="utf-8"))
+    codex = doc["codex"]
+    codex["role"]["review"] = _LEGACY_CODEX["review"]
+    codex["effort"] = _LEGACY_CODEX["effort"]
+    codex["not_flags"] = _LEGACY_CODEX["not_flags"]
+    path = tmp / "legacy-launch.json"
+    path.write_text(json.dumps(doc, indent=2), encoding="utf-8")
+    return path
 
 
 def _live_roster():
@@ -3397,6 +3549,23 @@ def test_roster(tmp):
           got.returncode == 1 and "fallback.fallback" in text
           and "a fallback cannot have its own fallback" in text, text)
 
+    no_effort = _roster_doc({"codex": {"model": "gpt-6-luna", "family": "GPT"}})
+    path = tmp / "no-effort-codex.json"
+    _write_doc(path, no_effort)
+    got = _checked(path)
+    text = got.stdout + got.stderr
+    check("roster check: a pre-0.6.28 codex review with no effort fails WITH the migration step",
+          got.returncode == 1 and "missing effort" in text and "since 0.6.28" in text
+          and "model_reasoning_effort" in text, text)
+
+    stale = _roster_doc({"codex": {**_codex_leg(), "effort_in": "config_only"}})
+    path = tmp / "stale-effort-in.json"
+    _write_doc(path, stale)
+    got = _checked(path)
+    text = got.stdout + got.stderr
+    check("roster check: a pre-0.6.28 effort_in 'config_only' on codex review warns, not fails",
+          got.returncode == 0 and "is stale" in text, text)
+
     listy = _roster_doc({"opencode": {"model": "opencode/m", "family": "Meta", "effort": ["high"],
                                       "effort_in": "flag"}})
     path = tmp / "list-effort.json"
@@ -3423,14 +3592,14 @@ def test_roster(tmp):
 
     codex_args = args_of(plan.stdout, "review", "codex")
     opencode_args = args_of(plan.stdout, "review", "opencode")
-    check("roster plan: codex review args have no --effort",
-          codex_args == "--model gpt-5.6-terra", codex_args)
+    check("roster plan: codex review args pass --effort (codex exec takes it per call, 0.6.28)",
+          codex_args == "--model gpt-5.6-terra --effort medium", codex_args)
     check("roster plan: opencode review args pass --effort",
           opencode_args == "--model opencode/muse-spark-1.3-contributor-free --effort xhigh",
           opencode_args)
-    check("roster plan: codex effort is read from config",
-          "expected; read from ~/.codex/config.toml model_reasoning_effort" in plan.stdout,
-          plan.stdout)
+    check("roster plan: codex review effort is the roster's, not the config file's",
+          "review codex model=gpt-5.6-terra family=GPT effort=flag medium" in plan.stdout
+          and "read from ~/.codex/config.toml" not in plan.stdout, plan.stdout)
 
     same_family = tmp / "same-family-plan.json"
     _write_doc(same_family, _roster_doc({
@@ -5151,6 +5320,13 @@ def test_triage(tmp):
     entry, got = one("claude", "claude-sonnet", "high")
     check("triage effort: an adapter with no effort concept says so",
           got == {"effort": None, "effort_in": "none"}, got)
+    # config_only is the pre-0.6.28 codex review; exercise it on the legacy data.
+    real_data_cfg = triage_module.roster.data
+    legacy_path = _legacy_launch(tmp)
+    def legacy_data():
+        launch, families = real_data_cfg()
+        return json.loads(legacy_path.read_text(encoding="utf-8")), families
+    triage_module.roster.data = legacy_data
     codex_home = tmp / "codex-home"
     (codex_home / ".codex").mkdir(parents=True, exist_ok=True)
     (codex_home / ".codex" / "config.toml").write_text('model_reasoning_effort = "medium"\n')
@@ -5177,6 +5353,7 @@ def test_triage(tmp):
           high.get("effort") == "high" and high.get("config_mismatch", {}).get("config") == "medium"
           and "model_reasoning_effort=high" in high["config_mismatch"]["launch"]
           and (codex_home / ".codex" / "config.toml").read_text() == 'model_reasoning_effort = "medium"\n', high)
+    triage_module.roster.data = real_data_cfg
 
     # Review test gap: a real Git failure is an input error with stderr, not a
     # traceback or a successful empty result.
@@ -5476,10 +5653,12 @@ def main():
         test_merge_gate(Path(td), SCRIPTS / "roster.py")
     print("config_only effort (leg-cmd + roster check)")
     with tempfile.TemporaryDirectory() as td:
-        test_config_effort(Path(td))
+        with _legacy_launch_env(Path(td)):
+            test_config_effort(Path(td))
     print("roster.py config-effort (the consented config write)")
     with tempfile.TemporaryDirectory() as td:
-        test_config_effort_write(Path(td))
+        with _legacy_launch_env(Path(td)):
+            test_config_effort_write(Path(td))
 
     print("triage.py")
     with tempfile.TemporaryDirectory() as td:

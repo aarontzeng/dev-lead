@@ -17,8 +17,8 @@
     "effort.mechanism is the field that keeps being got wrong, because all four",
     "commonly-used adapters spell it differently:",
     "  model_suffix -- the effort is part of the model string (agy, cursor)",
-    "  flag         -- a dedicated flag (grok --effort, opencode --variant)",
-    "  config_only  -- no per-call control at all (codex review path)",
+    "  flag         -- a dedicated flag (grok --effort, opencode --variant, codex: task --effort / exec -c model_reasoning_effort=)",
+    "  config_only  -- no per-call control at all (codex review until 0.6.28; no shipped adapter since)",
     "  none         -- the adapter has no effort concept (claude)",
     "2026-09-08 second pass: a four-leg review found this file disagreed with the repo's own skills in almost every role its author had NOT personally probed -- an invented agy timeout, an agy implement launch with no write mode, an invented cursor --force with --trust dropped, grok missing the three flags that ARE its read-only boundary, claude missing the MCP trim and with the wrong prompt delivery. Every one was transcription from recall, which is the exact failure this file exists to stop, one level up. Hence per-ROLE verified strings: believe the review rows, re-check an implement row against its skill before trusting it.",
     "",
@@ -110,19 +110,25 @@
     "cli": "node \"$(ls -d \"$HOME\"/.claude/plugins/cache/openai-codex/codex/*/scripts/codex-companion.mjs | sort -V | tail -1)\"",
     "role": {
       "review": {
+        "cli": "codex",
         "argv": [
-          "adversarial-review",
-          "--wait",
-          "--base",
-          "{BASE}",
-          "--scope",
-          "branch",
-          "--model",
+          "exec",
+          "-C",
+          "{TARGET}",
+          "-s",
+          "read-only",
+          "-m",
           "{MODEL}",
-          "{PROMPT}"
+          "-c",
+          "model_reasoning_effort={EFFORT}",
+          "-o",
+          "$RUN_DIR/review.md",
+          "--",
+          "-"
         ],
-        "prompt_delivery": "argv",
-        "verified": "2026-09-08 probed live"
+        "prompt_delivery": "stdin",
+        "prompt_frame": "codex-review-prompt.py",
+        "verified": "2026-09-23: exec path; prompt on stdin via `-- -` (a prompt starting with -s stays text, sandbox stays read-only; codex-cli 0.156.1); equivalence test vs the companion passed (codex-runtime.md)"
       },
       "implement": {
         "argv": [
@@ -141,23 +147,29 @@
       }
     },
     "effort": {
-      "mechanism": "config_only",
-      "applies_to_role": "review",
-      "config_key": "model_reasoning_effort",
-      "config_file": "~/.codex/config.toml",
-      "note": "The review path has NO effort flag. Source of truth: codex-companion.mjs `handleReviewCommand` parses valueOptions [\"base\",\"scope\",\"model\",\"cwd\"]; only `handleTask` parses `effort`. So a review leg's depth is whatever the config file says at launch time -- read it and report the value, do not assert one. To make it explicit instead of inherited, bypass the companion with `codex exec -c model_reasoning_effort=<x>`, at the cost of the companion's job tracking and read-only sandbox. Verified 2026-09-08 by reading the script.",
-      "implement_note": "The `task` role DOES take `--effort` (none|minimal|low|medium|high|xhigh)."
+      "mechanism": "flag",
+      "flag": "--effort",
+      "examples": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "note": "Both roles take the effort per call: the review runs `codex exec -c model_reasoning_effort=<e>` and the log's `reasoning effort:` line shows what ran; implement goes through the companion's `task --effort`. The companion's `adversarial-review` (the fallback review path, codex-adversarial-review SKILL.md) has no effort flag and reads model_reasoning_effort from ~/.codex/config.toml instead. `max` is accepted by `codex exec -c` and shown in the log header (a peer measured it 2026-09-23); what the server does with it is not visible.",
+      "flag_by_role": {
+        "review": "model_reasoning_effort"
+      },
+      "migration_hint": {
+        "review": "codex review takes its effort per call since 0.6.28 (codex exec); rosters written earlier may lack it -- set the effort the review used to inherit, e.g. `grep model_reasoning_effort ~/.codex/config.toml`"
+      }
     },
-    "not_flags": [
-      "--help",
-      "--effort"
-    ],
     "gotchas": [
-      "`--help` is not a flag on `adversarial-review`; it is parsed as focus text and runs a real, billed review. Read the script's usage line instead.",
-      "Omitting `--base` reviews the working tree, which is clean right after a commit -- it will report nothing to review.",
-      "An EMPTY brief does not stop this adapter the way it stops the others. `adversarial-review` has --base/--scope branch to work from, so it returns a plausible general review carrying none of the lens you asked for, while agy and cursor refuse loudly and opencode's redirect dies before an output file exists. That is a false green, so assert the brief is non-empty before launching -- `leg-cmd.sh` now emits `test -s` in front of every command."
+      "The review brief is the LENS: codex-review-prompt.py wraps it in the suite's adversarial framing (base revision, verdict line, per-claim answers). An empty brief is refused before codex starts.",
+      "`-C` must name a directory inside a git repository; outside one codex prints `Not inside a trusted directory` and exits without reviewing.",
+      "Fallback review path: the companion's `adversarial-review` -- no effort flag (config.toml decides), `--help` is parsed as focus text and runs a real review, and omitting `--base` reviews the clean working tree. Use it only when the exec path is unavailable, and say so in the report."
     ],
-    "verified": "review probed 2026-09-08; other roles transcribed"
+    "verified": "review (exec) probed 2026-09-23; implement probed 2026-09-13"
   },
   "cursor": {
     "cli": "cursor-agent",

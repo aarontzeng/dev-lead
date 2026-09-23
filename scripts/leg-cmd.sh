@@ -27,7 +27,8 @@ set -euo pipefail
 die() { echo "leg-cmd: $*" >&2; exit 1; }
 
 HERE=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-DATA="$HERE/../data/launch.json"
+DATA="${DEV_LEAD_LAUNCH:-$HERE/../data/launch.json}"   # override: test seam only
+[ -z "${DEV_LEAD_LAUNCH:-}" ] || echo "leg-cmd: launch data overridden by DEV_LEAD_LAUNCH=$DATA" >&2
 [ -f "$DATA" ] || die "cannot find data/launch.json at $DATA"
 
 [ $# -ge 2 ] || die "usage: leg-cmd.sh <adapter> <role> --model <model> [--effort <e>] [--target <dir>] [--base <ref>] [--prompt-file <f>] [--run-dir <dir>] [--add-dir <dir> ...] [--check]  (each option only where the adapter takes it; see the header of this script)"
@@ -84,7 +85,8 @@ elif mech == "config_only" and role == eff.get("applies_to_role", role):
                  % (a, role, eff["config_key"], eff["config_file"]))
 elif mech in ("flag",) and not effort:
     sys.exit("leg-cmd: %s needs --effort (it becomes %s); examples: %s"
-             % (a, eff["flag"], ", ".join(eff.get("examples", []))))
+             % (a, (eff.get("flag_by_role") or {}).get(role, eff["flag"]),
+                ", ".join(eff.get("examples", []))))
 elif mech == "none" and effort:
     sys.exit("leg-cmd: %s has no effort concept; --model selects the tier" % a)
 elif mech not in ("model_suffix", "flag", "config_only", "none"):
@@ -157,6 +159,21 @@ if missing:
 # freeze-discipline hole: the emitted command runs in the lead's cwd, not the
 # frozen worktree the lead thinks they pinned.
 template = " ".join(r["argv"])
+if r.get("prompt_frame"):
+    # The framing builder consumes the base and reads HEAD from the target.
+    template += " {BASE} {TARGET}"
+    lacking = [f for f in ("base", "target") if not os.environ.get(f.upper())]
+    if lacking:
+        sys.exit("leg-cmd: %s/%s frames its brief with the base revision and the "
+                 "frozen target -- pass %s" % (a, role, " ".join("--" + f for f in lacking)))
+    # The framed prompt and the review are written under RUN_DIR; inside the
+    # frozen target they would dirty the tree the review is certified against.
+    _rd, _tg = os.environ.get("RUN_DIR_ARG", ""), os.environ.get("TARGET", "")
+    if _rd and _tg:
+        _rd, _tg = os.path.realpath(_rd), os.path.realpath(_tg)
+        if _rd == _tg or _rd.startswith(_tg.rstrip(os.sep) + os.sep):
+            sys.exit("leg-cmd: --run-dir %s is inside --target %s; the review would "
+                     "write into the frozen tree -- use a run directory outside it" % (_rd, _tg))
 for flag, ph in (("target", "{TARGET}"), ("base", "{BASE}"),
                  ("prompt-file", "{PROMPT_FILE}")):
     val = os.environ.get(flag.replace("-", "_").upper(), "")
@@ -208,8 +225,24 @@ if add_dirs:
 # `--model 'x`+chr(96)+'id'+chr(96)+'y'` rendered unquoted.
 # The two exceptions are strings this script emits itself and means as shell.
 OURS = ('"$(cat "$RUN_DIR/prompt.md")"',)
-cmd = spec["cli"] + " " + " ".join(t if t in OURS else shlex.quote(t) for t in argv)
-if r["prompt_delivery"] == "stdin":
+# A template token under $RUN_DIR (codex review's -o file) is ours too, and must
+# expand: single-quoting it would write to a file literally named $RUN_DIR/...
+def _emit(t):
+    if t in OURS:
+        return t
+    if t.startswith("$RUN_DIR/") and "'" not in t and '"' not in t:
+        return '"%s"' % t
+    return shlex.quote(t)
+cmd = r.get("cli", spec["cli"]) + " " + " ".join(_emit(t) for t in argv)
+frame = r.get("prompt_frame")
+if frame:
+    # The brief is a LENS: wrap it in the suite's framing first, then feed the
+    # framed prompt on stdin. The builder refuses an empty lens, an unknown
+    # placeholder or an unreadable HEAD, and the && stops the paid run.
+    cmd = ('python3 %s --base %s --target %s < "$RUN_DIR/prompt.md" > "$RUN_DIR/framed-prompt.md" && %s < "$RUN_DIR/framed-prompt.md"'
+           % (shlex.quote(os.path.join(os.environ["HERE"], frame)),
+              shlex.quote(os.environ.get("BASE", "")), shlex.quote(os.environ.get("TARGET", "")), cmd))
+elif r["prompt_delivery"] == "stdin":
     cmd += ' < "$RUN_DIR/prompt.md"'
 
 w = sys.stderr

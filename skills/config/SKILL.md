@@ -60,21 +60,13 @@ DEV_LEAD=${DEV_LEAD_ROOT:-$(ls -d "$HOME"/.claude/plugins/cache/dev-lead/dev-lea
    [`data/launch.json`](../../data/launch.json), and free text. Ask whether
    the fix round inherits r1 or differs.
 
-   **A config_only leg (codex review): offer to align the machine.** Its
-   effort is read from a file on THIS machine, so after setting it run
-   `"$DEV_LEAD/scripts/roster.py" config-effort <round> review codex` (no
-   `--yes`): it writes nothing, and prints the declared value, the value in
-   force, and either "already agree" or what would change (or a refusal
-   when the file's value cannot be read with confidence — then it is the
-   user's to edit by hand). If they differ, ask with the multiple-choice tool —
-   "update `~/.codex/config.toml` from X to Y? It is shared with your
-   interactive codex and other sessions." Only on an explicit yes run it
-   again with `--yes`, then report exactly what it printed: old -> new and
-   the backup path — and if it exits non-zero after a `changed:` line, say
-   the read-back disagreed and name the backup to restore from. On a no, say
-   plainly which value the leg will actually run at. This step, on that
-   explicit yes, is the only time dev-lead writes that file; no leg
-   dispatch, review round or other skill ever does.
+   **No config file to align (since 0.6.28).** codex review runs `codex
+   exec -c model_reasoning_effort=<e>`, so the roster's effort is the effort
+   that runs; no shipped leg reads its effort from a file on the machine.
+   `roster.py config-effort` still exists for a `config_only` adapter should
+   one return, and answers "nothing to write" for codex. Do not offer to edit
+   `~/.codex/config.toml`: it only decides the companion fallback's depth,
+   and changing it is the user's own act.
 
 3. **Probe a new model once, with a real call.** A model that has never
    been dispatched on this machine gets one cheap real call before it is

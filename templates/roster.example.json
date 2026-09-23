@@ -27,8 +27,7 @@
         "codex": {
           "model": "gpt-5.6-terra",
           "effort": "medium",
-          "effort_in": "config_only",
-          "effort_config_key": "model_reasoning_effort",
+          "effort_in": "flag",
           "family": "GPT"
         },
         "cursor": {
@@ -81,7 +80,7 @@
         "codex": {
           "model": "gpt-5.6-terra",
           "effort": "medium",
-          "effort_in": "config_only",
+          "effort_in": "flag",
           "family": "GPT"
         }
       }

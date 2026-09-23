@@ -23,7 +23,11 @@ from datetime import date, datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-LAUNCH_PATH = ROOT / "data" / "launch.json"
+# DEV_LEAD_LAUNCH is a test seam: the suite points it at a launch.json whose
+# codex still reads its review effort from config.toml, to keep exercising the
+# config_only mechanism now that no shipped adapter uses it.
+LAUNCH_PATH = Path(os.environ["DEV_LEAD_LAUNCH"]) if os.environ.get("DEV_LEAD_LAUNCH") \
+    else ROOT / "data" / "launch.json"
 FAMILIES_PATH = ROOT / "data" / "families.json"
 
 # A concrete leg. by_lens / top_tier_judgment_only are opencode-review only;
@@ -60,6 +64,9 @@ _CACHE = {}
 
 def data():
     if not _CACHE:
+        if os.environ.get("DEV_LEAD_LAUNCH"):
+            # A test seam: never silent, so a real shell that inherits it sees it.
+            print("roster: launch data overridden by DEV_LEAD_LAUNCH=%s" % LAUNCH_PATH, file=sys.stderr)
         _CACHE["launch"] = json.loads(LAUNCH_PATH.read_text(encoding="utf-8"))
         _CACHE["families"] = json.loads(FAMILIES_PATH.read_text(encoding="utf-8"))
     return _CACHE["launch"], _CACHE["families"]
@@ -314,9 +321,10 @@ def _check_effort(leg, adapter, role, path, problems):
 
     On the config_only role the value is what the lead expects to READ from
     the config file. It may be stored and is never passed as --effort.
-    A role whose argv template contains {EFFORT} must still store effort:
-    codex implement is config_only only on the review path, and leg-cmd.sh
-    refuses the task launch when {EFFORT} is empty.
+    A role whose argv template contains {EFFORT} must still store effort
+    (before 0.6.28, codex was config_only on its review role only and its
+    implement task still took {EFFORT}); leg-cmd.sh refuses the launch when
+    {EFFORT} is empty.
     """
     eff = _effort_spec(adapter)
     mech = eff["mechanism"]
@@ -334,7 +342,8 @@ def _check_effort(leg, adapter, role, path, problems):
                                "effort key is not allowed; %s has no effort concept" % adapter)
     elif mech == "flag":
         if not leg.get("effort"):
-            problems.error(path + ".effort", "missing effort")
+            hint = eff.get("migration_hint", {}).get(role) if isinstance(eff.get("migration_hint"), dict) else None
+            problems.error(path + ".effort", "missing effort" + ("; " + hint if hint else ""))
     elif mech == "config_only" and applies:
         declared = leg.get("effort")
         in_force = _config_effort(eff)
@@ -350,16 +359,23 @@ def _check_effort(leg, adapter, role, path, problems):
         pass
     else:
         problems.error(path + ".effort", "unknown effort mechanism %r" % (mech,))
-    # Flag adapters already error above. Codex implement is config_only for the
-    # review role only; its implement argv still contains {EFFORT}, and
-    # leg-cmd.sh then refuses a plan line that omitted --effort.
+    # Flag adapters already error above. A config_only adapter whose other role's
+    # argv still contains {EFFORT} (codex implement, before 0.6.28) lands here,
+    # and leg-cmd.sh then refuses a plan line that omitted --effort.
     if (_argv_requires_effort(adapter, role) and not leg.get("effort")
             and not any(e.startswith("roster: %s.effort: missing effort" % path)
                         for e in problems.errors)):
         problems.error(path + ".effort", "missing effort")
     if "effort_in" in leg:
         expect = EFFORT_IN.get(mech)
-        if leg["effort_in"] != expect:
+        if leg["effort_in"] == "config_only" and expect != "config_only":
+            # Rosters written before 0.6.28 said codex review read its effort
+            # from config.toml. It now takes the effort per call; the stale
+            # label must not turn an installed roster into a failing one.
+            problems.warn(path + ".effort_in",
+                          "effort_in 'config_only' is stale: %s %s takes its effort per call "
+                          "(expected %r); drop the key" % (adapter, role, expect))
+        elif leg["effort_in"] != expect:
             problems.error(
                 path + ".effort_in",
                 "effort_in %r does not match mechanism %s (expected %r)"
@@ -843,8 +859,8 @@ def _args_for(adapter, role, model, effort_value):
     if mech == "config_only" and applies:
         return "--model %s" % model
     # Pass --effort exactly when the argv template requires {EFFORT} and the
-    # mechanism does not refuse the flag. Codex implement is config_only only
-    # on the review role; its task template still has {EFFORT}.
+    # mechanism does not refuse the flag. (Before 0.6.28 codex was config_only
+    # on the review role only, and its task template still had {EFFORT}.)
     if (effort_value and effort_flag_refusal(adapter, role, effort_value) is None
             and _argv_requires_effort(adapter, role)):
         return "--model %s --effort %s" % (model, effort_value)

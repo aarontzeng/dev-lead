@@ -80,6 +80,7 @@ The skills describe launches in terms of "the host's background mechanism"
 (Claude Code's task tracking, in the original environment). If your harness
 has no equivalent, use plain shell job control with output redirected to
 files, and poll process liveness — the skills' patience calibrations (5–40
-minutes of silence being normal, per family) apply unchanged. The codex
-family additionally has a raw-CLI fallback documented in its runtime file
-for machines without the Claude Code companion plugin.
+minutes of silence being normal, per family) apply unchanged. Codex
+review runs `codex exec` everywhere; codex implement additionally has a
+raw-CLI fallback documented in its runtime file for machines without the
+Claude Code companion plugin.

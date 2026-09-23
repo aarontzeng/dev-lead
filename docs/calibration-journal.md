@@ -247,8 +247,9 @@ actionable" are calibration data. Verify every finding before you count it.
   of its own. Both files already said so. **The check is mechanical: open the
   runtime file's effort/flags section, put the launch command beside it, and
   confirm every knob the user asked for has a home in that command.** Where a
-  knob has no observable field in the run log (opencode's `--variant`, codex's
-  inherited config), say so in the row rather than asserting the value.
+  knob has no observable field in the run log (opencode's `--variant`, the
+  config effort a codex companion-fallback review inherits), say so in the row
+  rather than asserting the value.
 - **A capability you could not find is a claim, and it belongs to the same
   evidence standard as a finding.** "This leg has no effort flag" reported to
   the user is a statement about the tool, and the cost of getting it wrong is

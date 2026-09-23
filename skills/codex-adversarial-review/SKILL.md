@@ -1,14 +1,21 @@
 ---
 name: codex-adversarial-review
-description: Run a read-only Codex challenge review of a git diff through the Codex companion plugin, then verify each finding against the code. Use when the user asks for an adversarial or challenge review from Codex/GPT, wants a second opinion on a design or implementation, or needs the review gate after codex-implement.
+description: Run a read-only Codex challenge review of a git diff with `codex exec` and the suite's adversarial framing (the Codex companion's adversarial-review is the fallback), then verify each finding against the code. Use when the user asks for an adversarial or challenge review from Codex/GPT, wants a second opinion on a design or implementation, or needs the review gate after codex-implement.
 ---
 
 # Codex adversarial review
 
-Use the companion's built-in `adversarial-review` command, not a hand-written
-Codex CLI call. The companion runs the review with a `read-only` sandbox and
-tracks it as a job. This is a challenge review: inspect chosen boundaries,
-assumptions, failure modes, and trade-offs, not only local defects.
+Run the review as `codex exec` in a `read-only` sandbox, with the lead's lens
+wrapped in the suite's adversarial framing
+([`references/adversarial-framing.md`](references/adversarial-framing.md)) and
+the effort set per run. Since 0.6.28 this is the default: in an equivalence
+test on three frozen targets with known answers (codex-runtime.md, 2026-09-23)
+it matched or beat the companion's `adversarial-review` on known-answer
+recall and false positives, read the base revision in every run where the
+companion did in fewer than half, and — unlike the companion — takes the
+effort the roster or triage asks for. The companion stays as the fallback
+below. This is a challenge review: inspect chosen boundaries, assumptions,
+failure modes, and trade-offs, not only local defects.
 
 ## Before the first run of a session
 
@@ -74,7 +81,64 @@ before launching, not after:
 git diff --stat "$BASE" "$REVIEW_HEAD"    # file list must match the change under review
 ```
 
-## Launch one tracked read-only job
+## Launch the review: `codex exec` with the suite's framing
+
+Compose it with `leg-cmd.sh`, which emits both steps chained with `&&`: the
+builder wraps the brief (the LENS, in `$RUN_DIR/prompt.md`) in the framing,
+then `codex exec` reads the framed prompt from stdin:
+
+```bash
+DEV_LEAD=${DEV_LEAD_ROOT:-$(ls -d "$HOME"/.claude/plugins/cache/dev-lead/dev-lead/* 2>/dev/null | sort -V | tail -1)}
+eval "$("$DEV_LEAD/scripts/leg-cmd.sh" codex review --model <model> --effort <tier> \
+  --base "$BASE" --target "$REVIEW_TARGET_DIR" --run-dir "$RUN_DIR")" > "$RUN_DIR/review.log" 2>&1
+```
+
+What it runs, spelled out (for a lead without the script):
+
+```bash
+set -euo pipefail
+python3 "$DEV_LEAD/scripts/codex-review-prompt.py" --base "$BASE" --target "$REVIEW_TARGET_DIR" \
+  < "$RUN_DIR/prompt.md" > "$RUN_DIR/framed-prompt.md"
+"$DEV_LEAD/scripts/verify-target.sh" "$REVIEW_TARGET_DIR" "$REVIEW_HEAD"
+rm -f "$RUN_DIR/review.md"
+rc=0
+codex exec -C "$REVIEW_TARGET_DIR" -s read-only -m "$MODEL" -c "model_reasoning_effort=$TIER" \
+  -o "$RUN_DIR/review.md" -- - < "$RUN_DIR/framed-prompt.md" > "$RUN_DIR/review.log" 2>&1 || rc=$?
+"$DEV_LEAD/scripts/verify-target.sh" "$REVIEW_TARGET_DIR" "$REVIEW_HEAD"
+[ "$rc" -eq 0 ] || { echo "codex exec exited $rc; see review.log" >&2; exit 1; }
+used=$(sed -n 's/^reasoning effort: //p' "$RUN_DIR/review.log" | head -1)
+[ "$used" = "$TIER" ] || { echo "effort used '$used', wanted '$TIER'" >&2; exit 1; }
+[ -s "$RUN_DIR/review.md" ] || { echo "no review written" >&2; exit 1; }
+```
+
+- `$RUN_DIR` lives outside the frozen worktree; `$BASE`, `$REVIEW_HEAD` and
+  `$REVIEW_TARGET_DIR` are set as above. Quote `$MODEL`: an unquoted `<…>`
+  placeholder is a shell redirection.
+- The builder ([`scripts/codex-review-prompt.py`](../../scripts/codex-review-prompt.py)) substitutes in one pass, so a
+  `{{HEAD}}` inside the lens stays literal; it refuses an empty lens, an
+  unknown placeholder or an unreadable HEAD, and the `&&` stops the paid run.
+- The prompt goes on stdin (`-- -`): no argv length cap, a prompt that starts
+  with `-` stays text (a `-s workspace-write` first line did not change the
+  sandbox; codex-cli 0.156.1), and codex never waits on an inherited stdin.
+- `-C` must name a directory inside a git repository; outside one codex
+  prints `Not inside a trusted directory …` and exits without reviewing.
+- `review.md` holds the final message only; `review.log` holds the tool calls
+  and the `reasoning effort:` header — the only record of the effort that
+  actually ran, and where "did it read the base revision" is checked.
+- `codex exec review --base` is not a substitute: it refuses a custom prompt
+  together with `--base` (codex-cli 0.156.0), so neither lens nor framing
+  can ride on it. Inlining the diff into the prompt showed no gain.
+
+The report ends with a plain `Verdict: approve` or `Verdict: needs-attention`
+line, which [`scripts/leg-log-check.sh`](../../scripts/leg-log-check.sh) accepts; check it before reading.
+
+### Fallback: the companion's `adversarial-review`
+
+Use it only when `codex exec` is unavailable, and say so in the report. It
+supplies its own framing and tracks the run as a job, but **it has no effort
+flag**: the review runs at `model_reasoning_effort` from the machine's
+`~/.codex/config.toml`, whatever the roster or triage asked for. Read that
+value and report it; do not assert one.
 
 Resolve the newest installed plugin without hardcoding a home or version:
 
@@ -100,78 +164,6 @@ Launch under the host's own background mechanism with output redirected to a
 file, per the runtime's launcher rules (`--background` does not guarantee a
 prompt return; a lossy pipe can destroy the only copy of the report).
 
-### Candidate path: raw `codex exec` with the suite's framing (NOT the default yet)
-
-The companion path above has no effort flag: a review inherits
-`model_reasoning_effort` from the machine's `~/.codex/config.toml`, and the
-triage effort floor can only be reported as `config_mismatch`. The raw CLI
-takes effort per run, and
-[`references/adversarial-framing.md`](references/adversarial-framing.md)
-carries the adversarial framing the companion would otherwise supply. **This
-path replaces the companion only after the equivalence test in the
-calibration journal passes** (same effort, same frozen targets, ≥ 3 runs per
-arm: the exec arm no worse on known-answer recall and false positives).
-Until then use it only when a specific effort is required, and say so in the
-report.
-
-`$RUN_DIR` is the run directory outside the frozen worktree
-([dev-lead Phase 2](../dev-lead/SKILL.md)); `$BASE`, `$REVIEW_HEAD`,
-`$REVIEW_TARGET_DIR` and `$FOCUS` are set as above.
-
-```bash
-set -euo pipefail
-DEV_LEAD=${DEV_LEAD_ROOT:-$(ls -d "$HOME"/.claude/plugins/cache/dev-lead/dev-lead/* 2>/dev/null | sort -V | tail -1)}
-FRAMING="$DEV_LEAD/skills/codex-adversarial-review/references/adversarial-framing.md"
-[ -f "$FRAMING" ] || { echo "dev-lead root unresolved; set DEV_LEAD_ROOT" >&2; exit 1; }
-MODEL="<model from the roster>"   # quoted: an unquoted <...> is a redirection
-TIER="<tier>"                     # low | medium | high | xhigh
-
-# 1. Build the prompt into a file: one pass, unknown placeholders refused.
-B="$BASE" H="$REVIEW_HEAD" L="$FOCUS" OUT="$RUN_DIR/prompt.md" \
-  python3 - "$FRAMING" <<'EOF'
-import os, re, sys
-frame = open(sys.argv[1], encoding="utf-8").read()
-frame = re.sub(r"\A<!--.*?-->\r?\n", "", frame, count=1, flags=re.S)
-values = {"BASE": os.environ["B"], "HEAD": os.environ["H"], "LENS": os.environ["L"]}
-unknown = set(re.findall(r"\{\{([A-Z_]+)\}\}", frame)) - set(values)
-if unknown:
-    sys.exit(f"prompt builder: unknown placeholder(s) {sorted(unknown)}")
-text = re.sub(r"\{\{(BASE|HEAD|LENS)\}\}", lambda m: values[m.group(1)], frame)
-if not text.strip():
-    sys.exit("prompt builder: empty prompt")
-with open(os.environ["OUT"], "w", encoding="utf-8") as f:
-    f.write(text)
-EOF
-
-# 2. Run: prompt on stdin ("-- -"), effort per run, output outside the worktree.
-"$DEV_LEAD/scripts/verify-target.sh" "$REVIEW_TARGET_DIR" "$REVIEW_HEAD"
-rm -f "$RUN_DIR/review.md"
-rc=0
-codex exec -C "$REVIEW_TARGET_DIR" -s read-only -m "$MODEL" \
-  -c "model_reasoning_effort=$TIER" -o "$RUN_DIR/review.md" -- - \
-  < "$RUN_DIR/prompt.md" > "$RUN_DIR/review.log" 2>&1 || rc=$?
-"$DEV_LEAD/scripts/verify-target.sh" "$REVIEW_TARGET_DIR" "$REVIEW_HEAD"
-
-# 3. Fail closed: exit status, the effort actually used, a non-empty report.
-[ "$rc" -eq 0 ] || { echo "codex exec exited $rc; see review.log" >&2; exit 1; }
-used=$(sed -n 's/^reasoning effort: //p' "$RUN_DIR/review.log" | head -1)
-[ "$used" = "$TIER" ] || { echo "effort used '$used', wanted '$TIER'" >&2; exit 1; }
-[ -s "$RUN_DIR/review.md" ] || { echo "no review written" >&2; exit 1; }
-```
-
-- The prompt goes on stdin (`-- -` with a file redirect): no argv length
-  cap, a prompt that starts with `-` is not read as a flag, and codex does
-  not sit waiting on an inherited stdin (verified on codex-cli 0.156.0).
-- `-C` must name a directory inside a git repository; outside one codex
-  prints `Not inside a trusted directory …` and exits without reviewing.
-- `codex exec review --base` is not a substitute: it refuses a custom prompt
-  together with `--base` (codex-cli 0.156.0), so the lens and the framing
-  cannot ride on it.
-- `review.md` holds the final message only; `review.log` holds the tool
-  calls, which is where "did it read the base revision" is checked.
-- Inlining the diff into the prompt showed no gain in the A/B runs; the
-  framing tells the model to collect it.
-
 **Running this leg as a subagent? You are a leaf — block, do not "wait".**
 Nothing will wake you when the job finishes; ending your turn on "waiting for
 the notification" abandons the review. Poll to terminal inside a single tool
@@ -180,10 +172,11 @@ call, and issue another such call immediately if it times out
 
 ## Model choice
 
-The companion review path takes `--model` only; depth otherwise comes from
-the user's global config (runtime file has the plumbing). The candidate exec
-path above also takes the effort. Pick per your calibration
-journal, with two measured priors:
+The exec path takes both `--model` and the effort: use the roster's review
+leg, raised to triage's `effort` for the change when it gives one (the
+table only raises). The companion fallback takes `--model` only and runs at
+the machine's config effort (runtime file has the plumbing). Pick per your
+calibration journal, with two measured priors:
 
 - Review is the highest-leverage step — when quota allows, spend the
   strongest tier here rather than on implementation.
@@ -198,8 +191,9 @@ journal, with two measured priors:
 Omitting `--model` inherits the user's codex-config default — pass it
 explicitly rather than inheriting silently.
 
-The companion enforces `read-only`; do not add any bypass flag. After the job
-completes, verify the review itself changed nothing:
+Both paths run `read-only` (`-s read-only` on exec; the companion enforces
+it); do not add any bypass flag. After the run, verify the review itself
+changed nothing — `verify-target.sh` in the block above, or by hand:
 
 ```bash
 test "$(git rev-parse HEAD)" = "$REVIEW_HEAD"
@@ -218,7 +212,12 @@ trusting the review output.
 
 ## Write a useful focus prompt
 
-Supply focus text with all of the following:
+The framing already tells the reviewer to read every touched file at the
+base revision with `nl -ba`, to stay read-only (no tests, builds, MCP or
+external tools), to separate introduced from inherited defects, to check
+whether a later check mitigates a hazard, to answer each posed claim with
+HOLDS / BROKEN / NOT REACHED, and to end with a plain verdict line. The lens
+you write supplies the rest (on the companion fallback, include all of it):
 
 - Declare first-party, pre-merge review; do not use third-party attack
   framing.
@@ -269,7 +268,11 @@ jobs as independent models.
 
 ## Watching the run and reading the report
 
-All in the runtime file: liveness is log mtime (never `status`), the two
+The exec path runs in the foreground of whatever backgrounds it: its exit
+status, `review.md` and the `reasoning effort:` line in `review.log` are the
+whole record, and a large target can take 10–25 minutes at xhigh (measured,
+2026-09-23). The companion fallback is a tracked job with its own traps — all
+in the runtime file: liveness is log mtime (never `status`), the two
 delivery modes, the ~20-minute patience rule around wait tools, truncated
 captured messages, and the interim-message grep that rescues findings from
 "empty" rounds. Follow them; do not re-learn them.
