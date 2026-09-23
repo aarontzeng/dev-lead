@@ -4851,6 +4851,30 @@ def test_triage(tmp):
     result = changed(166, [patch(1, path_only, base)])
     check("triage change: path_only trigger raises risk", result.get("risk_floor") == "HIGH", result)
 
+    # 0.6.23: fetching a patch set that is missing locally adds objects and
+    # nothing else. FETCH_HEAD belongs to whoever uses the clone.
+    fh_origin, fh_work, fh_clone = tmp / "fh-origin.git", tmp / "fh-work", tmp / "fh-clone"
+    git(tmp, "init", "-q", "--bare", str(fh_origin))
+    git(tmp, "init", "-q", str(fh_work))
+    git(fh_work, "config", "user.email", "test@example.invalid")
+    git(fh_work, "config", "user.name", "Test")
+    (fh_work / "a.txt").write_text("one\n")
+    git(fh_work, "add", "-A")
+    git(fh_work, "commit", "-qm", "one")
+    git(fh_work, "push", "-q", str(fh_origin), "HEAD:refs/heads/main")
+    git(tmp, "clone", "-q", str(fh_origin), str(fh_clone))
+    (fh_work / "a.txt").write_text("two\n")
+    git(fh_work, "commit", "-qam", "two")
+    fh_revision = git(fh_work, "rev-parse", "HEAD").stdout.strip()
+    git(fh_work, "push", "-q", str(fh_origin), "HEAD:refs/changes/01/1001/1")
+    fh_head = fh_clone / ".git" / "FETCH_HEAD"
+    fh_head.write_text("sentinel: the clone owner's FETCH_HEAD\n")
+    triage_module._ensure_revision(fh_clone, "1001", "1", fh_revision)
+    fetched = run("git", "-C", str(fh_clone), "cat-file", "-e", fh_revision + "^{commit}").returncode == 0
+    check("triage fetch: a missing patch set is fetched into the clone", fetched, fh_revision)
+    check("triage fetch: the clone's FETCH_HEAD is left alone",
+          fh_head.read_text() == "sentinel: the clone owner's FETCH_HEAD\n", fh_head.read_text())
+
     # Review test gap: a real Git failure is an input error with stderr, not a
     # traceback or a successful empty result.
     broken_query = query(167, [patch(1, asof_ps1, "missing-parent")])

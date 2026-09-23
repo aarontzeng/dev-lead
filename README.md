@@ -235,6 +235,10 @@ For a merge-commit patch set, its content delta is compared with the first
 parent, matching Gerrit's displayed diff.
 `change --as-of-ps N` deliberately excludes your own vote and messages on
 patch set N, reproducing the decision you faced before reviewing it.
+`change` only reads a clone, except to fetch a patch set it lacks. That fetch
+uses `--no-write-fetch-head` (git 2.29 or later), so the only thing it adds to
+a clone is objects: no refs, no `FETCH_HEAD`, no index or working tree. A
+person's own working clone can therefore serve as the triage clone.
 
 The lead role is portable: all six CLIs can read the same skills directory,
 so a Codex or Gemini lead can follow the same playbook and delegate to

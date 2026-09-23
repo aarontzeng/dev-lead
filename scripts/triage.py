@@ -335,7 +335,11 @@ def _ensure_revision(repo, change, patch_set, revision):
         return
     ref = "refs/changes/%02d/%s/%s" % (int(change) % 100, change, patch_set)
     try:
-        _git(repo, "fetch", "origin", ref)
+        # --no-write-fetch-head (git 2.29+): the clone may be a person's own
+        # working clone, and FETCH_HEAD is theirs -- a patrol that runs
+        # `git fetch ... && use FETCH_HEAD` must never see it overwritten. With
+        # it, the only thing a triage run adds to a clone is objects.
+        _git(repo, "fetch", "--no-write-fetch-head", "origin", ref)
     except InputError as exc:
         raise InputError("git: could not fetch revision %s from %s: %s" % (revision, ref, exc))
     if not _object_exists(repo, revision):
