@@ -262,7 +262,7 @@
       "The prompt goes on STDIN. An argv prompt over ~1-2 KB hangs before the session is created.",
       "`tokens.output=0` is a broken counter, not an empty run -- grep the log for your required section headers before discarding it.",
       "An invalid --variant is NOT refused and the log never echoes the variant applied, so a completed run is no evidence the effort you asked for is the effort you got (measured 2026-09-15: bogus values completed normally in 9-38s). Use values you have seen work; treat the flag as write-only.",
-      "A read outside the cwd is auto-rejected headless and the leg then ends with empty output (SITL-bench 2026-09-22, twice). Keep the brief and all context inside the frozen target, and run `scripts/leg-log-check.sh opencode <log>` after every run: it passes only a log whose report carries a verdict word, so a silent failure is reported as a missing leg, not read as a verdict."
+      "A read outside the cwd is auto-rejected headless and the leg then ends with empty output (a peer session 2026-09-22, twice). Keep the brief and all context inside the frozen target, and run `scripts/leg-log-check.sh opencode <log>` after every run: it passes only a log whose report carries a verdict word, so a silent failure is reported as a missing leg, not read as a verdict."
     ],
     "verified": "review probed 2026-09-08; other roles transcribed",
     "model_prefix": "opencode/",

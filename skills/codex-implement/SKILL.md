@@ -221,7 +221,7 @@ the worktree; report the ref. The delegate never pushes.
 A delegate that hits its limit mid-edit is a different handoff from one whose
 work needs fixing, and confusing them wastes the round. Measured across a long
 session: a run ended while "making the first rendering slice", having written
-twelve correct tests and left `minter.py` with an unterminated string
+twelve correct tests and left one source file with an unterminated string
 concatenation. The suite then reported 265 failures.
 
 **That number was one syntax error.** A file that will not parse fails every

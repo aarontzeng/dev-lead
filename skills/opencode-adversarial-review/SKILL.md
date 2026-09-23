@@ -77,9 +77,9 @@ grep -rlEi 'BEGIN (RSA|OPENSSH|EC) PRIVATE KEY|api[_-]?key *= *["'"'"'][A-Za-z0-
 grep -rhoE '[A-Za-z][A-Za-z.]+@[a-z]+\.com' . | sort -u      # people, not roles
 ```
 
-Measured on `quanta-mcp-gateway` 2026-09-16: no credential material; 153
-files and 6.7 MB handed to each leg; colleague work addresses and internal
-project codenames (`RTD16XX`, `Swarm-Matrix`, `AeroGuided`) present. That is
+Measured on one of the owner's infrastructure repositories 2026-09-16: no
+credential material; 153 files and 6.7 MB handed to each leg; colleague work
+addresses and internal project codenames present. That is
 the residual the owner accepted — **named, not assumed absent.** Eligible.
 
 **The brief is a prompt too.** The claims file and lens text are authored by
@@ -287,7 +287,7 @@ cd "$REVIEW_TARGET_DIR" && \
   (HOLDS / BROKEN / NOT REACHED / FIXED, or `--expect <regex>` for another
   format), so an empty log, an error dump and a refused read with nothing
   after it all exit 1. A leg it fails is a MISSING leg, never "no
-  findings" -- measured 2026-09-22 (SITL-bench): two refused out-of-cwd reads
+  findings" -- measured 2026-09-22 (a peer session): two refused out-of-cwd reads
   and one 20-minute timeout each left a file that looked like a clean run. It
   catches "nothing"; the diagnosis below is still yours.
 - **Five terminal failures look alike in the log and are not.** Ending with

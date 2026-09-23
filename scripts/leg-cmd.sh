@@ -180,7 +180,7 @@ if os.environ.get("RUN_DIR_ARG") and r["prompt_delivery"] == "prompt_file":
              "  give this adapter the brief with --prompt-file instead."
              % (a, role))
 
-# Context outside the target (SITL-bench, 2026-09-22): a brief that points a
+# Context outside the target (a peer session, 2026-09-22): a brief that points a
 # leg at design docs or a sibling repo needs that directory readable. cursor
 # takes `--add-dir` (probed 2026-09-22 in `--mode ask`: a file there was read);
 # an adapter without an add_dir_flag REFUSES rather than dropping the value --

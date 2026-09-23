@@ -81,7 +81,7 @@ Two things the pilot established before any rule did:
    2026-09-04, agy/gemini-3.8-flash-high: 58 of 62 citations exact, and the
    generalising prose built on those citations independently false — it wrote
    "no background scheduler, worker thread, cron, or inbound webhook listener"
-   about code it had genuinely read, while `server.py:656` starts a named
+   about code it had genuinely read, while the server module starts a named
    daemon thread. Distinct from FABRICATED-CLAIM (asserts a verification it did
    not perform) and from EVIDENCE-WRONG (opened the file, reported false
    evidence about it): here the evidence is right and the sentence built on it
@@ -93,8 +93,8 @@ Two things the pilot established before any rule did:
 
 9. **Follow a citation one line further than the claim needs.** The round's
    most valuable finding was not an answer to any posed question. A leg cited
-   `search.ts:541-543` for "does this still filter per row"; reading to `:566`
-   found a 14-line comment documenting a deliberate fail-open, whose own text
+   three lines of a search module for "does this still filter per row"; reading
+   ~20 lines further found a 14-line comment documenting a deliberate fail-open, whose own text
    calls letting an unverifiable row through "the safe fallback". A security
    document had listed that behaviour as hypothetical. Nobody asked for it. It
    came from a peer reading PAST the cited line instead of confirming it and
@@ -119,7 +119,7 @@ Two things the pilot established before any rule did:
     API calls implement these four methods?", framing an in-tree fact as an
     external-documentation problem. Three legs produced 19 unfetchable
     `docs.gitlab.com` URLs between them while a 398-line working
-    `GitLabHttpBackend` sat in the tree — and the free leg **opened that file**
+    GitLab HTTP backend sat in the tree — and the free leg **opened that file**
     (read #19 in its own tool inventory) and still answered from model memory.
     The framing overrode evidence already in its context. This is a much
     stronger claim than "legs fabricate under open surveys": it means a brief
@@ -235,8 +235,8 @@ Two things the pilot established before any rule did:
     unstated scope limit.** Three runs, two model families, one blind spot: every
     enumeration was keyed to camelCase `sessionId` because the brief was, and the
     brief was because the lead was. The route all three missed
-    (`POST /agentmemory/mcp/prompts/get` -> `mcp/server.ts:1724`) takes snake_case
-    `session_id`. Both cell-2 legs SAW it and excluded it on naming grounds --
+    (a memory backend's prompt-fetch route, one line in its server module) takes
+    snake_case `session_id`. Both cell-2 legs SAW it and excluded it on naming grounds --
     defensible against the brief's literal wording and wrong about the world.
     Repair: name the concept, or name the spellings. A leg cannot widen a scope
     the brief narrowed.

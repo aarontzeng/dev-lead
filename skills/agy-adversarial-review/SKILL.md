@@ -62,13 +62,13 @@ flow would.
 > missing the field that would settle it.
 >
 > A four-leg round that day ran the agy leg against a `freeze-target.sh`
-> WORKTREE on ps-241 — `.git` a 79-byte pointer file, exactly the shape above —
+> WORKTREE on the first host — `.git` a 79-byte pointer file, exactly the shape above —
 > and the leg completed normally: 15 KB of report, an evidence table with line
 > counts and verbatim last lines for seven files, and **zero** occurrences of
 > `permission check failed`, `auto-denied`, or any `.git` read in its log.
 >
 > Settings do not explain the difference, and this is the part that makes it
-> worth recording: ps-241 is STRICTER on the axis that would matter — its
+> worth recording: the first host is STRICTER on the axis that would matter — its
 > `toolPermission` key is absent (deny by default) and `read_file` is scoped to
 > one project glob, so a `.git` pointer read should have been denied there.
 > It was never attempted. If the mechanism above still held, that leg should
@@ -284,7 +284,7 @@ model:
 ## The refusal gotcha
 
 **Red-team framing can trip a refusal.** "You are a RED TEAM reviewer…
-falsify claims" over safety-critical code (flight control, medical) has come
+falsify claims" over safety-critical code (control systems, medical) has come
 back as a refusal — the model reads it as an attack on a third party.
 Reframe as what it actually is: a pre-merge correctness review of first-party
 code by its own team, with HOLDS/BROKEN verdicts per property. The findings

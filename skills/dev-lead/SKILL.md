@@ -172,7 +172,7 @@ fixed leg count tied to being a fix round. When the lead writes the fix
 directly (the common case for a small, precisely-diagnosed change quoting a
 verified finding), one leg from any family other than the lead's own
 satisfies the rule; a large or ambiguous fix round earns the same weight as
-r1. Two fix rounds this session (`review.abandon`'s reorder, `roster.py`'s
+r1. Two fix rounds this session (one tool's reorder, `roster.py`'s
 two rounds) each shipped on one codex leg for exactly this reason — not a
 shortcut, the correctly-sized response to a small change.
 
@@ -654,14 +654,14 @@ two rounds and would have run a third on no principle at all.
    the sentence was false within the hour — self-invalidating, in a file meant
    to outlive the review that produced it. In the same round a four-family
    review found the same file resting its ONLY recorded owner acceptance on
-   "#10302 PS10 carries a +1", linked to a host that had since been
+   "change N, patch set 10 carries a +1", linked to a host that had since been
    decommissioned: a perishable fact behind a dead link, in the document that
    had just declared such facts invalid. And an operational gate — whether an
    operator may enable a mode — read "current-patchset review", so it changed
    when the review tool changed rather than when the design or the software did.
 
    **The test is MONOTONICITY, not volatility**, and getting this wrong makes
-   the rule worse than not having it. "Change 10943 is merged" is volatile in
+   the rule worse than not having it. "Change N is merged" is volatile in
    the sense that it was once untrue — but it can only go from false to true, so
    citing it is safe. "PS4 carries a +1" goes from true to false. In the same
    round a leg applied the rule mechanically and flagged every "merged" as a
@@ -852,7 +852,7 @@ default lands nothing on a machine configured for `lead`, and a lead that
 assumes `lead` merges work the person wanted to see. **Neither mode changes
 what counts as green**: a verdict with an unanswered review round, a failing
 test, an open blocker or an unverified finding goes to the person in both.
-A repo's own contract wins where it is stricter (QUANTA Part 5, the user's
+A repo's own contract wins where it is stricter (a team contract, the user's
 CLAUDE.md).
 
 - **`merge-gate=user` (default)**: present the verdict and the diff summary;

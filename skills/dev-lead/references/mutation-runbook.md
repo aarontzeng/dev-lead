@@ -165,7 +165,7 @@ Two things come out of this that nothing else gives you:
   appears on. Forward mutation killed it, so it looked strengthened. Only the
   retrospective run showed the previous version ALSO failed that mutant — the
   real gap was one table row over, where the old version passed and the new one
-  failed naming `sysid='10'`. Without step 2, the wrong mutant would have
+  failed naming `id='10'`. Without step 2, the wrong mutant would have
   "confirmed" a fix that missed the finding.
 
 Pick the mutant from the FINDING's trigger, not from the code you touched. A

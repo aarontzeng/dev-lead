@@ -15,8 +15,8 @@
 # `.gitattributes` `eol=lf` shows those files as ` M` on EVERY fresh checkout
 # (git would renormalize them on the next add), although the bytes on disk are
 # exactly the committed ones. freeze-target.sh refused such a repo outright and
-# left the worktree behind -- measured 2026-09-22 on QCS9075-QLI2.0-SDK, 18
-# files under skills/dragonwing-iq/ (reported by the SITL-bench session).
+# left the worktree behind -- measured 2026-09-22 on an SDK repository, 18
+# files under one subdirectory (reported by a peer session).
 #
 # The test is BYTE identity against HEAD, not `git diff --ignore-cr-at-eol`:
 # a reviewer reads the working tree, so an EXCUSED file must hold the commit's

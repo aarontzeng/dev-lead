@@ -127,10 +127,10 @@ actionable" are calibration data. Verify every finding before you count it.
   nobody else will check. Measured: a leg reported that a sequence step's
   terminal NO_ACK does not stop the sequence and called it "state desync"; the
   lead downgraded it to MINOR, reasoning that the sequence advances on confirmed
-  vehicle state, so a step's NO_ACK is merely informational and the outcome is
+  device state, so a step's NO_ACK is merely informational and the outcome is
   still correct. State-gating was the hazard, not the mitigation: the command had
-  actually reached the aircraft and only its ACK was lost, so a later heartbeat
-  armed and launched it *after* the operator had been told it failed. A second
+  actually reached the device and only its ACK was lost, so a later status update
+  carried the command out *after* the operator had been told it failed. A second
   leg's framing corrected the lead. The error has a shape worth naming — the
   downgrade reasoned about the code ("does it still reach the right state?") when
   the question was about the operator and the machine ("what were they told, and
@@ -157,10 +157,10 @@ actionable" are calibration data. Verify every finding before you count it.
   said it could not confirm. Measured 2026-09-07, twice in one day, from two
   different reviewers on two different changes:
 
-  - One −1 rested on "if `UpdateWirelessConfigInterface` modifies the flag, the
+  - One −1 rested on "if the config-update function modifies the flag, the
     guard reads stale state" — and listed, under its own Missing evidence
     heading, that the function's body was not in the context it was given. The
-    signature is `const WifiInterface interface`: by value, and const. The
+    parameter is a `const` struct passed by value. The
     premise was not merely unproven, it was impossible.
   - Another −1 asserted that a named commit had already rewritten the function
     under measurement, so the numbers no longer held. `git cat-file -t` on that
@@ -227,8 +227,8 @@ actionable" are calibration data. Verify every finding before you count it.
   which one you are doing when you dispatch it.
 - **Do not let a stricter gate you know about stand in for the gate that
   actually applies.** The same incident: the lead reasoned that the change
-  could not land on one approval because the gateway requires two, and the
-  owner submitted through the native tool, whose ACL requires one. A rule
+  could not land on one approval because the wrapper tool the lead used requires
+  two, and the owner submitted through the native tool, whose ACL requires one. A rule
   enforced by the path you happen to use is not enforced by the paths other
   people use. Before treating "it cannot merge yet" as a reason to defer,
   check who can merge it and through what.

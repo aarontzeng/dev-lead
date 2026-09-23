@@ -42,7 +42,7 @@ INHERIT_KEYS = {"inherit", "set_on", "why"}
 # `auto-merge` grant, and the per-run grant still exists for a one-off. A
 # verdict that is not fully green falls back to the person in BOTH modes; the
 # setting moves who approves a clean result, never what counts as clean. A
-# repo's own contract still wins where it is stricter (QUANTA, CLAUDE.md).
+# repo's own contract still wins where it is stricter (a team contract, CLAUDE.md).
 MERGE_GATE_MODES = ("user", "lead")
 MERGE_GATE_KEYS = {"mode", "set_on", "why"}
 # Every top-level key the roster may carry. Unknown ones are an ERROR, not a

@@ -6,9 +6,9 @@
 # Why: an opencode leg whose read was refused headless ends with the refusal
 # and nothing else, and one that hits its timeout ends with nothing at all. In
 # both cases the lead's own wrapper appended "exit=0" (or 124), so the output
-# file LOOKED like a completed run. Measured 2026-09-22 by the SITL-bench
-# session: twice on 12356 (a read outside the cwd refused) and once on 12157
-# (+3601 lines, 20-minute timeout, no output).
+# file LOOKED like a completed run. Measured 2026-09-22 by a peer
+# session: twice on one change (a read outside the cwd refused) and once on
+# another (+3601 lines, 20-minute timeout, no output).
 #
 # POSITIVE evidence, not subtraction. The first version stripped known noise
 # and counted what was left; three review legs then built error dumps it

@@ -2618,7 +2618,7 @@ def test_leg_cmd():
                   % (label, "runs" if should_run else "blocked"),
                   ("RAN" in out.stdout) == should_run,
                   f"stdout={out.stdout!r} stderr={out.stderr!r}")
-    # --add-dir (SITL-bench, 2026-09-22): cursor takes it, inserted before the
+    # --add-dir (a peer session, 2026-09-22): cursor takes it, inserted before the
     # prompt and quoted; an adapter without the flag REFUSES rather than
     # dropping it -- for opencode, whose out-of-cwd read is auto-rejected
     # headless, with the rule that replaces it.
@@ -3783,8 +3783,8 @@ def test_roster(tmp):
 
 def _crlf_repo(path):
     """A repo that committed CRLF files and LATER added `eol=lf`: every fresh
-    checkout shows them ` M` with bytes identical to the commit (SITL-bench,
-    2026-09-22, QCS9075-QLI2.0-SDK: 18 files)."""
+    checkout shows them ` M` with bytes identical to the commit (a peer session,
+    2026-09-22, an SDK repository: 18 files)."""
     path.mkdir(parents=True)
     git(path, "init", "-q")
     git(path, "config", "user.email", "test@example.invalid")
@@ -3858,7 +3858,7 @@ def test_renorm(tmp):
 
 
 def test_freeze_refusal_cleans_up(tmp):
-    """A refusal must not leave the worktree registered behind it (SITL-bench,
+    """A refusal must not leave the worktree registered behind it (a peer session,
     2026-09-22): the caller gets no SHA, so nothing else will remove it, and
     the next freeze to that path dies on "already exists"."""
     freeze = SCRIPTS / "freeze-target.sh"
@@ -3897,7 +3897,7 @@ def test_freeze_refusal_cleans_up(tmp):
 
 # ---------------------------------------------------------- leg-log-check ----
 def test_leg_log_check(tmp):
-    """Silent failed legs (SITL-bench, 2026-09-22): a refused read or a timeout
+    """Silent failed legs (a peer session, 2026-09-22): a refused read or a timeout
     left a log that looked like a finished run once the wrapper appended exit=0.
     The check is POSITIVE evidence -- a verdict word the brief demanded -- because
     subtracting known noise lost to every error shape three review legs built."""
