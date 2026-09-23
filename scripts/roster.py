@@ -1283,7 +1283,9 @@ def cmd_config_effort(path, args):
     # The value is written INTO a TOML file, so it must be a bare word: a quote
     # or a newline would let a roster value inject further settings (codex
     # leg, 2026-09-23: `medium"\nother = "x` became two root assignments).
-    if not _EFFORT_WORD.match(str(declared)):
+    # fullmatch, not match: `$` also matches just before a TRAILING newline,
+    # so "medium\n" passed and was written (codex leg, 2026-09-23)
+    if not _EFFORT_WORD.fullmatch(str(declared)):
         print("refused: declared effort %r is not a plain effort word; nothing written"
               % (declared,))
         return 1
@@ -1318,18 +1320,33 @@ def cmd_config_effort(path, args):
         return 0
     backup = None
     if cfg.exists():
+        # Created EXCLUSIVELY and without following a link, in one open: a
+        # check-then-copy left a window in which a symlink planted at the
+        # backup's name was followed by copy2 (codex leg, 2026-09-23). The old
+        # bytes are written from memory, so nothing is re-opened by name.
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        backup = cfg.with_name(cfg.name + ".bak." + stamp)
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
         n = 1
-        # lexists, not exists: a DANGLING symlink planted at the backup's name
-        # would otherwise be followed by copy2 (cursor leg, 2026-09-23)
-        while os.path.lexists(backup):   # two changes in one second: never
-            n += 1                        # overwrite an earlier backup
-            backup = cfg.with_name("%s.bak.%s-%d" % (cfg.name, stamp, n))
+        while True:
+            backup = cfg.with_name(cfg.name + ".bak." + stamp
+                                   + ("" if n == 1 else "-%d" % n))
+            try:
+                bfd = os.open(str(backup), flags, 0o600)
+                break
+            except FileExistsError:
+                n += 1                    # never overwrite an earlier backup
+                if n > 1000:
+                    print("refused: backup failed (no free backup name); nothing written")
+                    return 1
+            except OSError as exc:
+                print("refused: backup failed (%s); nothing written" % (exc,))
+                return 1
         try:
-            shutil.copy2(cfg, backup)
-            if backup.read_bytes() != raw:
-                raise OSError("backup does not match the original")
+            with os.fdopen(bfd, "wb") as bfh:
+                bfh.write(raw)
+                bfh.flush()
+                os.fsync(bfh.fileno())
+            shutil.copystat(cfg, backup, follow_symlinks=False)
         except OSError as exc:
             print("refused: backup failed (%s); nothing written" % (exc,))
             return 1

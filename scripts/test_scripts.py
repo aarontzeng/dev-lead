@@ -2922,6 +2922,21 @@ def test_config_effort_write(tmp):
     for bak in cfgdir.glob("config.toml.bak.*"):
         bak.unlink()
 
+    # ...nor a link to an EXISTING file: the backup is opened O_EXCL|O_NOFOLLOW
+    # in one step, so no name that already exists is ever written through
+    victim2 = tmp / "victim2.txt"
+    victim2.write_text("KEEP ME\n")
+    cfg.write_text(original)
+    now3 = _dt2.now()
+    for sec in range(0, 6):
+        link = cfgdir / ("config.toml.bak." + (now3 + _td2(seconds=sec)).strftime("%Y%m%d-%H%M%S"))
+        link.symlink_to(victim2)
+    out = ce("--yes")
+    check("config-effort: a backup-name link to a real file is never written through",
+          out.returncode == 0 and victim2.read_text() == "KEEP ME\n", out.stdout)
+    for bak in cfgdir.glob("config.toml.bak.*"):
+        bak.unlink()
+
     # a value spanning lines is not guessed at, and nothing is written
     tq = chr(34) * 3
     spanning = 'model_reasoning_effort = %s\nhigh\n%s\n' % (tq, tq)
@@ -2968,7 +2983,7 @@ def test_config_effort_write(tmp):
     # a roster effort that is not a plain word must not reach the file: a quote
     # or newline would inject further TOML settings
     cfg.write_text(original)
-    for bad in ('medium"\nother_setting = "x', "high'", "me dium", "HIGH", ""):
+    for bad in ('medium"\nother_setting = "x', "high'", "me dium", "HIGH", "", "medium\n"):
         doc_bad = _live_roster()
         doc_bad["rounds"]["r1"]["review"]["codex"]["effort"] = bad
         _write_doc(rpath, doc_bad)
