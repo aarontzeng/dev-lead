@@ -236,12 +236,27 @@ def _emit(t):
 cmd = r.get("cli", spec["cli"]) + " " + " ".join(_emit(t) for t in argv)
 frame = r.get("prompt_frame")
 if frame:
-    # The brief is a LENS: wrap it in the suite's framing first, then feed the
-    # framed prompt on stdin. The builder refuses an empty lens, an unknown
-    # placeholder or an unreadable HEAD, and the && stops the paid run.
-    cmd = ('python3 %s --base %s --target %s < "$RUN_DIR/prompt.md" > "$RUN_DIR/framed-prompt.md" && %s < "$RUN_DIR/framed-prompt.md"'
-           % (shlex.quote(os.path.join(os.environ["HERE"], frame)),
-              shlex.quote(os.environ.get("BASE", "")), shlex.quote(os.environ.get("TARGET", "")), cmd))
+    # The brief is a LENS: wrap it in this adapter's framing first, then hand
+    # the leg the FRAMED prompt, the same way it would have read the brief. The
+    # builder refuses an empty lens, an unknown placeholder or an unreadable
+    # HEAD, and the && stops the paid run.
+    builder = "python3 %s --adapter %s --base %s --target %s" % (
+        shlex.quote(os.path.join(os.environ["HERE"], frame)), shlex.quote(a),
+        shlex.quote(os.environ.get("BASE", "")), shlex.quote(os.environ.get("TARGET", "")))
+    if r.get("prompt_evidence"):
+        # A leg that cannot run git reads the diff and the base-side files the
+        # builder materializes here -- under RUN_DIR, never in the frozen tree.
+        builder += ' --evidence "$RUN_DIR/evidence"'
+    if r["prompt_delivery"] == "argv":
+        cmd = cmd.replace(OURS[0], '"$(cat "$RUN_DIR/framed-prompt.md")"')
+    else:
+        cmd += ' < "$RUN_DIR/framed-prompt.md"'
+    if "{TARGET}" not in " ".join(r["argv"]):
+        # The leg runs in its cwd (opencode). The frame names BASE..HEAD of the
+        # --target, so the leg must run THERE, not wherever the lead happens to
+        # be: a subshell, so the caller's own cwd is left alone under eval.
+        cmd = "( cd %s && %s )" % (shlex.quote(os.environ.get("TARGET", "")), cmd)
+    cmd = '%s < "$RUN_DIR/prompt.md" > "$RUN_DIR/framed-prompt.md" && %s' % (builder, cmd)
 elif r["prompt_delivery"] == "stdin":
     cmd += ' < "$RUN_DIR/prompt.md"'
 
@@ -318,7 +333,9 @@ pre = []
 if delivery != "prompt_file":
     run_dir = os.environ.get("RUN_DIR_ARG", "")
     if run_dir:
-        pre.append("export RUN_DIR=%s" % shlex.quote(run_dir))
+        # Absolute, because a framed leg that runs in its own cwd reads
+        # "$RUN_DIR/framed-prompt.md" after a `cd` into the target.
+        pre.append("export RUN_DIR=%s" % shlex.quote(os.path.abspath(run_dir)))
     else:
         # Measured 2026-09-14: a prefix assignment LOOKS right and is not.
         print("# RUN_DIR must be exported on its own line before this command. "

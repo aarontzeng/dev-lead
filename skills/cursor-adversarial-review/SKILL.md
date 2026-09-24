@@ -60,6 +60,20 @@ cd "$REVIEW_TARGET_DIR" && \
     "$(cat "$RUN_DIR/prompt.md")" > "$RUN_DIR/review.json" 2> "$RUN_DIR/review.err"
 ```
 
+**The suite's framing is OPTIONAL on this leg.** The codex frame, copied as
+[`references/adversarial-framing.md`](references/adversarial-framing.md),
+works here because ask mode can run read-only git. Measured on three frozen
+targets with known answers, three runs per arm (grok-4.7-medium): the plain
+brief 11, the frame 12, and slower -- inside the noise, so it is not wired
+into `leg-cmd.sh`. To use it, put the FRAMED prompt where the launch reads the
+brief:
+
+```bash
+DEV_LEAD=${DEV_LEAD_ROOT:-$(ls -d "$HOME"/.claude/plugins/cache/dev-lead/dev-lead/* 2>/dev/null | sort -V | tail -1)}
+python3 "$DEV_LEAD/scripts/review-prompt.py" --adapter cursor --base "$BASE" \
+  --target "$REVIEW_TARGET_DIR" < lens.md > "$RUN_DIR/prompt.md"
+```
+
 Launch under the host's background mechanism. Keep stdout as the JSON audit
 record and stderr separate; mixing them makes a failed launch look like a
 malformed successful response.
@@ -114,9 +128,11 @@ already made, ask what the tests do not enumerate, forbid praise. Include the
 evidence gate with unguessable anchors — per file: line count + verbatim last
 line; per claim: quoted code; `NOT REACHED` acceptable, HOLDS-without-quote
 not. Ask mode can satisfy it: a line count and a last line are READ, not
-executed. Adapter specifics: state that ask mode cannot run or edit anything, so evidence is
-quoted file content, and any confirmation needing execution must be named as
-an exact command for the lead to run; forbid MCP and web tools — the tree,
+executed. Adapter specifics: state that the review is read-only -- no edits, no
+tests or builds -- so evidence is quoted file content or read-only git output
+(ask mode does run shell commands, measured; whether it would refuse a writing
+one is unverified, so the post-run bracket stays), and any confirmation needing
+execution must be named as an exact command for the lead to run; forbid MCP and web tools — the tree,
 the embedded diff, and the prompt are the complete context.
 
 ## Verify and report

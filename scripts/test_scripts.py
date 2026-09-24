@@ -2361,6 +2361,8 @@ def test_leg_cmd():
     2026-09-08 session, and each is contradicted by data/launch.json.
     """
     script = SCRIPTS / "leg-cmd.sh"
+    # opencode review is framed since 0.6.30: every render names base and target.
+    OC = ["--base", "abc", "--target", "/tmp/leg-cmd-frozen"]
     check("leg-cmd: script exists", script.is_file())
     if not script.is_file():
         return
@@ -2399,7 +2401,7 @@ def test_leg_cmd():
               f"stderr={r.stderr!r}")
 
     r = subprocess.run([str(script), "agy", "review", "--model",
-                        "gemini-3.8-flash-medium", "--target", "/tmp/x"],
+                        "gemini-3.8-flash-medium", "--base", "abc", "--target", "/tmp/x"],
                        capture_output=True, text=True)
     check("leg-cmd: renders the correct agy spelling", r.returncode == 0, r.stderr)
     check("leg-cmd: model reaches the command",
@@ -2413,7 +2415,7 @@ def test_leg_cmd():
     # model name through raw, which eval would have executed.
     for argv, needle in (
         (["cursor", "review", "--model", "x`id`y"], "'x`id`y'"),
-        (["agy", "review", "--model", "gemini-3.8-flash-medium",
+        (["agy", "review", "--model", "gemini-3.8-flash-medium", "--base", "abc",
           "--target", '/tmp/a";touch /tmp/PWNED;"b'], "touch /tmp/PWNED"),
     ):
         r = subprocess.run([str(script), *argv], capture_output=True, text=True)
@@ -2436,8 +2438,8 @@ def test_leg_cmd():
           r.returncode == 0 and "codex exec -C " in out and "-s read-only" in out
           and "-c model_reasoning_effort=xhigh" in out, r.stdout + r.stderr)
     check("leg-cmd: codex review frames the brief before the paid run, chained",
-          "codex-review-prompt.py --base abc123 --target " in out
-          and out.index("codex-review-prompt.py") < out.index("codex exec")
+          "review-prompt.py --adapter codex --base abc123 --target " in out
+          and out.index("review-prompt.py") < out.index("codex exec")
           and '> "$RUN_DIR/framed-prompt.md" && codex exec' in out, out)
     check("leg-cmd: codex review reads the framed prompt from stdin after --",
           out.rstrip().endswith('-- - < "$RUN_DIR/framed-prompt.md"'), out)
@@ -2497,6 +2499,158 @@ def test_leg_cmd():
           and "{{" not in real.stdout and not real.stdout.startswith("<!--")
           and real.stdout.rstrip().endswith("plain text: no bold, no heading, no backticks."),
           real.stderr + real.stdout[-300:])
+
+    # 0.6.30: one builder for every framed leg, each adapter its own framing.
+    gen = SCRIPTS / "review-prompt.py"
+    compat = subprocess.run([sys.executable, str(builder), "--base", "abc", "--target", str(SCRIPTS.parent)],
+                            input="my lens", capture_output=True, text=True)
+    direct = subprocess.run([sys.executable, str(gen), "--adapter", "codex", "--base", "abc",
+                             "--target", str(SCRIPTS.parent)], input="my lens", capture_output=True, text=True)
+    check("review-prompt: the codex-review-prompt.py name still builds the codex frame, byte for byte",
+          compat.returncode == 0 and compat.stdout == direct.stdout and direct.stdout, compat.stderr)
+    for adapter in ("opencode", "cursor"):
+        got = subprocess.run([sys.executable, str(gen), "--adapter", adapter, "--base", "abc",
+                              "--target", str(SCRIPTS.parent)], input="the lens", capture_output=True, text=True)
+        check("review-prompt: the shipped %s frame builds" % adapter,
+              got.returncode == 0 and "the lens" in got.stdout and "{{" not in got.stdout
+              and got.stdout.rstrip().endswith("no backticks.") and not got.stdout.startswith("<!--"),
+              got.stderr + got.stdout[-200:])
+    for bad in ("../codex", "Codex", "", "claude"):
+        got = subprocess.run([sys.executable, str(gen), "--adapter", bad, "--base", "abc",
+                              "--target", str(SCRIPTS.parent)], input="lens", capture_output=True, text=True)
+        check("review-prompt: adapter %r without a shipped frame is refused" % bad,
+              got.returncode != 0 and not got.stdout, got.stderr)
+    try:
+        crp.build("x {{LENS}}", "b", "h", "l", evidence="/e")
+        refused = False
+    except ValueError as exc:
+        refused = "never read" in str(exc)
+    check("review-prompt: --evidence for a frame without {{EVIDENCE}} is refused", refused)
+
+    # The agy frame's evidence: what a leg without a shell reads instead of git.
+    with tempfile.TemporaryDirectory() as td:
+        repo = Path(td) / "repo"
+        make_repo(repo, commits=2)
+        base = git(repo, "rev-parse", "HEAD").stdout.strip()
+        git(repo, "mv", "f1.txt", "renamed.txt")   # a pure rename: git would list only the new path
+        (repo / "f0.txt").write_text("changed\n")
+        (repo / "added.txt").write_text("new\n")
+        (repo / "sub").mkdir()
+        (repo / "sub" / "bin.dat").write_bytes(b"\x00\x01binary")
+        git(repo, "rm", "-q", ".gitignore")
+        git(repo, "add", "-A")
+        git(repo, "commit", "-qm", "the change")
+        head = git(repo, "rev-parse", "HEAD").stdout.strip()
+        run_dir = Path(td) / "run"
+        run_dir.mkdir()
+        ev = run_dir / "evidence"
+        nov = subprocess.run([sys.executable, str(gen), "--adapter", "agy", "--base", base, "--target", str(repo)],
+                             input="lens", capture_output=True, text=True)
+        check("review-prompt: the agy frame without --evidence is refused",
+              nov.returncode != 0 and "--evidence" in nov.stderr and not nov.stdout, nov.stderr)
+        got = subprocess.run([sys.executable, str(gen), "--adapter", "agy", "--base", base, "--target", str(repo),
+                              "--evidence", str(ev)], input="the lens", capture_output=True, text=True)
+        check("review-prompt: the agy frame builds and names the evidence directory",
+              got.returncode == 0 and str(ev) in got.stdout and "{{" not in got.stdout
+              and ("%s..%s" % (base, head)) in got.stdout, got.stderr)
+        check("review-prompt: DIFF.patch is the range's diff",
+              (ev / "DIFF.patch").read_bytes()
+              == subprocess.run(["git", "-C", str(repo), "diff", "--no-textconv", "--no-ext-diff", "--no-color",
+                                 base, head], capture_output=True).stdout)
+        check("review-prompt: base/ holds a changed file's BASE bytes",
+              (ev / "base" / "f0.txt").read_text() == "content 0\n")
+        check("review-prompt: base/ holds a deleted file too, and nothing for an added one",
+              (ev / "base" / ".gitignore").is_file() and not (ev / "base" / "added.txt").exists()
+              and not (ev / "base" / "sub").exists())
+        check("review-prompt: a renamed file's OLD path is materialized (renames are split, not followed)",
+              (ev / "base" / "f1.txt").is_file() and (ev / "base" / "f1.txt").read_text() == "content 1\n"
+              and "renamed.txt\t- -\t100644 " in (ev / "BLOBS.txt").read_text())
+        blobs = (ev / "BLOBS.txt").read_text()
+        head_blob = git(repo, "rev-parse", "%s:sub/bin.dat" % head).stdout.strip()
+        check("review-prompt: BLOBS.txt carries both sides' ids, '-' where a side is absent",
+              ("sub/bin.dat\t- -\t100644 %s" % head_blob) in blobs
+              and ".gitignore\t100644 " in blobs and "\t- -\n" in blobs, blobs)
+        check("review-prompt: COMMITS.txt lists the range",
+              (ev / "COMMITS.txt").read_text().strip() == "%s the change" % head)
+        modes = [os.stat(os.path.join(r, n)).st_mode for r, ds, fs in os.walk(ev) for n in ds + fs] + [ev.stat().st_mode]
+        check("review-prompt: the evidence is read-only for the whole run",
+              modes and all(not (m & 0o222) for m in modes), [oct(m) for m in modes])
+        again = subprocess.run([sys.executable, str(gen), "--adapter", "agy", "--base", base, "--target", str(repo),
+                                "--evidence", str(ev)], input="lens", capture_output=True, text=True)
+        check("review-prompt: evidence that already has content is refused, and left as it was",
+              again.returncode != 0 and "fresh run directory" in again.stderr
+              and (ev / "DIFF.patch").is_file(), again.stderr)
+        inside = subprocess.run([sys.executable, str(gen), "--adapter", "agy", "--base", base,
+                                 "--target", str(repo), "--evidence", str(repo / "ev")],
+                                input="lens", capture_output=True, text=True)
+        check("review-prompt: evidence inside the frozen target is refused and nothing is written there",
+              inside.returncode != 0 and "inside the frozen target" in inside.stderr
+              and not (repo / "ev").exists(), inside.stderr)
+        broken = run_dir / "broken"
+        bad_base = subprocess.run([sys.executable, str(gen), "--adapter", "agy", "--base", "no-such-rev",
+                                   "--target", str(repo), "--evidence", str(broken)],
+                                  input="lens", capture_output=True, text=True)
+        check("review-prompt: a failed materialization leaves no half-written evidence behind",
+              bad_base.returncode != 0 and not bad_base.stdout and not broken.exists(), bad_base.stderr)
+        for root, dirs, files in os.walk(ev):
+            os.chmod(root, 0o755)
+
+    # The framed launches leg-cmd emits for opencode and agy (0.6.30).
+    with tempfile.TemporaryDirectory() as td, tempfile.TemporaryDirectory() as rd:
+        r = subprocess.run([str(script), "opencode", "review", "--model", "opencode/x", "--effort", "high",
+                            "--base", "abc", "--target", td, "--run-dir", rd], capture_output=True, text=True)
+        cmd = r.stdout.strip().splitlines()[-1] if r.stdout.strip() else ""
+        check("leg-cmd: opencode review frames the brief, then runs the leg INSIDE --target in a subshell",
+              r.returncode == 0 and "review-prompt.py --adapter opencode --base abc --target " in cmd
+              and ("&& ( cd %s && opencode run " % td) in cmd
+              and cmd.endswith('< "$RUN_DIR/framed-prompt.md" )'), cmd)
+        r = subprocess.run([str(script), "agy", "review", "--model", "gemini-3.8-flash-high",
+                            "--base", "abc", "--target", td, "--run-dir", rd], capture_output=True, text=True)
+        cmd = r.stdout.strip().splitlines()[-1] if r.stdout.strip() else ""
+        check("leg-cmd: agy review materializes evidence and grants it with a second --add-dir",
+              r.returncode == 0 and '--adapter agy' in cmd and '--evidence "$RUN_DIR/evidence"' in cmd
+              and ('--add-dir %s --add-dir "$RUN_DIR/evidence"' % td) in cmd, cmd)
+        check("leg-cmd: agy reads the FRAMED prompt, never the bare brief",
+              '-p "$(cat "$RUN_DIR/framed-prompt.md")"' in cmd
+              and '"$(cat "$RUN_DIR/prompt.md")"' not in cmd, cmd)
+        check("leg-cmd: agy review has room for the frame's 15-minute budget",
+              "--print-timeout 20m0s" in cmd, cmd)
+    r = subprocess.run([str(script), "opencode", "review", "--model", "opencode/x", "--effort", "high",
+                        "--target", "/tmp/x"], capture_output=True, text=True)
+    check("leg-cmd: opencode review without --base is refused",
+          r.returncode != 0 and "--base" in r.stderr and not r.stdout, r.stderr)
+    with tempfile.TemporaryDirectory() as td:
+        r = subprocess.run([str(script), "opencode", "review", "--model", "opencode/x", "--effort", "high",
+                            "--base", "abc", "--target", "/tmp/x", "--run-dir", "rel-run"],
+                           capture_output=True, text=True, cwd=td)
+        check("leg-cmd: a relative --run-dir is exported absolute (the framed leg reads it after cd)",
+              ("export RUN_DIR=%s" % os.path.join(os.path.realpath(td), "rel-run")) in r.stdout
+              or ("export RUN_DIR=%s" % os.path.join(td, "rel-run")) in r.stdout, r.stdout)
+
+    # Executed, not asserted on text: the framed opencode leg really runs in the
+    # target and reads the framed prompt, and the caller's cwd is left alone.
+    with tempfile.TemporaryDirectory() as td:
+        tgt = Path(td) / "frozen"
+        shas = make_repo(tgt, commits=2)
+        rdir = Path(td) / "run"
+        rdir.mkdir()
+        (rdir / "prompt.md").write_text("THE LENS\n")
+        fake = Path(td) / "bin"
+        fake.mkdir()
+        (fake / "opencode").write_text('#!/bin/sh\necho "CWD=$(pwd)"\ngrep -c "THE LENS" && true\n')
+        (fake / "opencode").chmod(0o755)
+        emitted = subprocess.run([str(script), "opencode", "review", "--model", "opencode/x", "--effort", "high",
+                                  "--base", shas[0], "--target", str(tgt), "--run-dir", str(rdir)],
+                                 capture_output=True, text=True).stdout
+        out = subprocess.run(["bash", "-c", 'cd "%s" && eval "$(cat)"; echo "AFTER=$(pwd)"' % td],
+                             input=emitted, capture_output=True, text=True,
+                             env=dict(os.environ, PATH="%s:%s" % (fake, os.environ["PATH"])))
+        framed = (rdir / "framed-prompt.md").read_text() if (rdir / "framed-prompt.md").exists() else ""
+        check("leg-cmd: the framed opencode leg runs in the target and reads the framed lens",
+              ("CWD=%s" % tgt) in out.stdout and "\n1\n" in out.stdout + "\n"
+              and ("%s..%s" % (shas[0], shas[1])) in framed, out.stdout + out.stderr)
+        check("leg-cmd: ...and the caller's own cwd is unchanged after eval",
+              ("AFTER=%s" % td) in out.stdout, out.stdout)
 
     # The banner gating below is the config_only mechanism, which no shipped
     # adapter uses since 0.6.28: run it against the pre-0.6.28 codex fixture.
@@ -2563,7 +2717,7 @@ def test_leg_cmd():
     # blocked this account's standing opencode default one day after it was set.
     r = subprocess.run([str(script), "opencode", "review", "--model",
                         "openrouter/nvidia/nemotron-3.5-lightning:free",
-                        "--effort", "high"], capture_output=True, text=True)
+                        "--effort", "high", *OC], capture_output=True, text=True)
     check("leg-cmd: another provider's qualified id is accepted",
           r.returncode == 0, r.stderr)
     check("leg-cmd: and reaches the command UNCHANGED",
@@ -2584,7 +2738,7 @@ def test_leg_cmd():
     # carrying none of the lens asked for. That is the false green the four-leg
     # method exists to prevent, and one assertion blocks all four.
     r = subprocess.run([str(script), "opencode", "review", "--model",
-                        "opencode/x", "--effort", "high",
+                        "opencode/x", "--effort", "high", *OC,
                         "--run-dir", "/tmp/leg-cmd-test"],
                        capture_output=True, text=True)
     lines = [l for l in r.stdout.splitlines() if l.strip()]
@@ -2592,7 +2746,7 @@ def test_leg_cmd():
           bool(lines) and lines[0] == "export RUN_DIR=/tmp/leg-cmd-test", r.stdout)
     check("leg-cmd: the brief assertion sits between export and command",
           len(lines) >= 3 and lines[1].startswith("test ")
-          and "test -s" in lines[1] and lines[2].startswith("opencode run"),
+          and "test -s" in lines[1] and "opencode run" in lines[2],
           r.stdout)
     # && rather than `exit 1`: this output is documented for `eval "$(...)"`,
     # and an exit inside eval kills the CALLER's interactive shell.
@@ -2600,7 +2754,7 @@ def test_leg_cmd():
           "exit 1" not in r.stdout and lines[1].rstrip().endswith("&&"), r.stdout)
 
     r = subprocess.run([str(script), "opencode", "review", "--model",
-                        "opencode/x", "--effort", "high"],
+                        "opencode/x", "--effort", "high", *OC],
                        capture_output=True, text=True)
     check("leg-cmd: warns that RUN_DIR must be exported, not prefix-assigned",
           "prefix assignment" in r.stderr, f"stderr={r.stderr!r}")
@@ -2611,12 +2765,12 @@ def test_leg_cmd():
     # 2026-09-15.
     for bad in ("opencode/", "/x", "a//b"):
         r = subprocess.run([str(script), "opencode", "review", "--model", bad,
-                            "--effort", "high"], capture_output=True, text=True)
+                            "--effort", "high", *OC], capture_output=True, text=True)
         check("leg-cmd: refuses the malformed id %r" % bad, r.returncode != 0, r.stdout)
         check("leg-cmd: and says it is the empty segment, not a missing provider",
               "EMPTY path segment" in r.stderr, f"stderr={r.stderr!r}")
     r = subprocess.run([str(script), "opencode", "review", "--model",
-                        "openrouter/nvidia/x:free", "--effort", "high"],
+                        "openrouter/nvidia/x:free", "--effort", "high", *OC],
                        capture_output=True, text=True)
     check("leg-cmd: a well-formed two-segment provider id is still accepted",
           r.returncode == 0, r.stderr)
@@ -2643,7 +2797,7 @@ def test_leg_cmd():
     with tempfile.TemporaryDirectory() as td:
         emitted = subprocess.run(
             [str(script), "opencode", "review", "--model", "opencode/x",
-             "--effort", "high", "--run-dir", td],
+             "--effort", "high", *OC, "--run-dir", td],
             capture_output=True, text=True).stdout.splitlines()
         probe = "\n".join(emitted[:-1] + ["echo RAN"])
         brief = Path(td) / "prompt.md"
@@ -2669,7 +2823,8 @@ def test_leg_cmd():
         # wrong half: no errexit -> the shell survives; errexit -> it stops,
         # which is what a script should do when its brief is missing.
         brief.unlink(missing_ok=True)
-        emit = "bash %s opencode review --model opencode/x --effort high --run-dir %s 2>/dev/null" % (script, td)
+        emit = ("bash %s opencode review --model opencode/x --effort high --base abc --target %s --run-dir %s 2>/dev/null"
+                % (script, OC[-1], td))
         for flags, label, sentinel_expected in ((["-c"], "no errexit", True),
                                                 (["-c"], "errexit", False)):
             pre = "set -e; " if label == "errexit" else ""
@@ -2691,7 +2846,7 @@ def test_leg_cmd():
     # real /prompt.md needs root and does not belong in a test suite, and the
     # script's actual product IS the emitted string, so that is what to assert.
     r = subprocess.run([str(script), "opencode", "review", "--model",
-                        "opencode/x", "--effort", "high", "--run-dir", "/tmp/x"],
+                        "opencode/x", "--effort", "high", *OC, "--run-dir", "/tmp/x"],
                        capture_output=True, text=True)
     guard_line = [l for l in r.stdout.splitlines() if l.startswith("test ")][0]
     check("leg-cmd: the guard requires RUN_DIR itself, not only the file",
@@ -2738,7 +2893,7 @@ def test_leg_cmd():
     check("leg-cmd: every --add-dir reaches the command, quoted, before the prompt",
           "--add-dir '/ctx one' --add-dir /ctx2 \"$(cat" in cmd, cmd)
     r = subprocess.run([str(script), "opencode", "review", "--model", "opencode/x",
-                        "--effort", "high", "--add-dir", "/ctx"], capture_output=True, text=True)
+                        "--effort", "high", *OC, "--add-dir", "/ctx"], capture_output=True, text=True)
     check("leg-cmd: opencode refuses --add-dir instead of dropping it", r.returncode != 0, r.stdout)
     check("leg-cmd: ...and says to put the context inside the target",
           "INTO" in r.stderr and "leg-log-check" in r.stderr, r.stderr)
@@ -2750,7 +2905,7 @@ def test_leg_cmd():
     check("leg-cmd: an --add-dir value that reads as a flag is refused",
           r.returncode != 0 and "--yolo" not in r.stdout, r.stdout + r.stderr)
     r = subprocess.run([str(script), "agy", "review", "--model", "gemini-3.8-flash-medium",
-                        "--target", "/tmp/x", "--add-dir", "/ctx"], capture_output=True, text=True)
+                        "--base", "abc", "--target", "/tmp/x", "--add-dir", "/ctx"], capture_output=True, text=True)
     check("leg-cmd: an adapter without add_dir_flag refuses (agy too)", r.returncode != 0, r.stdout)
     r = subprocess.run([str(script)], capture_output=True, text=True)
     check("leg-cmd: the usage line says options are per adapter",

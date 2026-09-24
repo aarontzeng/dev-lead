@@ -239,19 +239,40 @@ the launch assertion — captured at launch time the check compares HEAD
 against itself and can only pass (see the same note in
 `claude-adversarial-review`).
 
+**Since 0.6.30 the brief is a LENS inside this leg's framing**
+([`references/adversarial-framing.md`](references/adversarial-framing.md)):
+the frame carries the general discipline -- read the base revision, label
+inherited defects instead of dropping them, a per-claim HOLDS / BROKEN /
+NOT REACHED, one plain verdict line -- and your brief says what this round is
+about. Adopted on measurement: on three frozen targets with known answers,
+three runs per arm, the plain brief found 4 of the known defects and this
+frame 7; the plain brief answered broken claims "HOLDS" ([runtime
+file](references/opencode-runtime.md), calibration table).
+
 ```bash
 REVIEW_HEAD=$(git -C "$REVIEW_TARGET_DIR" rev-parse HEAD)   # at freeze time
 
 # ... later, at launch (RUN_DIR was created in the boundary step above):
-# Write the prompt to "$RUN_DIR/prompt.md" in its own FOREGROUND step.
-
-cd "$REVIEW_TARGET_DIR" && \
-  [ "$(git rev-parse HEAD)" = "$REVIEW_HEAD" ] && \
-  opencode run --print-logs --log-level INFO \
-    -m opencode/<free-model> \
-    --variant <effort> \
-    < "$RUN_DIR/prompt.md" > "$RUN_DIR/review.log" 2>&1
+# Write the lens to "$RUN_DIR/prompt.md" in its own FOREGROUND step.
+DEV_LEAD=${DEV_LEAD_ROOT:-$(ls -d "$HOME"/.claude/plugins/cache/dev-lead/dev-lead/* 2>/dev/null | sort -V | tail -1)}
+[ "$(git -C "$REVIEW_TARGET_DIR" rev-parse HEAD)" = "$REVIEW_HEAD" ] && \
+  eval "$("$DEV_LEAD/scripts/leg-cmd.sh" opencode review --model opencode/<free-model> --effort <effort> \
+            --base "$BASE" --target "$REVIEW_TARGET_DIR" --run-dir "$RUN_DIR")" > "$RUN_DIR/review.log" 2>&1
 ```
+
+What it runs, spelled out (for a lead without the script): the builder, then
+the leg inside the frozen target, in a subshell so your own cwd is kept:
+
+```bash
+python3 "$DEV_LEAD/scripts/review-prompt.py" --adapter opencode --base "$BASE" \
+  --target "$REVIEW_TARGET_DIR" < "$RUN_DIR/prompt.md" > "$RUN_DIR/framed-prompt.md" && \
+( cd "$REVIEW_TARGET_DIR" && opencode run --print-logs --log-level INFO \
+    -m opencode/<free-model> --variant <effort> \
+    < "$RUN_DIR/framed-prompt.md" ) > "$RUN_DIR/review.log" 2>&1
+```
+
+`$RUN_DIR` must be absolute (leg-cmd exports it that way) and outside the
+target; the lock-down `opencode.json` must already be in the target.
 
 - **`--variant` is the effort knob** — this family's `--effort`. Pass it
   explicitly; omitting it takes the provider default, and there is no
@@ -434,6 +455,10 @@ git -C "$REVIEW_TARGET_DIR" status --porcelain=v1 # -C so it's the TARGET, not y
 
 ## Writing the prompt
 
+The prompt you write is the LENS; the framing (above) already opens with the
+falsify-don't-confirm stance, asks for the base revision, the per-claim
+answers and the verdict line. Put into the lens what only this round knows:
+the claims, the surface you worry about, what the tests do not enumerate.
 Same red-team discipline as the other review skills — it matters more than
 the model. The short list, with this family's specifics:
 

@@ -36,8 +36,8 @@
     },
     "cursor": {
       "cli": "cursor-agent (Cursor CLI)",
-      "serves": ["GPT", "Claude", "Grok", "Kimi", "Composer", "unknown"],
-      "note": "paid pool, the widest adapter -- the pinned model decides the family; `auto` routes server-side and lands in unknown"
+      "serves": ["GPT", "Claude", "Grok", "Kimi", "Gemini", "Meta", "GLM", "Composer", "unknown"],
+      "note": "paid pool, the widest adapter -- the pinned model decides the family; `auto` routes server-side and lands in unknown. Collisions to check when substituting: cursor gemini-* is the Gemini family (agy's), muse-spark is Meta and glm is GLM (opencode's), claude-* and gpt-* are the claude and codex adapters' families"
     }
   },
   "families": {

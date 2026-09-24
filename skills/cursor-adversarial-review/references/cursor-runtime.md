@@ -9,10 +9,14 @@ load-bearing behaviors here were watched happening, not read about).
 ## Position in the fleet
 
 A **paid pool** (Cursor subscription) and the fleet's widest single adapter:
-one CLI serving **six families** — GPT (Codex/GPT-5.x tiers), Claude (Opus /
-Sonnet / Fable tiers), Grok (4.5/4.6 at several efforts), **Kimi
-(Moonshot)**, Cursor's in-house **Composer**, and `auto` (server-side
-routing, family unknown at dispatch). That width is the value: when a
+one CLI serving **nine families** — GPT (Codex/GPT-5.x tiers), Claude (Opus /
+Sonnet / Fable tiers), Grok (4.5/4.6/4.7 at several efforts), **Kimi
+(Moonshot)**, Gemini (3.x Flash), Meta (Muse Spark), GLM, Cursor's in-house
+**Composer**, and `auto` (server-side routing, family unknown at dispatch).
+Three of those are other adapters' families: a cursor `gemini-*` leg is the
+Gemini family agy fields, and `muse-spark-*` / `glm-*` are the Meta and GLM
+families opencode fields -- a substitution that swaps an adapter keeps the
+family, which is what the cross-family check reads (methodology.md §1). That width is the value: when a
 round's authorship has already spent two families, this adapter can usually
 still field a reviewer from a third — without installing another CLI.
 
@@ -64,7 +68,11 @@ through those entries; prefer ZDR-covered tiers for anything sensitive.
    words ("I'm in **Ask mode**, so I can't create or edit files") with no
    file created and a clean tree. Whether the edit tools are removed or
    declined is UNVERIFIED — treat ask mode as one layer and keep the
-   post-run bracket, as everywhere else.
+   post-run bracket, as everywhere else. **Ask mode RUNS shell commands**
+   (measured 2026-09-24: `git rev-parse HEAD` and `git show <base>:README.md`
+   both executed and returned the right output), so a frame's read-only git
+   works here. Whether a WRITING shell command is refused in ask mode is
+   UNVERIFIED: the post-run bracket, not the mode, is what catches it.
 
 ## Headless mechanics
 
@@ -116,9 +124,16 @@ treat any `mode 120000` line in a delegate's diff stat as a stop-and-look.
 
 ## Quota pools: two meters, and the CLI cannot read either (2026-08-30)
 
-The subscription meters TWO pools, visible only on the cursor.com dashboard —
-`Auto` (serves `auto` and `composer-*`) and `API` (every pinned named model:
-gpt/claude/grok/kimi tiers). `cursor-agent --help` exposes no usage/quota
+The subscription meters TWO pools, visible only on the cursor.com dashboard.
+Which model bills which pool, per Cursor's Models & Pricing page as the owner
+read it on 2026-09-24 (not measured here; prices change, so none are copied):
+the **Auto** pool serves Cursor's first-party models -- `auto`, `composer-*`
+and the **Grok** tiers (4.5/4.6/4.7 and their Fast twins) -- and the **API**
+pool serves the third-party named models: Claude, GPT (incl. the 5.6 tiers),
+Gemini 3.x, Muse Spark, Kimi and GLM. `auto` is a router: a first-party pick
+bills Auto, a third-party pick bills API. When a pool is exhausted the order is
+Auto (and Composer) → API → on-demand → blocked. The 2026-08-30 text here said
+the API pool served grok; that was wrong. `cursor-agent --help` exposes no usage/quota
 subcommand and `status` is auth-only, so **percent-remaining is not probeable
 from the CLI**. What IS probeable is exhaustion, because quota failure is loud
 (below): a cheap one-liner against the pool you intend to bill is the dispatch
@@ -168,6 +183,7 @@ quota width (not behavior) is expected to change with the plan.
 | 2026-09-07 | cursor/cursor-grok-4.6-**medium** | review (authorization-gate change across a backend + web UI, 8 posed claims) | **Fourth `-medium` round; the enumerate-well pattern held and produced the round's only unique DEFECT.** 333 s. Asked for a disagreement table over (tag × count × distinct accounts × carried × owner), it produced one and reported the row that mattered: the new document refusal SKIPPED a garbage `approvals` shape that the code path's equivalent gate refuses on, so a shape that blocks a code submit could still approve a document — and the ADR claimed the two agreed. Lead-verified; no other leg reached it. Also sole on a stale ADR list in the root README. One entry it labelled a disagreement was correctly reasoned to be agreement, and it said so rather than inflating it. Brief had asked it explicitly NOT to assign severities; it complied, which removed the one defect three prior rounds recorded. **Ruling refined: at `-medium`, give it the enumeration AND tell it severities are not its job — the output is then usable as-is.** |
 | 2026-09-08 | `cursor-grok-4.6-medium` (**first round in this adapter's new standing four-leg default**; effort is the model-name suffix, there is no flag) | review (a plugin change that moved delegate launch mechanics into a data file; brief: **is the data faithful to the repo's own skills, field by field**) | **The round's most valuable leg, and the value came entirely from the brief shape: it was the only one told to treat a data file as a claim about other files.** Six findings, five lead-verified against the sources, and all five were in a category no other leg touched. The change's author had written the suite's launch-mechanics data file from recall of six CLIs — and the premise of that very change was that his recall of launch mechanics is unreliable. This leg proved it: an invented agy review timeout (15m against a documented 10m), an agy **implement** launch with no write mode at all (`--mode accept-edits`, `--disable-slash-commands`, 20m all missing), an invented cursor `--force` with `--trust` dropped on a skill that forbids `--force` by name, grok missing the `--tools`/`--disallowed-tools`/`--deny` trio that IS its read-only boundary, and claude missing the MCP trim plus the wrong prompt delivery. Each finding quoted both sides with file:line. **Its one wrong finding is the instructive one**: it called codex's `--wait` a BLOCKING swallow-as-focus-text hazard, reasoning from "`--wait` appears nowhere else in this tree" plus the documented rule that unrecognised args become prompt text. Both premises true, conclusion false — `handleReviewCommand` declares `booleanOptions: ["json","background","wait"]`, which the leg never opened. **Ruling for the first round: dispatch it when the artifact under review makes claims ABOUT other artifacts (a data file, a spec, a doc citing code), which is the shape it did better than three other families; and when it argues from absence, go read the thing it did not.** |
 | 2026-09-14 | cursor/**kimi-k3-high** (first kimi round on this account) | review (C++ fix round on a reconciler + evidence ingress, 7 posed properties) | **Substituted in live for a free leg the lead had mis-launched, and out-enumerated the paid legs on the table questions.** ~2 min. Dispatched with the completeness/falsifiability brief the opencode leg would have had; the only change was the sandbox preamble. It self-directed two reads the brief did not name — the status enum and the REAL client's `get()` — rather than enumerating from the test mock, and that is what produced the round's most complete artifact: an 8-row outcome-x-branch table that correctly separated "fail-closed for currentness" from "still guesses SUPERSEDED vs EXPIRED", plus a test-x-mutation table naming which of the three claimed fixes has no test at all (the answer the brief asked for in those words). 5/5 lead-spot-checked citations exact. Converged with the grok leg on the two findings that became blocking. **One premise error, and it is the shape to watch: it reported items stuck in a reconciling state forever because the next scan filters on a pending-review value — but review state and currentness state are two separate fields (adjacent lines of the store's header) and the update call touches only the latter, so the filter never sees the flip.** A confident state-machine finding built on two field names it did not distinguish. Ruling: good table leg, cheap, fast; check any finding of its that depends on two similarly-named fields being the same field. **Footnote on why it was dispatched at all: the opencode leg it replaced was not down — the lead passed a bare model id where `-m` needs `opencode/<model>`, and the server-side `UnknownError` that produced reads exactly like a pool outage. The substitution was the right call for the round and the wrong diagnosis; see opencode-runtime.md.** |
+| 2026-09-24 | grok-4.7-medium | review — framing equivalence (ask mode, three frozen targets with known answers, three runs per arm) | Plain brief 11, the codex frame 12 of the known defects, and slower: inside the noise, so the frame ships as an OPTIONAL reference, not wired into leg-cmd (0.6.30). Ask mode ran `git show <base>:path` and `git rev-parse` for the frame. A gemini-3.8 arm was stopped when the API pool neared its cap — inconclusive, not a result. |
 
 First real review rounds append here, per the journal format — verified hit
 rates, not impressions.

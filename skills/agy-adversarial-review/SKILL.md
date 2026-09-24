@@ -119,20 +119,50 @@ both refusals confirmed, both leaving the leftover untouched.)
 
 ## Run it
 
-```bash
-RUN_DIR=$(mktemp -d "${TMPDIR:-/tmp}/agy-review.XXXXXX")
-# Write the prompt to "$RUN_DIR/prompt.md" in its own step.
-# Confirm this Gemini model is in the account catalogue; if not, pick an
-# available suffix variant. The first 3.7 Flash run is calibration.
-AGY_MODEL=gemini-3.7-flash-high
+**Since 0.6.30 the brief is a LENS inside this leg's framing**
+([`references/adversarial-framing.md`](references/adversarial-framing.md)),
+and the leg reads material it cannot fetch itself. agy in plan mode on a
+locked-down machine runs no git, so the builder materializes the range into
+`$RUN_DIR/evidence` -- `DIFF.patch`, `base/<path>` for every changed path that
+exists at the base, `BLOBS.txt` (mode and blob id on both sides), `COMMITS.txt`
+-- read-only, outside the frozen target, and a second `--add-dir` grants it.
+The frame also sets a 15-minute budget and caps the findings at 8: long briefs
+that pointed agy at many files ran into `--print-timeout` and returned partial
+output (runtime file). Adopted on measurement: three frozen targets with known
+answers, three runs per arm, the plain brief 3 and this frame 8 of the known
+defects, at a small false-positive cost (runtime file, calibration table).
 
-agy -p "$(cat "$RUN_DIR/prompt.md")" \
+```bash
+RUN_DIR=$(mktemp -d "${TMPDIR:-/tmp}/agy-review.XXXXXX")   # fresh per leg
+# Write the lens to "$RUN_DIR/prompt.md" in its own step.
+# Confirm this Gemini model is in the account catalogue; if not, pick an
+# available suffix variant.
+AGY_MODEL=gemini-3.8-flash-high
+BASE=$(git -C "$REVIEW_TARGET_DIR" merge-base origin/main HEAD)   # the span: see below
+DEV_LEAD=${DEV_LEAD_ROOT:-$(ls -d "$HOME"/.claude/plugins/cache/dev-lead/dev-lead/* 2>/dev/null | sort -V | tail -1)}
+eval "$("$DEV_LEAD/scripts/leg-cmd.sh" agy review --model "$AGY_MODEL" \
+  --base "$BASE" --target "$REVIEW_TARGET_DIR" --run-dir "$RUN_DIR")" > "$RUN_DIR/review.log" 2>&1
+```
+
+What it runs, spelled out (for a lead without the script):
+
+```bash
+python3 "$DEV_LEAD/scripts/review-prompt.py" --adapter agy --base "$BASE" \
+  --target "$REVIEW_TARGET_DIR" --evidence "$RUN_DIR/evidence" \
+  < "$RUN_DIR/prompt.md" > "$RUN_DIR/framed-prompt.md" && \
+agy -p "$(cat "$RUN_DIR/framed-prompt.md")" \
     --model "$AGY_MODEL" \
     --mode plan \
     --sandbox \
     --add-dir "$REVIEW_TARGET_DIR" \
-    --print-timeout 10m0s
+    --add-dir "$RUN_DIR/evidence" \
+    --print-timeout 20m0s
 ```
+
+The builder refuses an evidence directory that already has content -- give
+every leg a fresh `$RUN_DIR` -- and one inside the frozen target. The evidence
+is read-only for the whole run: `chmod -R u+w "$RUN_DIR/evidence"` before you
+clean it up.
 
 **`--disable-slash-commands` is deliberately absent here, and adding it back
 silently removes plan mode.** The CLI says so — `warning: --mode plan has no
@@ -149,8 +179,10 @@ Role-specific choices in that command:
   mode, **not a security boundary**, so the no-write intent is stated again
   in the prompt and verified in the repo afterward. It is also the layer
   `--disable-slash-commands` silently cancels (above) — never pass both.
-- **`--print-timeout 10m0s`** — a real review of a few files takes 5–10
-  minutes and the CLI default (5m0s) cuts it off mid-flight.
+- **`--print-timeout 20m0s`** — a framed review takes 3–7 minutes (measured
+  2026-09-24), a real review of a few files 5–10, and the CLI default (5m0s)
+  cuts it off mid-flight. 20 leaves room above the frame's 15-minute budget;
+  a run that hits the timeout returns PARTIAL output, which is not a review.
 - **Gemini model, effort omitted** — the current review default is
   `gemini-3.7-flash-high`, only when the account catalogue offers it. The
   `-high` suffix IS the effort; do not pass `--effort` (measured: omitting it

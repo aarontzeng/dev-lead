@@ -64,11 +64,15 @@
           "--sandbox",
           "--add-dir",
           "{TARGET}",
+          "--add-dir",
+          "$RUN_DIR/evidence",
           "--print-timeout",
-          "10m0s"
+          "20m0s"
         ],
         "prompt_delivery": "argv",
-        "verified": "2026-09-08 probed live"
+        "verified": "2026-09-08 probed live; framed with materialized evidence since 0.6.30 (equivalence test 2026-09-24, agy-runtime.md)",
+        "prompt_frame": "review-prompt.py",
+        "prompt_evidence": true
       },
       "implement": {
         "argv": [
@@ -100,6 +104,7 @@
     },
     "not_flags": [],
     "gotchas": [
+      "The review brief is the LENS: review-prompt.py wraps it in the agy framing and materializes the diff, the base-side files and the blob ids into \"$RUN_DIR/evidence\" (read-only, outside the target), which the second --add-dir grants. Give every leg a FRESH --run-dir: the builder refuses an evidence directory that already has content. Clean up with `chmod -R u+w \"$RUN_DIR/evidence\"` first.",
       "`--disable-slash-commands` makes `--mode plan` a no-op -- the CLI warns `--mode plan has no effect while slash command expansion is disabled`. Pick one; for a review leg keep plan mode.",
       "`--add-dir` is mandatory: the headless workspace root is agy's own scratch dir, not your cwd.",
       "The review role DROPS --disable-slash-commands (it makes --mode plan a no-op); the implement role KEEPS it. Do not carry one role's flag set to the other."
@@ -127,7 +132,7 @@
           "-"
         ],
         "prompt_delivery": "stdin",
-        "prompt_frame": "codex-review-prompt.py",
+        "prompt_frame": "review-prompt.py",
         "verified": "2026-09-23: exec path; prompt on stdin via `-- -` (a prompt starting with -s stays text, sandbox stays read-only; codex-cli 0.156.1); equivalence test vs the companion passed (codex-runtime.md)"
       },
       "implement": {
@@ -165,7 +170,7 @@
       }
     },
     "gotchas": [
-      "The review brief is the LENS: codex-review-prompt.py wraps it in the suite's adversarial framing (base revision, verdict line, per-claim answers). An empty brief is refused before codex starts.",
+      "The review brief is the LENS: review-prompt.py wraps it in the suite's adversarial framing (base revision, verdict line, per-claim answers). An empty brief is refused before codex starts.",
       "`-C` must name a directory inside a git repository; outside one codex prints `Not inside a trusted directory` and exits without reviewing.",
       "Fallback review path: the companion's `adversarial-review` -- no effort flag (config.toml decides), `--help` is parsed as focus text and runs a real review, and omitting `--base` reviews the clean working tree. Use it only when the exec path is unavailable, and say so in the report."
     ],
@@ -240,7 +245,8 @@
           "{EFFORT}"
         ],
         "prompt_delivery": "stdin",
-        "verified": "2026-09-08 probed live"
+        "verified": "2026-09-08 probed live; framed since 0.6.30 (equivalence test 2026-09-24, opencode-runtime.md)",
+        "prompt_frame": "review-prompt.py"
       },
       "implement": {
         "argv": [
@@ -270,6 +276,7 @@
     },
     "not_flags": [],
     "gotchas": [
+      "The review brief is the LENS: review-prompt.py wraps it in the opencode framing (skills/opencode-adversarial-review/references/adversarial-framing.md). --base and --target are required, and the emitted command runs the leg INSIDE --target, in a subshell -- the lock-down opencode.json must already be there.",
       "`-m` needs a PROVIDER-QUALIFIED id -- ANY provider: `opencode/<model>` for the native pool, `openrouter/<vendor>/<model>` or `google/<model>` for the others this CLI serves. Never prepend `opencode/` to an id that already names a provider. A bare model name is accepted by the CLI and then fails server-side with `UnknownError: Unexpected server error`, step=0, nothing read, exit 1 -- it reads exactly like a provider outage. Measured 2026-09-14: the identical model works with no `-m` at all (it is the default) and with `-m opencode/<model>`, and fails every time with `-m <model>`.",
       "The prompt goes on STDIN. An argv prompt over ~1-2 KB hangs before the session is created.",
       "`tokens.output=0` is a broken counter, not an empty run -- grep the log for your required section headers before discarding it.",
@@ -367,7 +374,7 @@
           "{\"mcpServers\":{}}"
         ],
         "prompt_delivery": "stdin",
-        "verified": "transcribed from the matching skill; not probed"
+        "verified": "2026-09-24 probed: plan mode, no MCP (19 runs, with a hand-added --effort high); read-only git commands run"
       },
       "implement": {
         "argv": [
@@ -384,15 +391,12 @@
     },
     "effort": {
       "mechanism": "none",
-      "note": "No effort concept; `--model` selects the tier and that is the whole depth control."
+      "note": "The suite passes no effort to claude, so the CLI's own default applies. The CLI DOES take `--effort <low|medium|high|xhigh|max>` (claude 2.1.281 --help; 19 headless plan-mode review runs at --effort high completed normally, 2026-09-24) -- before 0.6.30 this note said it had no effort concept, which was wrong. Wiring it in waits on role-scoped flag support in roster/leg-cmd: a flag on both roles would make `roster.py plan --implement claude=<model>` unlaunchable, since that override has no effort syntax."
     },
-    "not_flags": [
-      "--effort"
-    ],
     "gotchas": [
       "Never the cross-family reviewer for Claude-written work.",
       "Without --strict-mcp-config --mcp-config '{\"mcpServers\":{}}' the delegate loads the full MCP stack and the startup silence reads as a hang."
     ],
-    "verified": "transcribed from the matching skill; not probed"
+    "verified": "review probed 2026-09-24 (plan mode, --effort, no MCP); implement transcribed from the matching skill"
   }
 }

@@ -653,6 +653,13 @@ data:
 - `tokens.output=0` was retracted as a verdict after a run with that exact
   fingerprint contained a complete, verified review — grep for the report's
   section headers before discarding a run.
+- 2026-09-24, framing equivalence (muse-spark-1.3 on the paid contributor
+  route, xhigh; three frozen targets with known answers, three runs per arm): the plain skill brief found 4 of the known defects, the
+  adversarial frame 7. The plain brief answered a per-claim lens HOLDS on
+  claims that were broken; the frame's base-revision read and per-claim
+  answers are what changed that. Frame adopted as the default (0.6.30). The
+  free route rate-limited and timed out twice in the first batch; every
+  scored run is the paid twin, same family.
 
 ## A long review eats its own prompt — put the ask in a FILE
 

@@ -61,6 +61,10 @@ cd "$WORKTREE" && claude -p "$(cat "$RUN_DIR/task.md")" \
 - `--model` selects the tier. Pick by the same logic as any delegate:
   capability for the work, and never the same family as the reviewer that
   will check it.
+- `--effort <low|medium|high|xhigh|max>` exists too (claude 2.1.281; 19
+  headless plan-mode review runs at `high` completed normally, 2026-09-24).
+  The suite does not pass it yet, so the CLI's own default applies unless you
+  add it to the launch by hand; [`data/launch.json`](../../../data/launch.json) says why it is not wired.
 - Do **not** pass `--dangerously-skip-permissions`. `acceptEdits` was
   sufficient for real write work in testing; the bypass flag would also
   auto-approve things the standing rules forbid.
@@ -133,6 +137,7 @@ prompt anyway — belt and braces, at zero cost.
 |---|---|---|---|
 | 2026-08-30 | claude-sonnet-5 (subagent) | review | Repeat extra leg across several rounds, given the **test-quality** brief (are these tests able to fail? do they pin the contract or mirror the code?). Repeatedly the only leg to return anything on rounds where the defect-hunt legs came back clean — its findings were about the SUITE, which the other briefs structurally do not look at. Weak as a general defect hunter beside the frontier legs; strong and cheap in this one role. |
 | 2026-09-04 | claude (in-session subagent, execute-enabled) | **research, executing leg** (4 concurrency seams) | **The round's decisive result, and the argument for making "can this leg execute?" a first-class property of a research brief.** Three reading legs — two frontier models — found nothing here; this leg reproduced a cross-tenant content leak (two instances sharing one clone directory serve each other's documents; three individually-correct lines interacting), a fail-open duplicate write from one confirmation token, exact N× quota multiplication, and a silent permanent startup TOCTOU. Its own account of what execution bought is the useful part: the defect "is not in any line a reader would flag; it is in the interaction between three lines that individually look right", and a reader who verifies the guarding lock exists stops there. **Two disciplines worth requiring by name:** it deducted one finding as already-documented in the target's own SECURITY.md ("my contribution is that it now has a run"), and it reported a NEGATIVE result — audit-line shredding reproducible at 20 000 chars, then traced every caller and found the trigger unreachable today. A reading leg spotting the missing lock has every reason to file that as live. Chose in-session over `claude -p` and said why: race-hunting is tight iterate-observe-adjust work, and 5–15 min of silence per round buys nothing when the worktree is already cwd. |
+| 2026-09-24 | claude-opus-5-5 (`--effort high`, plan mode, no MCP) | review — framing equivalence (three frozen targets with known answers, three runs per arm) | **Plain skill brief 17/18, the adversarial frame 15/18** known-defect hits: the frame lost the unflagged-mode-change item in all three runs, tied the rest, and ran ~25% slower (mean 218 s vs 174 s). The only leg of the whole test (five adapters, ~90 runs) that found the configured-refspec item and the untested second `--no-textconv` site in EVERY run. Frame NOT adopted; this skill's brief stays (0.6.30). |
 
 ## For a foreign lead (codex or agy orchestrating)
 

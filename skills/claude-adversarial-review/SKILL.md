@@ -105,6 +105,14 @@ git diff --stat "$BASE" HEAD    # file list must match the change under review
 
 ## Writing the prompt
 
+**No suite framing on this leg — measured, not overlooked.** The frame that
+lifted the opencode and agy legs (and replaced codex's companion prompt) was
+run here too: three frozen targets with known answers, three runs per arm,
+claude-opus-5-5 at `--effort high`. The brief this section describes found
+17/18, the frame 15/18 and ran ~25% slower (runtime file, calibration
+table). So write the prompt below yourself; there is no `review-prompt.py`
+frame for claude.
+
 The flag makes it read-only; **only the prompt makes it adversarial**. A
 bare "review this diff" gets a summary with compliments, worth nothing as a
 gate. Same discipline as every review leg:

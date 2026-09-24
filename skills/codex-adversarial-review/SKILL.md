@@ -114,7 +114,8 @@ used=$(sed -n 's/^reasoning effort: //p' "$RUN_DIR/review.log" | head -1)
 - `$RUN_DIR` lives outside the frozen worktree; `$BASE`, `$REVIEW_HEAD` and
   `$REVIEW_TARGET_DIR` are set as above. Quote `$MODEL`: an unquoted `<…>`
   placeholder is a shell redirection.
-- The builder ([`scripts/codex-review-prompt.py`](../../scripts/codex-review-prompt.py)) substitutes in one pass, so a
+- The builder ([`scripts/review-prompt.py`](../../scripts/review-prompt.py), shared by every framed leg
+  since 0.6.30; `codex-review-prompt.py` is its codex name) substitutes in one pass, so a
   `{{HEAD}}` inside the lens stays literal; it refuses an empty lens, an
   unknown placeholder or an unreadable HEAD, and the `&&` stops the paid run.
 - The prompt goes on stdin (`-- -`): no argv length cap, a prompt that starts
