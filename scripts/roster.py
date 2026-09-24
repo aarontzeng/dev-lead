@@ -122,7 +122,7 @@ def effort_flag_refusal(adapter, role, effort):
     elif mech == "flag" and not effort:
         return "%s needs --effort" % adapter
     elif mech == "none" and effort:
-        return "%s has no effort concept" % adapter
+        return "the suite passes no effort for %s" % adapter
     elif mech not in ("model_suffix", "flag", "config_only", "none"):
         return "%s declares unknown effort mechanism %r" % (adapter, mech)
     return None
@@ -339,7 +339,7 @@ def _check_effort(leg, adapter, role, path, problems):
                                "effort key is not allowed; %s puts effort in the model name" % adapter)
             else:
                 problems.error(path + ".effort",
-                               "effort key is not allowed; %s has no effort concept" % adapter)
+                               "effort key is not allowed; the suite passes no effort for %s" % adapter)
     elif mech == "flag":
         if not leg.get("effort"):
             hint = eff.get("migration_hint", {}).get(role) if isinstance(eff.get("migration_hint"), dict) else None

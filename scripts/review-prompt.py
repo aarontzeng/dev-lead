@@ -16,7 +16,13 @@ that this script creates and fills with what the leg would otherwise have read
 through git -- DIFF.patch, base/<path> for every changed path that exists at
 the base, BLOBS.txt (mode and blob id on both sides) and COMMITS.txt -- then
 makes read-only. The directory must not exist yet, or be empty: evidence left
-from another run is exactly the stale input this refuses to hand over.
+from another run is exactly the stale input this refuses to hand over. A
+submodule (gitlink) has no file content to copy: BLOBS.txt carries its commit
+id on each side, and base/ has no entry for it.
+
+BASE is resolved to a commit once, and that hash is what the prompt and every
+piece of evidence use: a branch name that moves mid-run would otherwise make the
+diff, the commit list and base/ describe different ranges.
 """
 import argparse
 import os
@@ -57,7 +63,7 @@ def _git(target, *args, binary=False):
     r = subprocess.run(["git", "-C", target, *args], capture_output=True)
     if r.returncode:
         raise RuntimeError("git %s: %s" % (" ".join(args), r.stderr.decode(errors="replace").strip()))
-    return r.stdout if binary else r.stdout.decode()
+    return r.stdout if binary else r.stdout.decode("utf-8", "surrogateescape")
 
 
 def _tree_entry(target, rev, path):
@@ -73,8 +79,8 @@ def _tree_entry(target, rev, path):
     return None
 
 
-def materialize(target, base, head, dest):
-    """Write the evidence a no-command leg reads instead of running git."""
+def check_dest(target, dest):
+    """Refuse an evidence directory before anything is written to it."""
     dest = Path(dest)
     if dest.exists() and (not dest.is_dir() or any(dest.iterdir())):
         raise ValueError("--evidence %s already exists and is not an empty directory; "
@@ -84,6 +90,12 @@ def materialize(target, base, head, dest):
     if real == tgt or real.startswith(tgt.rstrip(os.sep) + os.sep):
         raise ValueError("--evidence %s is inside the frozen target; it would dirty the "
                          "tree the review is certified against" % dest)
+
+
+def materialize(target, base, head, dest):
+    """Write the evidence a no-command leg reads instead of running git."""
+    check_dest(target, dest)
+    dest = Path(dest)
     dest.mkdir(parents=True, exist_ok=True)
     (dest / "DIFF.patch").write_bytes(
         _git(target, "diff", "--no-textconv", "--no-ext-diff", "--no-color", base, head, binary=True))
@@ -96,14 +108,17 @@ def materialize(target, base, head, dest):
             raise ValueError("refusing an unsafe path from git: %r" % path)
         old = _tree_entry(target, base, path)
         new = _tree_entry(target, head, path)
-        lines.append("%s\t%s %s\t%s %s" % (path, *(old[0::2] if old else ("-", "-")),
+        shown = path.replace("\\", "\\\\").replace("\t", "\\t").replace("\n", "\\n")
+        lines.append("%s\t%s %s\t%s %s" % (shown, *(old[0::2] if old else ("-", "-")),
                                             *(new[0::2] if new else ("-", "-"))))
         if old and old[1] == "blob":
             out = dest / "base" / path
             out.parent.mkdir(parents=True, exist_ok=True)
             out.write_bytes(_git(target, "cat-file", "blob", old[2], binary=True))
-    (dest / "BLOBS.txt").write_text("path\tbase mode+blob\thead mode+blob ('-' = absent)\n"
-                                    + "".join(l + "\n" for l in lines))
+    (dest / "BLOBS.txt").write_text(
+        "path\tbase mode+blob\thead mode+blob ('-' = absent; mode 160000 = a submodule's "
+        "commit, not in base/; \\t \\n \\\\ escaped in paths)\n"
+        + "".join(l + "\n" for l in lines), errors="surrogateescape")
     # Read-only for the leg's whole run, not just equal at the endpoints.
     for root, dirs, files in os.walk(dest, topdown=False):
         for f in files:
@@ -127,20 +142,35 @@ def main(argv=None, prog="review-prompt"):
     if head.returncode:
         sys.exit("%s: cannot read HEAD of %s: %s" % (prog, args.target, head.stderr.strip()))
     head = head.stdout.strip()
+    base = subprocess.run(["git", "-C", args.target, "rev-parse", "--verify", "--quiet",
+                           args.base + "^{commit}"], capture_output=True, text=True)
+    if base.returncode:
+        sys.exit("%s: --base %s is not a commit in %s" % (prog, args.base, args.target))
+    base = base.stdout.strip()
     evidence = os.path.abspath(args.evidence) if args.evidence else None
-    created = evidence is not None and not os.path.exists(evidence)
+    # What to remove if this run fails: the directory itself when this run made
+    # it, or only its contents when an empty one was handed in.
+    made_dir = evidence is not None and not os.path.exists(evidence)
+    writing = False
     try:
         text = build(framing_path(args.adapter).read_text(encoding="utf-8"),
-                     args.base, head, lens.strip(), evidence)
+                     base, head, lens.strip(), evidence)
         if evidence is not None:
-            materialize(args.target, args.base, head, evidence)
+            check_dest(args.target, evidence)
+            writing = True
+            materialize(args.target, base, head, evidence)
     except (OSError, UnicodeDecodeError, ValueError, RuntimeError) as exc:
         # A half-written evidence directory would make the retry refuse, and
         # reads like evidence to anyone who opens it: remove what this run made.
-        if created and os.path.isdir(evidence):
+        if writing and os.path.isdir(evidence):
             for root, dirs, _files in os.walk(evidence):
                 os.chmod(root, stat.S_IRWXU)
-            shutil.rmtree(evidence, ignore_errors=True)
+            if made_dir:
+                shutil.rmtree(evidence, ignore_errors=True)
+            else:
+                for child in os.listdir(evidence):
+                    child = os.path.join(evidence, child)
+                    shutil.rmtree(child) if os.path.isdir(child) else os.unlink(child)
         sys.exit("%s: %s" % (prog, exc))
     sys.stdout.write(text)
 

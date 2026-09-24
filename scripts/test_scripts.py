@@ -2490,33 +2490,43 @@ def test_leg_cmd():
         check("framing builder: a target that is not a repository is refused",
               nohead.returncode != 0 and "cannot read HEAD" in nohead.stderr and not nohead.stdout,
               nohead.stderr)
-    real = subprocess.run([sys.executable, str(builder), "--base", "abc", "--target", str(SCRIPTS.parent)],
+    # BASE must be a commit (0.6.30 resolves it once); HEAD exists even in a depth-1 clone.
+    real = subprocess.run([sys.executable, str(builder), "--base", "HEAD", "--target", str(SCRIPTS.parent)],
                           input="my lens", capture_output=True, text=True)
     head = subprocess.run(["git", "-C", str(SCRIPTS.parent), "rev-parse", "HEAD"],
                           capture_output=True, text=True).stdout.strip()
     check("framing builder: the shipped framing builds, with the target's HEAD and the lens",
-          real.returncode == 0 and ("abc..%s" % head) in real.stdout and "my lens" in real.stdout
+          real.returncode == 0 and ("%s..%s" % (head, head)) in real.stdout and "my lens" in real.stdout
           and "{{" not in real.stdout and not real.stdout.startswith("<!--")
           and real.stdout.rstrip().endswith("plain text: no bold, no heading, no backticks."),
           real.stderr + real.stdout[-300:])
 
     # 0.6.30: one builder for every framed leg, each adapter its own framing.
     gen = SCRIPTS / "review-prompt.py"
-    compat = subprocess.run([sys.executable, str(builder), "--base", "abc", "--target", str(SCRIPTS.parent)],
+    compat = subprocess.run([sys.executable, str(builder), "--base", "HEAD", "--target", str(SCRIPTS.parent)],
                             input="my lens", capture_output=True, text=True)
-    direct = subprocess.run([sys.executable, str(gen), "--adapter", "codex", "--base", "abc",
+    direct = subprocess.run([sys.executable, str(gen), "--adapter", "codex", "--base", "HEAD",
                              "--target", str(SCRIPTS.parent)], input="my lens", capture_output=True, text=True)
     check("review-prompt: the codex-review-prompt.py name still builds the codex frame, byte for byte",
           compat.returncode == 0 and compat.stdout == direct.stdout and direct.stdout, compat.stderr)
-    for adapter in ("opencode", "cursor"):
-        got = subprocess.run([sys.executable, str(gen), "--adapter", adapter, "--base", "abc",
+    built = {}
+    for adapter in ("codex", "opencode", "cursor"):
+        got = subprocess.run([sys.executable, str(gen), "--adapter", adapter, "--base", "HEAD",
                               "--target", str(SCRIPTS.parent)], input="the lens", capture_output=True, text=True)
+        built[adapter] = got.stdout
         check("review-prompt: the shipped %s frame builds" % adapter,
               got.returncode == 0 and "the lens" in got.stdout and "{{" not in got.stdout
               and got.stdout.rstrip().endswith("no backticks.") and not got.stdout.startswith("<!--"),
               got.stderr + got.stdout[-200:])
+    # Each adapter reads ITS frame: opencode's names its five git reads; cursor's
+    # is the codex text on purpose (its header says so) -- pinned both ways.
+    check("review-prompt: the opencode frame is opencode's, not codex's",
+          "Your only shell commands are `git status`" in built["opencode"]
+          and built["opencode"] != built["codex"])
+    check("review-prompt: the cursor frame is the codex frame's text, as its header says",
+          built["cursor"] == built["codex"])
     for bad in ("../codex", "Codex", "", "claude"):
-        got = subprocess.run([sys.executable, str(gen), "--adapter", bad, "--base", "abc",
+        got = subprocess.run([sys.executable, str(gen), "--adapter", bad, "--base", "HEAD",
                               "--target", str(SCRIPTS.parent)], input="lens", capture_output=True, text=True)
         check("review-prompt: adapter %r without a shipped frame is refused" % bad,
               got.returncode != 0 and not got.stdout, got.stderr)
@@ -2537,6 +2547,7 @@ def test_leg_cmd():
         (repo / "added.txt").write_text("new\n")
         (repo / "sub").mkdir()
         (repo / "sub" / "bin.dat").write_bytes(b"\x00\x01binary")
+        (repo / "a\tb.txt").write_text("tabbed\n")
         git(repo, "rm", "-q", ".gitignore")
         git(repo, "add", "-A")
         git(repo, "commit", "-qm", "the change")
@@ -2570,6 +2581,8 @@ def test_leg_cmd():
         check("review-prompt: BLOBS.txt carries both sides' ids, '-' where a side is absent",
               ("sub/bin.dat\t- -\t100644 %s" % head_blob) in blobs
               and ".gitignore\t100644 " in blobs and "\t- -\n" in blobs, blobs)
+        check("review-prompt: a tab in a path is escaped, so BLOBS.txt keeps its columns",
+              "a\\tb.txt\t- -\t100644 " in blobs, blobs)
         check("review-prompt: COMMITS.txt lists the range",
               (ev / "COMMITS.txt").read_text().strip() == "%s the change" % head)
         modes = [os.stat(os.path.join(r, n)).st_mode for r, ds, fs in os.walk(ev) for n in ds + fs] + [ev.stat().st_mode]
@@ -2595,6 +2608,45 @@ def test_leg_cmd():
         for root, dirs, files in os.walk(ev):
             os.chmod(root, 0o755)
 
+        # A name BASE is pinned to its commit once: prompt and evidence carry the hash.
+        git(repo, "branch", "-f", "the-base", base)
+        named = run_dir / "named"
+        byname = subprocess.run([sys.executable, str(gen), "--adapter", "agy", "--base", "the-base",
+                                 "--target", str(repo), "--evidence", str(named)],
+                                input="lens", capture_output=True, text=True)
+        check("review-prompt: a branch-name BASE is resolved to its commit in the prompt",
+              byname.returncode == 0 and ("%s..%s" % (base, head)) in byname.stdout
+              and "the-base" not in byname.stdout, byname.stderr)
+        for root, dirs, files in os.walk(named):
+            os.chmod(root, 0o755)
+        bad = subprocess.run([sys.executable, str(gen), "--adapter", "codex", "--base", "no-such-rev",
+                              "--target", str(repo)], input="lens", capture_output=True, text=True)
+        check("review-prompt: a BASE that is not a commit is refused before anything is built",
+              bad.returncode != 0 and "not a commit" in bad.stderr and not bad.stdout, bad.stderr)
+
+        # A failure AFTER writing began: a git that refuses `cat-file` fails the
+        # base/ copy once DIFF.patch and COMMITS.txt already exist.
+        fakebin = Path(td) / "fakegit"
+        fakebin.mkdir()
+        real_git = shutil.which("git")
+        (fakebin / "git").write_text('#!/bin/sh\nfor a in "$@"; do [ "$a" = cat-file ] && exit 7; done\n'
+                                     'exec %s "$@"\n' % real_git)
+        (fakebin / "git").chmod(0o755)
+        fenv = dict(os.environ, PATH="%s:%s" % (fakebin, os.environ["PATH"]))
+        fresh = run_dir / "fresh"
+        failed = subprocess.run([sys.executable, str(gen), "--adapter", "agy", "--base", base,
+                                 "--target", str(repo), "--evidence", str(fresh)],
+                                input="lens", capture_output=True, text=True, env=fenv)
+        check("review-prompt: a failure after writing began removes the directory it made",
+              failed.returncode != 0 and not failed.stdout and not fresh.exists(), failed.stderr)
+        handed = run_dir / "handed"
+        handed.mkdir()
+        failed = subprocess.run([sys.executable, str(gen), "--adapter", "agy", "--base", base,
+                                 "--target", str(repo), "--evidence", str(handed)],
+                                input="lens", capture_output=True, text=True, env=fenv)
+        check("review-prompt: ...and empties, but keeps, an empty directory it was handed",
+              failed.returncode != 0 and handed.is_dir() and not any(handed.iterdir()), failed.stderr)
+
     # The framed launches leg-cmd emits for opencode and agy (0.6.30).
     with tempfile.TemporaryDirectory() as td, tempfile.TemporaryDirectory() as rd:
         r = subprocess.run([str(script), "opencode", "review", "--model", "opencode/x", "--effort", "high",
@@ -2610,6 +2662,9 @@ def test_leg_cmd():
         check("leg-cmd: agy review materializes evidence and grants it with a second --add-dir",
               r.returncode == 0 and '--adapter agy' in cmd and '--evidence "$RUN_DIR/evidence"' in cmd
               and ('--add-dir %s --add-dir "$RUN_DIR/evidence"' % td) in cmd, cmd)
+        check("leg-cmd: agy's builder runs first and its failure stops the leg (&&)",
+              '--evidence "$RUN_DIR/evidence" < "$RUN_DIR/prompt.md" > "$RUN_DIR/framed-prompt.md" && agy -p ' in cmd,
+              cmd)
         check("leg-cmd: agy reads the FRAMED prompt, never the bare brief",
               '-p "$(cat "$RUN_DIR/framed-prompt.md")"' in cmd
               and '"$(cat "$RUN_DIR/prompt.md")"' not in cmd, cmd)
@@ -3928,7 +3983,7 @@ def test_roster(tmp):
     spec.loader.exec_module(roster_mod)
     launch = json.loads((SCRIPTS.parent / "data" / "launch.json").read_text(encoding="utf-8"))
     markers = ("MODEL NAME", "no effort control", "needs --effort",
-               "no effort concept", "unknown effort mechanism")
+               "leg-cmd: the suite passes no effort", "unknown effort mechanism")
     leg = SCRIPTS / "leg-cmd.sh"
     for adapter, adapter_spec in launch.items():
         if adapter.startswith("_"):

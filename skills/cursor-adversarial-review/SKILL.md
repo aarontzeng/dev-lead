@@ -1,13 +1,15 @@
 ---
 name: cursor-adversarial-review
-description: Run a read-only challenge review through Cursor's CLI (cursor-agent) in ask mode. Use when the user asks for a review via Cursor, or when the cross-family rule needs a reviewer family the standalone CLIs cannot field — one paid adapter serving GPT, Claude, Grok, Kimi, Composer, and auto.
+description: Run a read-only challenge review through Cursor's CLI (cursor-agent) in ask mode. Use when the user asks for a review via Cursor, or when the cross-family rule needs a reviewer family the standalone CLIs cannot field — one paid adapter serving GPT, Claude, Grok, Kimi, Gemini, Meta, GLM, Composer, and auto.
 ---
 
 # Adversarial review via `cursor-agent` (ask mode)
 
 The value of this leg is **family width through one adapter**: pin the model
-per round and the same CLI can be a GPT, Claude, Grok, or Kimi reviewer —
-whichever family the cross-family accounting still allows. The model flag IS
+per round and the same CLI can be a GPT, Claude, Grok, Kimi, Gemini, Meta or
+GLM reviewer — whichever family the cross-family accounting still allows.
+Three of those are other adapters' families (Gemini is agy's, Meta and GLM are
+opencode's): a swap to cursor keeps the family (runtime file). The model flag IS
 the accounting decision; `auto` and `composer-*` never satisfy the rule
 (runtime file, accounting rules).
 

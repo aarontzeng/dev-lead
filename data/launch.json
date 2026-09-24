@@ -19,7 +19,7 @@
     "  model_suffix -- the effort is part of the model string (agy, cursor)",
     "  flag         -- a dedicated flag (grok --effort, opencode --variant, codex: task --effort / exec -c model_reasoning_effort=)",
     "  config_only  -- no per-call control at all (codex review until 0.6.28; no shipped adapter since)",
-    "  none         -- the adapter has no effort concept (claude)",
+    "  none         -- the suite passes no effort for this adapter; its CLI default applies (claude)",
     "2026-09-08 second pass: a four-leg review found this file disagreed with the repo's own skills in almost every role its author had NOT personally probed -- an invented agy timeout, an agy implement launch with no write mode, an invented cursor --force with --trust dropped, grok missing the three flags that ARE its read-only boundary, claude missing the MCP trim and with the wrong prompt delivery. Every one was transcription from recall, which is the exact failure this file exists to stop, one level up. Hence per-ROLE verified strings: believe the review rows, re-check an implement row against its skill before trusting it.",
     "",
     "NOT IN THIS FILE, deliberately: a per-adapter `sandbox`/`shell` field saying",

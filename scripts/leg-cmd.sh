@@ -88,7 +88,8 @@ elif mech in ("flag",) and not effort:
              % (a, (eff.get("flag_by_role") or {}).get(role, eff["flag"]),
                 ", ".join(eff.get("examples", []))))
 elif mech == "none" and effort:
-    sys.exit("leg-cmd: %s has no effort concept; --model selects the tier" % a)
+    sys.exit("leg-cmd: the suite passes no effort for %s (its CLI default applies; see "
+             "data/launch.json); --model selects the tier" % a)
 elif mech not in ("model_suffix", "flag", "config_only", "none"):
     # No silent fall-through: an unrecognised mechanism means the guardrails
     # above did not run, so the command below is unvalidated. Refuse it.

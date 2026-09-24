@@ -184,12 +184,12 @@ Role-specific choices in that command:
   cuts it off mid-flight. 20 leaves room above the frame's 15-minute budget;
   a run that hits the timeout returns PARTIAL output, which is not a review.
 - **Gemini model, effort omitted** — the current review default is
-  `gemini-3.7-flash-high`, only when the account catalogue offers it. The
+  `gemini-3.8-flash-high` (the roster's), only when the account catalogue offers it. The
   `-high` suffix IS the effort; do not pass `--effort` (measured: omitting it
   works, and a mismatched value is a hard CLI error, so the flag can only
   break the run or restate the suffix). Verify from the log which model
-  actually served; this new model has no calibration rows, so its first
-  verified use is not a gate merely because it is newer.
+  actually served; a model with no calibration rows yet is not a gate
+  merely because it is newer (the runtime file has 3.8's rows).
 - **Model family** — the CLI may expose a second family's pool (e.g. Claude)
   on separate quota, a legitimate cross-family reviewer for anything that
   family did NOT write. `--effort` stays absent there too — it is rejected

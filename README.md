@@ -217,7 +217,7 @@ one of them only by accident).
 | `agy-implement` / `agy-adversarial-review` | Google Antigravity CLI (Gemini + a separate Claude pool) |
 | `opencode-implement` / `opencode-adversarial-review` | OpenCode's free pool (muse-spark, Nemotron, …) — zero quota cost |
 | `grok-implement` / `grok-adversarial-review` | xAI's Grok Build CLI — a paid pool, tier peer of codex/agy, and a sixth accounting family (integrated 2026-08-13; no field-proven round yet) |
-| `cursor-implement` / `cursor-adversarial-review` | Cursor's CLI (`cursor-agent`) — one paid adapter serving GPT, Claude, Grok, Kimi, Composer, and auto; the pinned model decides the family (integrated 2026-08-13; field-proven as a standing review leg since 2026-09) |
+| `cursor-implement` / `cursor-adversarial-review` | Cursor's CLI (`cursor-agent`) — one paid adapter serving GPT, Claude, Grok, Kimi, Gemini, Meta, GLM, Composer, and auto; the pinned model decides the family (integrated 2026-08-13; field-proven as a standing review leg since 2026-09) |
 
 Each family also carries a **runtime reference**
 (`skills/<family>-adversarial-review/references/<family>-runtime.md`) holding
