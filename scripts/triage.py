@@ -19,10 +19,13 @@ ROOT = Path(__file__).resolve().parent.parent
 RISKS = ("LOW", "MEDIUM", "HIGH")
 RISK_VALUE = {name: number for number, name in enumerate(RISKS)}
 ROOT_KEYS = {
-    "version", "me", "gerrit", "clones", "gateways", "lens_classes",
+    "version", "me", "lens_classes",
     "lenses", "delta_triggers", "risk_default", "move_check",
     "small_delta_lines", "order",
 }
+# Only `change` reads Gerrit: a rules file used for `scope` alone -- a team
+# with no Gerrit, say -- may leave these out. When present they are checked.
+CHANGE_KEYS = ("gerrit", "clones", "gateways")
 # Optional: without it, review legs carry no effort and behave as before.
 OPTIONAL_ROOT_KEYS = {"effort"}
 # An abstract effort ladder. The table names a tier; each adapter's own
@@ -195,7 +198,7 @@ def validate(doc):
     if not isinstance(doc, dict):
         problems.error("(root)", "triage must be a JSON object")
         return problems
-    _unknown_keys(doc, ROOT_KEYS | OPTIONAL_ROOT_KEYS, "(root)", problems)
+    _unknown_keys(doc, ROOT_KEYS | set(CHANGE_KEYS) | OPTIONAL_ROOT_KEYS, "(root)", problems)
     for key in ROOT_KEYS:
         if key not in doc:
             problems.error(key, "required")
@@ -205,7 +208,9 @@ def validate(doc):
     if not isinstance(me, list) or not me or not all(isinstance(item, str) and item for item in me):
         problems.error("me", "must be a non-empty list of identifiers")
     gerrit = doc.get("gerrit")
-    if not isinstance(gerrit, dict):
+    if "gerrit" not in doc:
+        pass
+    elif not isinstance(gerrit, dict):
         problems.error("gerrit", "must be an object")
     else:
         _unknown_keys(gerrit, {"ssh", "port"}, "gerrit", problems)
@@ -214,6 +219,8 @@ def validate(doc):
         if type(gerrit.get("port")) is not int:
             problems.error("gerrit.port", "must be an int")
     for name, values, absolute in (("clones", doc.get("clones"), True), ("gateways", doc.get("gateways"), False)):
+        if name not in doc:
+            continue
         if not isinstance(values, dict):
             problems.error(name, "must be an object")
             continue
@@ -1414,6 +1421,10 @@ def _line_count(line_data):
 
 
 def triage_change(config, raw, path, number, query_json, include_wip, as_of=None):
+    missing = [key for key in CHANGE_KEYS if key not in config]
+    if missing:
+        raise InputError("triage change: %s has no %s (only scope works without them)"
+                         % (path, ", ".join(missing)))
     change, all_changes = _query(config, number, query_json)
     identifiers = set(config["me"])
     cutoffs = _as_of_cutoffs(change, as_of)

@@ -1,7 +1,8 @@
 {
   "_comment": [
     "Copy this machine-local file beside roster.json, then replace every example value.",
-    "Glob semantics: ** matches any characters including /; * and ? do not cross /; a pattern without / matches the basename only."
+    "Glob semantics: ** matches any characters including /; * and ? do not cross /; a pattern without / matches the basename only.",
+    "gerrit, clones and gateways are read only by `change`; a file used for `scope` alone may leave them out."
   ],
   "version": 1,
   "me": ["alice", "alice@example.com"],

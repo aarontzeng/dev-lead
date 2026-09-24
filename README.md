@@ -230,8 +230,10 @@ real incident, and each is dated so you can judge freshness.
 Alongside `scripts/roster.py`, `scripts/triage.py` validates machine-local
 `triage.json` rules, patrols Gerrit changes, and suggests a risk floor for
 planned paths. `change` speaks only Gerrit (`ssh ... gerrit query`); there is
-no GitHub or GitLab reader. `gateways` maps a project to a group name that
-only the `order` rules read, to rank changes. Its path globs treat `**` as
+no GitHub or GitLab reader. `gerrit`, `clones` and `gateways` are read only by
+`change`, so a rules file used for `scope` alone may leave them out.
+`gateways` maps a project to a group name that only the `order` rules read,
+to rank changes. Its path globs treat `**` as
 crossing `/`, while `*` and `?` do not; a pattern with no `/` matches only the
 basename.
 For a merge-commit patch set, its content delta is compared with the first

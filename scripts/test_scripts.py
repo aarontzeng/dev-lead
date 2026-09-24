@@ -4802,6 +4802,26 @@ def test_triage(tmp):
           and "lead implements directly" in scoped.get("suggestion", {}).get("implementer", "")
           and scoped.get("note") == "suggestion only; the lead decides, and rules only raise", got.stdout + got.stderr)
 
+    # Only `change` reads Gerrit: a rules file for `scope` alone may leave out
+    # gerrit, clones and gateways, and `change` then says which are missing.
+    scope_only = {key: value for key, value in config.items() if key not in ("gerrit", "clones", "gateways")}
+    scope_file = tmp / "triage-scope-only.json"
+    _write_doc(scope_file, scope_only)
+    got = checked(scope_file)
+    check("triage check: a rules file without gerrit, clones and gateways passes",
+          got.returncode == 0 and got.stdout == "", got.stdout + got.stderr)
+    scope_env = _roster_env(tmp, DEV_LEAD_ROSTER=roster_file, DEV_LEAD_TRIAGE=scope_file)
+    got = run(triage, "scope", "--files", "secure/credentials.py", env=scope_env)
+    scoped = json.loads(got.stdout) if got.returncode == 0 else {}
+    check("triage scope: runs on a rules file without the Gerrit keys",
+          got.returncode == 0 and scoped.get("risk_floor") == "HIGH", got.stdout + got.stderr)
+    got = run(triage, "change", "1", "--query-json", str(scope_file), env=scope_env)
+    check("triage change: a rules file without the Gerrit keys is an input error naming them",
+          got.returncode == 2 and "gerrit, clones, gateways" in got.stderr and "Traceback" not in got.stderr,
+          got.stdout + got.stderr)
+    expect_bad("gerrit-not-object", lambda doc: doc.update({"gerrit": "alice@gerrit.example.com"}), "gerrit: must be an object")
+    expect_bad("clones-not-object", lambda doc: doc.update({"clones": []}), "clones: must be an object")
+
     # Fix round 1: glob stars stay within one path segment and slash-less
     # patterns match basenames, not trailing path fragments.
     import importlib.util
