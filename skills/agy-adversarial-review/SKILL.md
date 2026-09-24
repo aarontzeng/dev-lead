@@ -311,6 +311,14 @@ model:
   on its own premise, one was real but astronomically unreachable. Say
   plainly which you confirmed, which you reject, and why — and hold a
   rejection to the same evidence standard the finding was held to.
+- **Grep every quote before you use it.** The frame tells the leg to quote
+  only text it opened, but measured the same day it was adopted: a framed leg
+  cited lines 131-189 of a 92-line file and quoted requirement text that
+  exists nowhere, on a documentation packet, while its conclusions were
+  partly right; on a code packet its quotes were exact but it put a test in
+  the wrong change and called a present build line missing. A quote that is
+  not in the file at the cited lines voids that finding; an attribution or an
+  absence claim is checked against the diff before it is relayed.
 - Review-only: do not apply fixes in the same breath unless asked.
 
 ## The refusal gotcha

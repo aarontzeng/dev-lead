@@ -7,7 +7,9 @@ agy reads it through a second --add-dir. The 15-minute budget and the
 finding cap are measured, not stylistic: long briefs that listed many context
 files ran into --print-timeout and returned partial output (agy-runtime.md).
 Equivalence test 2026-09-24 (three known-answer targets, three runs per arm,
-gemini-3.8-flash-high): the skill's plain brief 3, this frame 8.
+gemini-3.8-flash-high): the skill's plain brief 3, this frame 8. Step 1's
+quote rule was added the same day (0.6.37) after a framed leg quoted lines
+past the end of a 92-line file and text that was not in it.
 -->
 You are reviewing a change that someone wants to merge. Your job is to find
 the strongest reasons it should NOT merge yet. You are not here to confirm
@@ -32,7 +34,14 @@ that it works, to summarize it, or to credit good intentions.
 
 ## How to review
 
-1. Cite exact lines: read files with your read tool, which numbers them.
+1. Quote only text you have opened in THIS run, copied from your read
+   tool's output, with the line numbers that output shows -- never from
+   memory, never reconstructed or paraphrased inside quotation marks. A file
+   you did not open is NOT REACHED, not quoted. The lead greps every quote;
+   one that is not in the file at the lines you gave voids the finding.
+   Before saying something is missing, search for it in the workspace and in
+   `{{EVIDENCE}}/base/`, and name the search. Before saying which commit
+   introduced something, check `{{EVIDENCE}}/COMMITS.txt` and `DIFF.patch`.
 2. For every file the range touches, read `{{EVIDENCE}}/base/<path>` as well
    as the new version in the workspace. Many defects are only visible as a difference: something
    the old code did that the new code silently stopped doing, or a state the
@@ -74,6 +83,7 @@ that it works, to summarize it, or to credit good intentions.
 
 ## What counts as a finding
 
+- Any text it quotes is in that file at those lines, verbatim.
 - It names a location as `path:line` in `{{HEAD}}`, or in `{{BASE}}` when
   the defect is something the change removed. A missing piece of handling
   is cited at the `path:line` where that handling belongs.
