@@ -253,10 +253,10 @@ others -- an effort a model has been measured to benefit from need not be
 pushed onto adapters that were not. `change` then adds `effort` and
 `effort_in` to each review leg, and `effort_source` (roster, table, or
 table-override when an adapter's override raised it) to every leg whose
-adapter has an effort at all -- a claude leg carries `effort_in: "none"` and
-nothing else. The table only raises: a leg whose roster effort is already
+adapter's REVIEW role has an effort at all (a role outside an adapter's
+`applies_to_role` carries `effort_in: "none"` and nothing else). The table only raises: a leg whose roster effort is already
 at or above the floor keeps it. A tier is spelled per adapter from `data/launch.json`: a
-flag word or a model variant (codex review takes it per call since 0.6.28). A word or variant is
+flag word or a model variant (codex review takes it per call since 0.6.28, claude review since 0.6.35). A word or variant is
 emitted only when it is known to exist -- the roster's own or one of
 launch.json's `effort.examples`, taking the next higher known tier across a
 gap -- otherwise the leg keeps its launch and carries `effort_unmet`. An

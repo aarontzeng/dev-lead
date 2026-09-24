@@ -404,7 +404,10 @@
         "max"
       ],
       "note": "The review role takes `claude --effort <low|medium|high|xhigh|max>` (claude 2.1.281; 19 headless plan-mode review runs at --effort high, 2026-09-24). Scoped to review by applies_to_role (0.6.35): before, a flag here would have bound implement too.",
-      "implement_note": "The implement role passes no effort: the CLI's own default applies, and `roster.py plan --implement claude=<model>` has no effort syntax to carry one. The CLI does take --effort; add it by hand if a run needs it."
+      "implement_note": "The implement role passes no effort: the CLI's own default applies, and `roster.py plan --implement claude=<model>` has no effort syntax to carry one. The CLI does take --effort; add it by hand if a run needs it.",
+      "migration_hint": {
+        "review": "claude review takes --effort since 0.6.35; rosters written earlier have none -- set the level the leg should run at (the framing test ran high)"
+      }
     },
     "gotchas": [
       "Never the cross-family reviewer for Claude-written work.",

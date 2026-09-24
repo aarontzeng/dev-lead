@@ -2839,6 +2839,11 @@ def test_leg_cmd():
           f"stderr={r.stderr!r}")
     check("leg-cmd: implement banner states the role's real effort behaviour",
           "DOES take" in r.stderr, f"stderr={r.stderr!r}")
+    r3 = subprocess.run([str(script), "codex", "implement", "--model", "x"],
+                        capture_output=True, text=True, env=legacy_env)
+    check("leg-cmd: an argv-decided flag role with no flag name refuses cleanly, naming --effort",
+          r3.returncode != 0 and "needs --effort (it becomes --effort)" in r3.stderr
+          and "Traceback" not in r3.stderr, r3.stderr)
     r2 = subprocess.run([str(script), "codex", "review", "--model", "x",
                          "--base", "abc"], capture_output=True, text=True, env=legacy_env)
     check("leg-cmd: ...and the review path keeps its warning",
@@ -3885,10 +3890,14 @@ def test_roster(tmp):
     text_scoped = g35.stdout + g35.stderr
     check("roster check: a claude REVIEW leg without an effort is refused",
           g35.returncode == 1 and "rounds.r1.review.claude.effort: missing effort" in text_scoped, text_scoped)
-    check("roster check: a claude IMPLEMENT leg with an effort is refused",
-          "rounds.r1.implement.claude.effort: effort key is not allowed" in text_scoped, text_scoped)
+    check("roster check: a claude IMPLEMENT leg with an effort is refused, naming the role",
+          "rounds.r1.implement.claude.effort: effort key is not allowed; the suite passes no effort for claude implement"
+          in text_scoped, text_scoped)
+    check("roster check: ...and the missing review effort points at the 0.6.35 migration",
+          "claude review takes --effort since 0.6.35" in text_scoped, text_scoped)
     ok_doc = _roster_doc({"claude": {"model": "claude-opus-5-5", "family": "Claude", "effort": "xhigh"},
-                          "codex": _codex_leg()})
+                          "codex": _codex_leg()},
+                         implement={"claude": {"model": "claude-opus-5-5", "family": "Claude"}})
     path_ok = tmp / "claude-scoped-ok.json"
     _write_doc(path_ok, ok_doc)
     g35 = run(roster, "plan", "--round", "r1", "--implement", "agy=gemini-3.8-flash-high:Gemini", "--review", "claude",
@@ -3897,6 +3906,12 @@ def test_roster(tmp):
           g35.returncode == 0 and "--model claude-opus-5-5 --effort xhigh" in g35.stdout, g35.stdout + g35.stderr)
     g35 = run(roster, "plan", "--round", "r1", "--implement", "claude=claude-opus-5-5", "--review", "codex",
               env=_roster_env(tmp, DEV_LEAD_ROSTER=path_ok))
+    shown = run(roster, "show", env=_roster_env(tmp, DEV_LEAD_ROSTER=path_ok))
+    check("roster show: a claude review leg reads as a flag with its level",
+          "effort=flag xhigh" in shown.stdout, shown.stdout + shown.stderr)
+    impl_line = [l for l in shown.stdout.splitlines() if "claude" in l and "effort=" in l and "flag xhigh" not in l]
+    check("roster show: ...and the claude implement leg as none (its role's mechanism, not the adapter's)",
+          impl_line and all("effort=none" in l for l in impl_line), shown.stdout)
     check("roster plan: the claude implement override still resolves without an effort",
           g35.returncode == 0 and "missing effort" not in (g35.stdout + g35.stderr), g35.stdout + g35.stderr)
 

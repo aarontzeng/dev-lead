@@ -94,8 +94,8 @@ elif mech in ("flag",) and not effort:
              % (a, (eff.get("flag_by_role") or {}).get(role, eff.get("flag", "--effort")),
                 ", ".join(eff.get("examples", []))))
 elif mech == "none" and effort:
-    sys.exit("leg-cmd: the suite passes no effort for %s (its CLI default applies; see "
-             "data/launch.json); --model selects the tier" % a)
+    sys.exit("leg-cmd: the suite passes no effort for %s %s (its CLI default applies; see "
+             "data/launch.json); --model selects the tier" % (a, role))
 elif mech not in ("model_suffix", "flag", "config_only", "none"):
     # No silent fall-through: an unrecognised mechanism means the guardrails
     # above did not run, so the command below is unvalidated. Refuse it.
@@ -269,11 +269,12 @@ elif r["prompt_delivery"] == "stdin":
 
 w = sys.stderr
 print("# adapter %s / role %s   (data/launch.json, verified %s)" % (a, role, spec["verified"]), file=w)
-# The effort block is ADAPTER-scoped but often describes ONE role: codex
+# The effort block is ADAPTER-scoped but often describes ONE role: claude
 # declares applies_to_role "review" and carries an implement_note saying the
-# task path DOES take --effort. Printing the review note under implement told
-# the caller that --effort is parsed as prompt text, directly above a command
-# passing --effort. Same accessor the guard at the top already uses.
+# implement role passes none (pre-0.6.28 codex was the first such adapter, the
+# other way round). Printing the review note under implement told the caller
+# the opposite of the command beneath it. This `applies` test is display-only;
+# the launch decision above goes through roster.mechanism_for_role.
 applies = role == eff.get("applies_to_role", role)
 # A config_only adapter's effort comes from a file on THIS machine, so the
 # roster can only declare it. Print what is actually in force, or the lead

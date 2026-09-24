@@ -104,7 +104,11 @@ def mechanism_for_role(eff, role, argv):
     none. That is what lets claude REVIEW require --effort while claude
     IMPLEMENT stays effort-free -- `roster.py plan --implement claude=<model>`
     has no effort syntax, so a flag on both roles would make it unlaunchable.
-    leg-cmd.sh, lint.py and triage.py all call this; there is no second copy.
+    Every per-role DECISION -- leg-cmd.sh's refusal, lint.py's launch check,
+    triage.py's effort, this module's validation and plan args -- calls this.
+    What still reads applies_to_role directly is display and config_only
+    handling (leg-cmd's banner note, the in-force config line), which can
+    only apply on the scoped role anyway.
     """
     only = eff.get("applies_to_role")
     if only is None or role == only:
@@ -128,9 +132,9 @@ def effort_flag_refusal(adapter, role, effort):
     implement with no --effort fails on the {EFFORT} placeholder, after the
     effort mechanism has already accepted the spelling.
 
-    config_only outside applies_to_role falls through every branch: the
-    mechanism is not flag, none, or unknown, so the value is neither required
-    nor forbidden here.
+    The mechanism is the ROLE's (mechanism_for_role): outside an adapter's
+    applies_to_role, a role whose argv carries {EFFORT} is a flag and needs
+    --effort, and one without it takes none and refuses a value (0.6.35).
     """
     launch, _ = data()
     spec = launch[adapter]
@@ -140,13 +144,13 @@ def effort_flag_refusal(adapter, role, effort):
     if mech == "model_suffix":
         if effort:
             return "%s puts effort in the MODEL NAME, not a flag" % adapter
-    elif mech == "config_only" and role == eff.get("applies_to_role", role):
+    elif mech == "config_only":
         if effort:
             return "%s's %s path has no effort control at all" % (adapter, role)
     elif mech == "flag" and not effort:
         return "%s needs --effort" % adapter
     elif mech == "none" and effort:
-        return "the suite passes no effort for %s" % adapter
+        return "the suite passes no effort for %s %s" % (adapter, role)
     elif mech not in ("model_suffix", "flag", "config_only", "none"):
         return "%s declares unknown effort mechanism %r" % (adapter, mech)
     return None
@@ -352,7 +356,6 @@ def _check_effort(leg, adapter, role, path, problems):
     """
     eff = _effort_spec(adapter)
     mech = role_mechanism(adapter, role)
-    applies = role == eff.get("applies_to_role", role)
     if "effort" in leg and not isinstance(leg["effort"], str):
         # A launch word, never a list or number: triage compares and passes it.
         problems.error(path + ".effort", "must be a string, got %s" % type(leg["effort"]).__name__)
@@ -363,12 +366,12 @@ def _check_effort(leg, adapter, role, path, problems):
                                "effort key is not allowed; %s puts effort in the model name" % adapter)
             else:
                 problems.error(path + ".effort",
-                               "effort key is not allowed; the suite passes no effort for %s" % adapter)
+                               "effort key is not allowed; the suite passes no effort for %s %s" % (adapter, role))
     elif mech == "flag":
         if not leg.get("effort"):
             hint = eff.get("migration_hint", {}).get(role) if isinstance(eff.get("migration_hint"), dict) else None
             problems.error(path + ".effort", "missing effort" + ("; " + hint if hint else ""))
-    elif mech == "config_only" and applies:
+    elif mech == "config_only":
         declared = leg.get("effort")
         in_force = _config_effort(eff)
         if declared and in_force and declared != in_force:
@@ -379,8 +382,6 @@ def _check_effort(leg, adapter, role, path, problems):
                           "backed up first)"
                           % (declared, eff.get("config_file"), eff.get("config_key"),
                              in_force, in_force, eff.get("config_key"), declared))
-    elif mech == "config_only":
-        pass
     else:
         problems.error(path + ".effort", "unknown effort mechanism %r" % (mech,))
     # Flag adapters already error above. A config_only adapter whose other role's
@@ -857,8 +858,7 @@ def cmd_path(path):
 def _effort_handling(adapter, role, leg):
     eff = _effort_spec(adapter)
     mech = role_mechanism(adapter, role)
-    applies = role == eff.get("applies_to_role", role)
-    if mech == "config_only" and applies:
+    if mech == "config_only":
         return "expected; read from %s %s" % (eff["config_file"], eff["config_key"])
     if mech == "model_suffix":
         return "in model name"
@@ -879,8 +879,7 @@ def _args_for(adapter, role, model, effort_value):
     """
     eff = _effort_spec(adapter)
     mech = role_mechanism(adapter, role)
-    applies = role == eff.get("applies_to_role", role)
-    if mech == "config_only" and applies:
+    if mech == "config_only":
         return "--model %s" % model
     # Pass --effort exactly when the argv template requires {EFFORT} and the
     # mechanism does not refuse the flag. (Before 0.6.28 codex was config_only
