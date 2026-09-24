@@ -4554,6 +4554,52 @@ def test_triage(tmp):
     check("triage change: carry-over inherits and has no legs",
           result.get("ps_kind") == "carry-over" and result.get("risk_floor") == "inherit" and result.get("legs") == "none", result)
 
+    # The kind spans every patch set since my vote (a peer's round, 2026-09-24):
+    # vote on PS1, a REWORK PS2, a TRIVIAL_REBASE PS3 is not a carry-over.
+    write("src/value.txt", "reworked\n")
+    ps3 = commit("ps3")
+    write("src/value.txt", "reworked and rebased\n")
+    ps4 = commit("ps4")
+    result = changed(105, [patch(1, ps1, base, approvals=[approval("+1")]),
+                           patch(2, ps3, ps1, kind="REWORK"),
+                           patch(3, ps4, ps3, kind="TRIVIAL_REBASE")])
+    check("triage change: a REWORK between my vote and a trivial current patch set is rework",
+          result.get("ps_kind") == "rework" and result.get("legs") != "none", result)
+    check("triage change: ...and says which patch set carried the rework",
+          any("ps-kind-span" in str(rule) and "PS 2" in str(rule) for rule in result.get("fired_rules") or []),
+          result.get("fired_rules"))
+    result = changed(106, [patch(1, ps1, base, approvals=[approval("+1")]),
+                           patch(2, ps3, ps1, kind="TRIVIAL_REBASE"),
+                           patch(3, ps4, ps3, kind="NO_CODE_CHANGE")])
+    check("triage change: only trivial patch sets since my vote is still a carry-over",
+          result.get("ps_kind") == "carry-over" and result.get("legs") == "none", result)
+
+    # A hold -1 that a REWORK dropped is flagged whatever the delta.
+    held = [patch(1, ps1, base, approvals=[approval("-1")]), patch(2, ps3, ps1, kind="REWORK")]
+    result = changed(107, held, extra={"submitRecords": [{"status": "OK"}]})
+    hold_flags = [f for f in result.get("flags") or [] if f.startswith("hold dropped")]
+    check("triage change: my -1 missing from the current patch set is flagged, with SUBMITTABLE",
+          len(hold_flags) == 1 and "PS 1" in hold_flags[0] and "SUBMITTABLE" in hold_flags[0], result.get("flags"))
+    check("triage change: ...and recorded as a fired rule",
+          any("hold-dropped" in str(rule) for rule in result.get("fired_rules") or []), result.get("fired_rules"))
+    result = changed(108, held, extra={"submitRecords": [{"status": "NOT_READY"}, {"status": "RULE_ERROR"}]})
+    hold_flags = [f for f in result.get("flags") or [] if f.startswith("hold dropped")]
+    check("triage change: a dropped hold on a change that is not submittable is flagged without SUBMITTABLE",
+          len(hold_flags) == 1 and "SUBMITTABLE" not in hold_flags[0], result.get("flags"))
+    result = changed(109, [patch(1, ps1, base, approvals=[approval("-1")]),
+                           patch(2, ps3, ps1, kind="REWORK", approvals=[approval("-1", granted=20)])],
+                     extra={"submitRecords": [{"status": "OK"}]})
+    check("triage change: a -1 the current patch set still carries is not a dropped hold",
+          not [f for f in result.get("flags") or [] if f.startswith("hold dropped")], result.get("flags"))
+    result = changed(110, [patch(1, ps1, base, approvals=[approval("+1")]), patch(2, ps3, ps1, kind="REWORK")],
+                     extra={"submitRecords": [{"status": "OK"}]})
+    check("triage change: a positive last vote is never a hold",
+          not [f for f in result.get("flags") or [] if f.startswith("hold dropped")], result.get("flags"))
+    result = changed(111, held, args=("--as-of-ps", "2"), extra={"submitRecords": [{"status": "OK"}]})
+    hold_flags = [f for f in result.get("flags") or [] if f.startswith("hold dropped")]
+    check("triage change: a replay flags the dropped hold but never claims SUBMITTABLE (records are today's)",
+          len(hold_flags) == 1 and "SUBMITTABLE" not in hold_flags[0], result.get("flags"))
+
     # PS2 is rebased onto an unrelated parent, then carries a real edit. Its
     # own patch exposes only the real edit, not the parent file.
     git(repo, "checkout", "-q", "-B", "rebase-parent", base)
@@ -5331,6 +5377,21 @@ def test_triage(tmp):
     ssh_argv = argv_log.read_text().splitlines() if argv_log.exists() else []
     check("triage ssh: `--` precedes the destination",
           ssh_argv[:4] == ["-p", "29418", "--", "alice@gerrit.example.com"], ssh_argv)
+    # The change query asks for submit records: the dropped-hold flag says
+    # SUBMITTABLE from them (2026-09-24). The fake ssh returns nothing, so the
+    # query itself fails -- the argv is what is being checked.
+    argv_log.unlink()
+    os.environ["PATH"] = str(fake_bin) + os.pathsep + saved_path
+    try:
+        try:
+            triage_module._query({"gerrit": {"ssh": "alice@gerrit.example.com", "port": 29418}}, "1", None)
+        except Exception:
+            pass
+    finally:
+        os.environ["PATH"] = saved_path
+    query_argv = argv_log.read_text().splitlines() if argv_log.exists() else []
+    check("triage ssh: the change query asks for submit records",
+          "--submit-records" in query_argv, query_argv)
     # The fake ssh would succeed, so only the guard can refuse -- and the
     # proof is that ssh was never started.
     argv_log.unlink()

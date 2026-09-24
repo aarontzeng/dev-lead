@@ -1255,7 +1255,8 @@ def _query(config, number, query_json):
         rows = _rows_from(text)
     else:
         rows = _gerrit_rows(config, "--current-patch-set", "--patch-sets", "--files",
-                            "--all-approvals", "--comments", "--dependencies", "change:%s" % number)
+                            "--all-approvals", "--comments", "--dependencies", "--submit-records",
+                            "change:%s" % number)
     wanted = str(number)
     for row in rows:
         if str(row.get("number")) == wanted:
@@ -1518,11 +1519,25 @@ def triage_change(config, raw, path, number, query_json, include_wip, as_of=None
     flags = ["%s: binary" % entry["new"] for entry in delta_entries if entry.get("binary")]
     flags.extend(_mode_flags(pairs))
     kinds = {"TRIVIAL_REBASE", "NO_CODE_CHANGE", "NO_CHANGE"}
+    # The kind is judged over EVERY patch set since my vote, not the current one
+    # alone: vote on PS12, a REWORK PS13, a TRIVIAL_REBASE PS14 is not a carry-over
+    # -- the content changed after the vote (a peer's round, 2026-09-24; the
+    # rework held the fix for their own blocker). Same span rule the gateway uses
+    # for a carried +2. No vote, or a vote on the current patch set, leaves the
+    # span at the current patch set, as before.
+    span = [current]
+    if prior:
+        span = [entry for key, entry in patch_sets.items()
+                if int(key) > int(prior["number"]) and int(key) <= int(current["number"])] or [current]
+    reworked = [str(entry.get("number")) for entry in span if entry.get("kind") not in kinds]
     if role == "reviewer" and voted_set is None:
         ps_kind = "new"
-    elif current.get("kind") in kinds:
+    elif not reworked:
         ps_kind = "carry-over"
     else:
+        if current.get("kind") in kinds:
+            _fired(fired, "ps-kind-span", "current patch set is %s, but PS %s since my vote %s not"
+                   % (current.get("kind"), ", ".join(reworked), "is" if len(reworked) == 1 else "are"))
         if only_moves and _is_move_only(repo, prior["revision"], current["revision"], moves):
             ps_kind = "move-only"
             flags.extend(_move_checks(config, repo, prior["revision"], current["revision"], moves))
@@ -1531,6 +1546,23 @@ def triage_change(config, raw, path, number, query_json, include_wip, as_of=None
             if moves:
                 flags.extend(_move_checks(config, repo, prior["revision"], current["revision"], moves))
     _fired(fired, "ps-kind", "patch set is %s" % ps_kind)
+    # A hold is not about the diff: my negative vote on an earlier patch set that
+    # the current one no longer carries (a REWORK drops it) is surfaced whatever
+    # the delta, and says when the change has become submittable without it.
+    if role == "reviewer" and vote and prior and (_approval_value(vote) or 0) < 0:
+        still_held = any(
+            approval.get("type") == "Code-Review" and _identity_matches(approval.get("by"), identifiers)
+            and (_approval_value(approval) or 0) < 0
+            for approval in current.get("approvals") or [])
+        if not still_held:
+            submittable = as_of is None and any(
+                isinstance(record, dict) and record.get("status") == "OK"
+                for record in change.get("submitRecords") or [])
+            hold = ("hold dropped: my %s on PS %s is not on current PS %s%s"
+                    % (vote.get("value"), prior["number"], current["number"],
+                       " -- the change is SUBMITTABLE without it" if submittable else ""))
+            flags.append(hold)
+            _fired(fired, "hold-dropped", hold)
     if ps_kind in ("carry-over", "move-only"):
         lenses, risk_floor = [], "inherit"
     else:

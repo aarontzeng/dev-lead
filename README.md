@@ -235,6 +235,13 @@ For a merge-commit patch set, its content delta is compared with the first
 parent, matching Gerrit's displayed diff.
 `change --as-of-ps N` deliberately excludes your own vote and messages on
 patch set N, reproducing the decision you faced before reviewing it.
+A `carry-over` (no legs) needs EVERY patch set since your last vote to be
+trivial (`TRIVIAL_REBASE`, `NO_CODE_CHANGE`, `NO_CHANGE`), not only the
+current one: a REWORK between your vote and a trivial current patch set is a
+rework. When your last vote was negative and the current patch set no longer
+carries it -- a REWORK drops a hold -- `flags` says so whatever the delta, and
+adds that the change is SUBMITTABLE when Gerrit's submit records say OK (never
+in an `--as-of-ps` replay, whose records are today's).
 `change` only reads a clone, except to fetch a patch set it lacks. That fetch
 runs with `--no-write-fetch-head` (git 2.29 or later), so `FETCH_HEAD` is left
 alone, and with `--refmap=`, so a configured fetch refspec (one that maps
