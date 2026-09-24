@@ -146,6 +146,13 @@ briefly believed the delegate had stopped.
   dirty tree). Verify flags by reading the companion source
   (`parseCommandInput` and each subcommand's options), never by trial
   invocation.
+- **A `codex exec` review has no time limit, and the frame sets none.** The
+  15-minute budget in the suite's frames is agy's alone, and only agy enforces
+  one (`--print-timeout`). Measured at xhigh (a peer's round, 2026-09-24): 375 to
+  1152 s per packet, the longest two past 15 minutes, both finishing with a full
+  review. If a round needs a hard stop, wrap the launch in `timeout` -- and
+  treat a killed run as a missing leg: `-o` writes review.md only at the end, so
+  nothing partial survives to be read.
 
 ## Reading a report
 
