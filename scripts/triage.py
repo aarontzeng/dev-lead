@@ -1564,9 +1564,10 @@ def triage_change(config, raw, path, number, query_json, include_wip, as_of=None
             and (_approval_value(approval) or 0) < 0
             for approval in current.get("approvals") or [])
         if not still_held:
-            # Fail closed: a record that is not an object is not an OK one.
-            records = change.get("submitRecords") or []
-            submittable = as_of is None and bool(records) and all(
+            # Fail closed: a record that is not an object is not an OK one, and
+            # a field that is not a list holds no records.
+            records = change.get("submitRecords")
+            submittable = as_of is None and isinstance(records, list) and bool(records) and all(
                 isinstance(record, dict) and record.get("status") in ("OK", "FORCED")
                 for record in records)
             hold = ("hold dropped: my %s on PS %s is not on current PS %s%s"

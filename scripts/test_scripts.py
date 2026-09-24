@@ -4617,6 +4617,10 @@ def test_triage(tmp):
     hold_flags = [f for f in result.get("flags") or [] if f.startswith("hold dropped")]
     check("triage change: a submit record that is not an object is not an OK one",
           len(hold_flags) == 1 and "SUBMITTABLE" not in hold_flags[0], result.get("flags"))
+    result = changed(119, held, extra={"submitRecords": True})
+    hold_flags = [f for f in result.get("flags") or [] if f.startswith("hold dropped")]
+    check("triage change: a submitRecords field that is not a list is not SUBMITTABLE, and does not raise",
+          len(hold_flags) == 1 and "SUBMITTABLE" not in hold_flags[0], result.get("flags"))
     # A vote Gerrit copied forward keeps its grantedOn; the tie goes to the patch
     # set it was cast on, so a sticky -2 carried across a REWORK is not a vote on
     # the current content.
