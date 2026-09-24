@@ -112,8 +112,13 @@ def materialize(target, base, head, dest, made=None):
             made.append(m)
 
     def write(path, data):
+        # Exclusive and no-follow: a name another process planted after the
+        # directory check -- a symlink into the frozen tree, say -- is refused,
+        # never written through, and never recorded as ours to clean up.
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
         made.append(path)
-        (path.write_bytes if isinstance(data, bytes) else path.write_text)(data)
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(data if isinstance(data, bytes) else data.encode("utf-8", "surrogateescape"))
 
     mkdirs(dest)
     write(dest / "DIFF.patch",
@@ -177,6 +182,15 @@ def main(argv=None, prog="review-prompt"):
         # A half-written evidence directory would make the retry refuse, and
         # reads like evidence to anyone who opens it. Remove exactly what this
         # run wrote, newest first; rmdir leaves a directory someone else filled.
+        # The read-only pass may have run part-way: give the directories this
+        # run created their owner-write bit back first, or nothing inside them
+        # can be removed and the retry is refused as non-empty.
+        for path in made:
+            if path.is_dir() and not path.is_symlink():
+                try:
+                    os.chmod(path, stat.S_IRWXU)
+                except OSError:
+                    pass
         for path in reversed(made):
             try:
                 if path.is_dir() and not path.is_symlink():

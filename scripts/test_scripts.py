@@ -2679,6 +2679,60 @@ def test_leg_cmd():
               and (shared / "foreign").read_text() == "theirs\n"
               and not (shared / "DIFF.patch").exists() and not (shared / "COMMITS.txt").exists(),
               sorted(p.name for p in shared.iterdir()) if shared.is_dir() else "gone")
+        # A name planted after the directory check is refused, not written through
+        # (review round 3): the fake git plants COMMITS.txt as a symlink when the
+        # log is asked for, pointing at a file outside the evidence.
+        victim = Path(td) / "victim.txt"
+        victim.write_text("untouched\n")
+        planted = run_dir / "planted"
+        (fakebin / "git").write_text('#!/bin/sh\n[ "$3" = log ] && ln -s %s "%s/COMMITS.txt"\nexec %s "$@"\n'
+                                     % (victim, planted, real_git))
+        failed = subprocess.run([sys.executable, str(gen), "--adapter", "agy", "--base", base,
+                                 "--target", str(repo), "--evidence", str(planted)],
+                                input="lens", capture_output=True, text=True, env=fenv)
+        check("review-prompt: a planted symlink is refused, its target untouched, the link left alone",
+              failed.returncode != 0 and victim.read_text() == "untouched\n"
+              and (planted / "COMMITS.txt").is_symlink() and not (planted / "DIFF.patch").exists(),
+              failed.stderr)
+
+        # ...and so is a REGULAR file planted there (O_EXCL, not only O_NOFOLLOW).
+        planted2 = run_dir / "planted2"
+        (fakebin / "git").write_text('#!/bin/sh\n[ "$3" = log ] && echo theirs > "%s/COMMITS.txt"\nexec %s "$@"\n'
+                                     % (planted2, real_git))
+        failed = subprocess.run([sys.executable, str(gen), "--adapter", "agy", "--base", base,
+                                 "--target", str(repo), "--evidence", str(planted2)],
+                                input="lens", capture_output=True, text=True, env=fenv)
+        check("review-prompt: a planted regular file is refused and keeps its content",
+              failed.returncode != 0 and (planted2 / "COMMITS.txt").is_file()
+              and (planted2 / "COMMITS.txt").read_text() == "theirs\n", failed.stderr)
+
+        # A read-only pass that fails part-way: cleanup restores write on the
+        # directories this run made before removing what is inside them.
+        _rspec = _ilu.spec_from_file_location("review_prompt_mod", gen)
+        rpm = _ilu.module_from_spec(_rspec)
+        _rspec.loader.exec_module(rpm)
+        half = run_dir / "half"
+        real_chmod, calls = os.chmod, {"n": 0}
+        def flaky_chmod(path, mode, *a, **k):
+            calls["n"] += 1
+            if calls["n"] == 8:
+                raise PermissionError("chmod failed part-way")
+            return real_chmod(path, mode, *a, **k)
+        import io as _io
+        old_stdin, rpm.os.chmod = sys.stdin, flaky_chmod
+        try:
+            sys.stdin = _io.StringIO("lens")
+            try:
+                rpm.main(["--adapter", "agy", "--base", base, "--target", str(repo),
+                          "--evidence", str(half)])
+                exited = False
+            except SystemExit:
+                exited = True
+        finally:
+            sys.stdin, rpm.os.chmod = old_stdin, real_chmod
+        check("review-prompt: a read-only pass that fails part-way still cleans up completely",
+              exited and calls["n"] >= 8 and not half.exists(),
+              sorted(str(p) for p in half.rglob("*")) if half.exists() else "gone")
 
     # The framed launches leg-cmd emits for opencode and agy (0.6.30).
     with tempfile.TemporaryDirectory() as td, tempfile.TemporaryDirectory() as rd:
