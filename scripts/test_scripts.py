@@ -4574,7 +4574,7 @@ def test_triage(tmp):
     check("triage change: only trivial patch sets since my vote is still a carry-over",
           result.get("ps_kind") == "carry-over" and result.get("legs") == "none", result)
 
-    # A hold -1 that a REWORK dropped is flagged whatever the delta.
+    # A hold -1 that a new patch set dropped is flagged whatever the delta.
     held = [patch(1, ps1, base, approvals=[approval("-1")]), patch(2, ps3, ps1, kind="REWORK")]
     result = changed(107, held, extra={"submitRecords": [{"status": "OK"}]})
     hold_flags = [f for f in result.get("flags") or [] if f.startswith("hold dropped")]
@@ -4599,6 +4599,39 @@ def test_triage(tmp):
     hold_flags = [f for f in result.get("flags") or [] if f.startswith("hold dropped")]
     check("triage change: a replay flags the dropped hold but never claims SUBMITTABLE (records are today's)",
           len(hold_flags) == 1 and "SUBMITTABLE" not in hold_flags[0], result.get("flags"))
+    # Gerrit submits only when EVERY record is OK or FORCED: one OK beside a
+    # NOT_READY record is not submittable.
+    result = changed(112, held, extra={"submitRecords": [{"status": "OK"}, {"status": "NOT_READY"}]})
+    hold_flags = [f for f in result.get("flags") or [] if f.startswith("hold dropped")]
+    check("triage change: one OK record beside a NOT_READY one is not SUBMITTABLE",
+          len(hold_flags) == 1 and "SUBMITTABLE" not in hold_flags[0], result.get("flags"))
+    result = changed(113, held, extra={"submitRecords": [{"status": "OK"}, {"status": "FORCED"}]})
+    hold_flags = [f for f in result.get("flags") or [] if f.startswith("hold dropped")]
+    check("triage change: OK and FORCED records together are SUBMITTABLE",
+          len(hold_flags) == 1 and "SUBMITTABLE" in hold_flags[0], result.get("flags"))
+    result = changed(116, held)
+    hold_flags = [f for f in result.get("flags") or [] if f.startswith("hold dropped")]
+    check("triage change: no submit records at all is not SUBMITTABLE",
+          len(hold_flags) == 1 and "SUBMITTABLE" not in hold_flags[0], result.get("flags"))
+    # A trivial rebase can drop a -1 too (the label's copy rule decides); it is
+    # flagged, and the legs still follow the content.
+    result = changed(114, [patch(1, ps1, base, approvals=[approval("-1")]),
+                           patch(2, ps2, ps1, kind="TRIVIAL_REBASE")],
+                     extra={"submitRecords": [{"status": "OK"}]})
+    hold_flags = [f for f in result.get("flags") or [] if f.startswith("hold dropped")]
+    check("triage change: a -1 a trivial rebase dropped is flagged, and a carry-over still has no legs",
+          len(hold_flags) == 1 and "SUBMITTABLE" in hold_flags[0]
+          and result.get("ps_kind") == "carry-over" and result.get("legs") == "none", result)
+    # The span is read in patch set order whatever order Gerrit lists them in,
+    # and a patch set whose number is not a number is not in it.
+    result = changed(115, [patch(1, ps1, base, approvals=[approval("+1")]),
+                           patch(3, ps3, ps1, kind="REWORK"),
+                           patch("draft", ps3, ps1, kind="REWORK"),
+                           patch(2, ps3, ps1, kind="REWORK"),
+                           patch(4, ps4, ps3, kind="TRIVIAL_REBASE")])
+    check("triage change: the span names its rework patch sets in number order, skipping a non-numeric one",
+          any("ps-kind-span" in str(rule) and "PS 2, 3 since" in str(rule) for rule in result.get("fired_rules") or []),
+          result.get("fired_rules"))
 
     # PS2 is rebased onto an unrelated parent, then carries a real edit. Its
     # own patch exposes only the real edit, not the parent file.

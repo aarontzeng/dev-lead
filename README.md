@@ -239,9 +239,12 @@ A `carry-over` (no legs) needs EVERY patch set since your last vote to be
 trivial (`TRIVIAL_REBASE`, `NO_CODE_CHANGE`, `NO_CHANGE`), not only the
 current one: a REWORK between your vote and a trivial current patch set is a
 rework. When your last vote was negative and the current patch set no longer
-carries it -- a REWORK drops a hold -- `flags` says so whatever the delta, and
-adds that the change is SUBMITTABLE when Gerrit's submit records say OK (never
-in an `--as-of-ps` replay, whose records are today's).
+carries it -- any new patch set can drop a hold, a rework or a rebase the
+label's copy rule does not carry a -1 across -- `flags` says so whatever the
+delta (the legs still follow the content: a trivial rebase wants a new vote,
+not a new review), and adds that the change is SUBMITTABLE when every submit
+record is OK or FORCED (never in an `--as-of-ps` replay, whose records are
+today's).
 `change` only reads a clone, except to fetch a patch set it lacks. That fetch
 runs with `--no-write-fetch-head` (git 2.29 or later), so `FETCH_HEAD` is left
 alone, and with `--refmap=`, so a configured fetch refspec (one that maps
