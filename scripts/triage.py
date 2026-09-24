@@ -1287,6 +1287,10 @@ def _last_vote(change, identifiers):
                 found.append((approval.get("grantedOn", 0), patch_set, approval))
     if not found:
         return None, None, None
+    # Equal times keep the EARLIEST patch set, on purpose: a vote Gerrit copies
+    # forward keeps its original grantedOn, and the patch set it was cast on is
+    # the content I reviewed -- a sticky -2 copied across a REWORK must not read
+    # as a vote on the current patch set.
     _when, patch_set, approval = max(found, key=lambda item: _time(item[0]))
     if _approval_value(approval) in (None, 0):
         return None, None, None
@@ -1522,9 +1526,8 @@ def triage_change(config, raw, path, number, query_json, include_wip, as_of=None
     # The kind is judged over EVERY patch set since my vote, not the current one
     # alone: vote on PS12, a REWORK PS13, a TRIVIAL_REBASE PS14 is not a carry-over
     # -- the content changed after the vote (a peer's round, 2026-09-24; the
-    # rework held the fix for their own blocker). Same span rule the gateway uses
-    # for a carried +2. No vote, or a vote on the current patch set, leaves the
-    # span at the current patch set, as before.
+    # rework held the fix for their own blocker). No vote, or a vote on the
+    # current patch set, leaves the span at the current patch set, as before.
     span = [current]
     if prior:
         span = sorted((entry for key, entry in patch_sets.items()
@@ -1561,9 +1564,11 @@ def triage_change(config, raw, path, number, query_json, include_wip, as_of=None
             and (_approval_value(approval) or 0) < 0
             for approval in current.get("approvals") or [])
         if not still_held:
-            records = [record for record in change.get("submitRecords") or [] if isinstance(record, dict)]
+            # Fail closed: a record that is not an object is not an OK one.
+            records = change.get("submitRecords") or []
             submittable = as_of is None and bool(records) and all(
-                record.get("status") in ("OK", "FORCED") for record in records)
+                isinstance(record, dict) and record.get("status") in ("OK", "FORCED")
+                for record in records)
             hold = ("hold dropped: my %s on PS %s is not on current PS %s%s"
                     % (vote.get("value"), prior["number"], current["number"],
                        " -- the change is SUBMITTABLE without it" if submittable else ""))

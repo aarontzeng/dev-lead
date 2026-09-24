@@ -4613,6 +4613,18 @@ def test_triage(tmp):
     hold_flags = [f for f in result.get("flags") or [] if f.startswith("hold dropped")]
     check("triage change: no submit records at all is not SUBMITTABLE",
           len(hold_flags) == 1 and "SUBMITTABLE" not in hold_flags[0], result.get("flags"))
+    result = changed(117, held, extra={"submitRecords": [{"status": "OK"}, None]})
+    hold_flags = [f for f in result.get("flags") or [] if f.startswith("hold dropped")]
+    check("triage change: a submit record that is not an object is not an OK one",
+          len(hold_flags) == 1 and "SUBMITTABLE" not in hold_flags[0], result.get("flags"))
+    # A vote Gerrit copied forward keeps its grantedOn; the tie goes to the patch
+    # set it was cast on, so a sticky -2 carried across a REWORK is not a vote on
+    # the current content.
+    result = changed(118, [patch(1, ps1, base, approvals=[approval("-2")]),
+                           patch(2, ps3, ps1, kind="REWORK", approvals=[approval("-2")])])
+    check("triage change: a copied vote counts from the patch set it was cast on",
+          result.get("skip") is None and result.get("ps_kind") == "rework"
+          and (result.get("my_last_vote") or {}).get("ps") == 1, result)
     # A trivial rebase can drop a -1 too (the label's copy rule decides); it is
     # flagged, and the legs still follow the content.
     result = changed(114, [patch(1, ps1, base, approvals=[approval("-1")]),
