@@ -503,6 +503,29 @@ Catalogue facts to re-verify on YOUR account (all measured on at least one):
   retire an older tier or change the review gate. Compare local verified
   outcomes after the first runs, not release branding or prose style.
 
+## Long briefs time out; a short read list does not (measured 2026-09-23)
+
+On long specification and design-record reviews in plan mode, 4 of 10 runs hit
+`--print-timeout` (at 15 and 30 minutes) and 3 of those returned an empty body
+with "returning partial output". The shape that failed: a brief listing five to
+eight context files plus an open-ended attack — the leg never started
+answering. The shape that finished every time (fastest 2m17s, three real
+blockers): "read ONLY <the diff, one or two files, the commit message>; answer
+within N minutes; at most 5 findings". The review frame
+([`adversarial-framing.md`](adversarial-framing.md)) carries the read list, a
+15-minute budget and an 8-finding cap for this reason.
+
+## Quota exhaustion kills a running leg late, and there is no fallback (2026-09-24)
+
+`429 RESOURCE_EXHAUSTED ... Individual quota reached ... Resets in 3h` arrived
+after ~11 minutes of work, killing 2 of 4 agy legs a peer ran in parallel;
+the same account's five-hour window read 0% the same morning. The failure is
+loud (exit 3, the message in the log) but late: the leg has already spent its
+minutes. Until the roster can declare a fallback here: cap parallel agy legs
+per round, treat a 429 as "leg deferred until the reset" (not as a verdict),
+and when a Gemini-family opinion is needed now, cursor's `gemini-*` models are
+the same family on another bill (cursor-runtime.md).
+
 ## A mid-generation hang, distinct from the auth-layer failures below
 
 Measured once (a data point, not a claimed mechanism): a review run

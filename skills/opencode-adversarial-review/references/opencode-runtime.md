@@ -660,6 +660,12 @@ data:
   answers are what changed that. Frame adopted as the default (0.6.30). The
   free route rate-limited and timed out twice in the first batch; every
   scored run is the paid twin, same family.
+- 2026-09-24, a peer's round of four packets (C++/SQL/Compose, docs, a 2.6k-line
+  web package, scripts), muse-spark-1.3 free at xhigh under the git-read
+  lock-down: **0 unique confirmed findings across the four**, three +2 votes
+  where the final verdict was -1, one finding rebutted by a probe — and its
+  NEGATIVE claim ("no other link gaps") was exactly right. A consistency leg
+  whose "nothing else" can be trusted, not a gate on attack paths.
 
 ## A long review eats its own prompt — put the ask in a FILE
 

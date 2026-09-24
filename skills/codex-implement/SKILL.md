@@ -107,7 +107,16 @@ The prompt must include:
    in** — one line, free when the run finishes normally, and the difference
    between a minutes-long handoff and a restart when it does not. See
    "Resuming a run that was CUT OFF" below for what that line buys you.
-7. No recursive delegation to Codex, other CLIs, or review scripts.
+7. No recursive delegation to Codex, other CLIs, or review scripts. Say it in
+   words the delegate cannot read past: **"You are the implementer. Reviews,
+   freezing a target and the leg roster are the LEAD's job: do not run any
+   review leg and do not read roster.json."** Measured: a write delegate read
+   this suite's own skills from its skills directory (a symlink to the lead's),
+   took the lead's role, copied the worktree to a temp directory and launched
+   three review CLIs, which all died in its sandbox; the implementation was
+   complete but the job ended FAILED. A delegate whose skills path contains
+   dev-lead can read the lead's instructions — the preamble is what tells it
+   they are not its own.
 
 Use a fresh thread for a new task. Resolve the companion per the runtime
 file, then:

@@ -111,6 +111,43 @@ single strongest finding came from the free leg on a diff two paid legs had
 already read. None of those three numbers survives being reconstructed
 afterwards.
 
+**A frame is a measured default, per adapter — not a style.** Before 0.6.30
+the suite's adversarial frame was tested on every review leg against that
+leg's plain skill brief: three frozen targets with known answers, three runs
+per arm, same model and effort. It lifted three legs (4→7, 3→8, 9 from 7 for
+the companion prompt it replaced), did nothing measurable for a fourth (11→12,
+slower) and made the strongest one slightly worse (17→15 of 18, slower): a
+frame's structure is scaffolding, and a leg that needs none pays for it in
+attention. Two lessons from building it: **an exclusion instruction silently
+cuts recall** ("an inherited defect is not a finding" dropped real findings a
+label would have kept — label, lower the severity, never exclude); and **a
+per-claim HOLDS/BROKEN list is what stops a lenient leg rubber-stamping** —
+the plain brief answered broken claims "HOLDS". Re-measure when a model
+changes; the runtime files' calibration tables carry the per-leg numbers.
+
+**Lens diversity pays most where the change is large and multi-language.**
+Measured on one 22-change stack (compiled code, SQL inside it, a web client,
+scripts, docs; four legs, four lenses): 7 blockers, **6 found by exactly one
+leg**, and every family contributed at least one no other leg found. On a
+text-only documentation batch the same extra legs mostly added noise. A
+hypothesis from two rounds, not a rule — but it says where a fourth leg earns
+its cost.
+
+**Tell a leg what it must not re-report.** A "known, do not re-report" block
+listing the lead's already-verified items, measured across four packets in one
+round, produced zero duplicates — and left the legs' attention for new ground.
+
+**Two packet shapes that hide regressions from a diff-only brief:**
+- A *rebase* patch set can silently revert content: a measured rebase put back
+  an old date, an old owner and dropped several table rows; a three-model
+  review passed it, and only an interdiff-against-history check caught it. On
+  any rebase, have one leg compare the old patch set's content with the new
+  one's net of the parent's changes (`git range-diff`) and list every removed
+  line the new parent does not explain.
+- For a topic of several changes, include the **already-merged** siblings'
+  current text, not only the open ones: a stale cross-reference lived in a
+  sibling that had merged, outside every leg's packet.
+
 A model can be wrong for one role and right for another. A "fast" tier that
 underperforms on defect-hunting produced the deepest finding of a five-round
 sequence when given the challenge brief. Blanket "model X is unfit for review"
@@ -484,6 +521,20 @@ Nothing a delegate self-reports is evidence. The lead:
    the step is deleted only if neither ever happens — the same standard §4
    applies to everything else.
 
+**Grade a runtime-semantics claim by running it, not by reading it.** Three
+shapes measured on one peer's rounds, each settled in minutes on a throwaway
+instance and each wrong in at least one direction when judged from source:
+- a query a leg called "does not match" in fact **failed to parse**, so every
+  save rolled back — a worse bug than the one reported;
+- two container-orchestration claims (what a profile builds, what `down`
+  stops) were false on the installed version, and a third was true and turned
+  out to be an authority bypass;
+- "no test covers fix X" was false once — settle it by mutating X and
+  watching a test go red, never by grep.
+Likewise **introduced vs inherited**: settle it mechanically (`git show
+<base>:path`, `git blame`) even when the brief asked the leg to, because a leg
+mislabels it in both directions.
+
 ### Where the suite cannot see: verifying on a real runtime
 
 Some acceptance criteria are not testable by the suite at all — accessibility
@@ -528,6 +579,19 @@ the next person reads the checkmarks and not the caveat.
   the real diff.
 - Before launching: `git diff --stat "$BASE" HEAD` — the file list must match
   the change under review.
+- **A packet frozen at an old parent produces "file missing" findings.** When
+  the change sits many commits behind its target branch, files the change
+  cites exist on the target but not in the frozen tree; measured twice in one
+  round, and one became a wrong -1. Say in the brief how far the parent is
+  behind, or have the leg check `git merge-base` before it claims absence.
+- **A diff cannot show a binary's content.** Two legs claimed an image had not
+  been regenerated because the range diff said nothing; compare blob ids
+  (`git rev-parse <base>:<path>` against `<head>:<path>`) instead. The suite's
+  review frames carry this rule.
+- **Never create a worktree from the plugin's own marketplace clone.** A plugin
+  update re-clones that directory, and every worktree made from it loses its
+  `.git` at once — measured: every frozen target of a running experiment broke
+  mid-session. Freeze from a standalone clone of the repository under review.
 
 ### A new parameter inherits every rule the old parameters already had
 
