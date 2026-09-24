@@ -2619,6 +2619,24 @@ def test_leg_cmd():
               and "the-base" not in byname.stdout, byname.stderr)
         for root, dirs, files in os.walk(named):
             os.chmod(root, 0o755)
+        # ...and in the evidence: the name reaches git exactly once, to be
+        # resolved. A stable branch cannot tell the two apart, so log the calls.
+        callog = Path(td) / "git-calls.log"
+        logbin = Path(td) / "loggit"
+        logbin.mkdir()
+        (logbin / "git").write_text('#!/bin/sh\necho "$*" >> %s\nexec %s "$@"\n'
+                                    % (callog, shutil.which("git")))
+        (logbin / "git").chmod(0o755)
+        logged = run_dir / "logged"
+        subprocess.run([sys.executable, str(gen), "--adapter", "agy", "--base", "the-base",
+                        "--target", str(repo), "--evidence", str(logged)], input="lens",
+                       capture_output=True, text=True,
+                       env=dict(os.environ, PATH="%s:%s" % (logbin, os.environ["PATH"])))
+        named_calls = [l for l in callog.read_text().splitlines() if "the-base" in l]
+        check("review-prompt: the BASE name is used once, to resolve it; the evidence uses the hash",
+              len(named_calls) == 1 and "rev-parse" in named_calls[0], named_calls)
+        for root, dirs, files in os.walk(logged):
+            os.chmod(root, 0o755)
         bad = subprocess.run([sys.executable, str(gen), "--adapter", "codex", "--base", "no-such-rev",
                               "--target", str(repo)], input="lens", capture_output=True, text=True)
         check("review-prompt: a BASE that is not a commit is refused before anything is built",
@@ -2646,6 +2664,21 @@ def test_leg_cmd():
                                 input="lens", capture_output=True, text=True, env=fenv)
         check("review-prompt: ...and empties, but keeps, an empty directory it was handed",
               failed.returncode != 0 and handed.is_dir() and not any(handed.iterdir()), failed.stderr)
+        # Cleanup removes what THIS run wrote, never what another process put
+        # beside it mid-run (review round 2): a git that drops a foreign file
+        # into the evidence directory, then fails.
+        shared = run_dir / "shared"
+        (fakebin / "git").write_text('#!/bin/sh\nfor a in "$@"; do [ "$a" = cat-file ] && '
+                                     '{ echo theirs > "%s/foreign"; exit 7; }; done\nexec %s "$@"\n'
+                                     % (shared, real_git))
+        failed = subprocess.run([sys.executable, str(gen), "--adapter", "agy", "--base", base,
+                                 "--target", str(repo), "--evidence", str(shared)],
+                                input="lens", capture_output=True, text=True, env=fenv)
+        check("review-prompt: a failed run removes only what it wrote, never a file it did not",
+              failed.returncode != 0 and (shared / "foreign").is_file()
+              and (shared / "foreign").read_text() == "theirs\n"
+              and not (shared / "DIFF.patch").exists() and not (shared / "COMMITS.txt").exists(),
+              sorted(p.name for p in shared.iterdir()) if shared.is_dir() else "gone")
 
     # The framed launches leg-cmd emits for opencode and agy (0.6.30).
     with tempfile.TemporaryDirectory() as td, tempfile.TemporaryDirectory() as rd:
@@ -5528,7 +5561,7 @@ def test_triage(tmp):
     check("triage effort: raising a -fast twin keeps the twin",
           entry["model"] == "cursor-grok-4.6-xhigh-fast" and got.get("effort") == "xhigh", (got, entry))
     entry, got = one("claude", "claude-sonnet", "high")
-    check("triage effort: an adapter with no effort concept says so",
+    check("triage effort: an adapter the suite passes no effort for says so",
           got == {"effort": None, "effort_in": "none"}, got)
     # config_only is the pre-0.6.28 codex review; exercise it on the legacy data.
     real_data_cfg = triage_module.roster.data

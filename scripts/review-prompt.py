@@ -27,7 +27,6 @@ diff, the commit list and base/ describe different ranges.
 import argparse
 import os
 import re
-import shutil
 import stat
 import subprocess
 import sys
@@ -92,14 +91,34 @@ def check_dest(target, dest):
                          "tree the review is certified against" % dest)
 
 
-def materialize(target, base, head, dest):
-    """Write the evidence a no-command leg reads instead of running git."""
+def materialize(target, base, head, dest, made=None):
+    """Write the evidence a no-command leg reads instead of running git.
+
+    Every file written and directory created is appended to `made`, so a
+    failed run removes exactly what it wrote and nothing another process put
+    beside it.
+    """
+    made = [] if made is None else made
     check_dest(target, dest)
     dest = Path(dest)
-    dest.mkdir(parents=True, exist_ok=True)
-    (dest / "DIFF.patch").write_bytes(
-        _git(target, "diff", "--no-textconv", "--no-ext-diff", "--no-color", base, head, binary=True))
-    (dest / "COMMITS.txt").write_text(_git(target, "log", "--format=%H %s", "%s..%s" % (base, head)))
+
+    def mkdirs(d):
+        missing = []
+        while not d.exists():
+            missing.append(d)
+            d = d.parent
+        for m in reversed(missing):
+            m.mkdir()
+            made.append(m)
+
+    def write(path, data):
+        made.append(path)
+        (path.write_bytes if isinstance(data, bytes) else path.write_text)(data)
+
+    mkdirs(dest)
+    write(dest / "DIFF.patch",
+          _git(target, "diff", "--no-textconv", "--no-ext-diff", "--no-color", base, head, binary=True))
+    write(dest / "COMMITS.txt", _git(target, "log", "--format=%H %s", "%s..%s" % (base, head)))
     names = [n for n in _git(target, "diff", "--name-only", "--no-renames", "-z", base, head).split("\0") if n]
     lines = []
     for path in names:
@@ -113,12 +132,12 @@ def materialize(target, base, head, dest):
                                             *(new[0::2] if new else ("-", "-"))))
         if old and old[1] == "blob":
             out = dest / "base" / path
-            out.parent.mkdir(parents=True, exist_ok=True)
-            out.write_bytes(_git(target, "cat-file", "blob", old[2], binary=True))
-    (dest / "BLOBS.txt").write_text(
-        "path\tbase mode+blob\thead mode+blob ('-' = absent; mode 160000 = a submodule's "
-        "commit, not in base/; \\t \\n \\\\ escaped in paths)\n"
-        + "".join(l + "\n" for l in lines), errors="surrogateescape")
+            mkdirs(out.parent)
+            write(out, _git(target, "cat-file", "blob", old[2], binary=True))
+    write(dest / "BLOBS.txt",
+          ("path\tbase mode+blob\thead mode+blob ('-' = absent; mode 160000 = a submodule's "
+           "commit, not in base/; \\t \\n \\\\ escaped in paths)\n"
+           + "".join(l + "\n" for l in lines)).encode("utf-8", "surrogateescape"))
     # Read-only for the leg's whole run, not just equal at the endpoints.
     for root, dirs, files in os.walk(dest, topdown=False):
         for f in files:
@@ -148,29 +167,24 @@ def main(argv=None, prog="review-prompt"):
         sys.exit("%s: --base %s is not a commit in %s" % (prog, args.base, args.target))
     base = base.stdout.strip()
     evidence = os.path.abspath(args.evidence) if args.evidence else None
-    # What to remove if this run fails: the directory itself when this run made
-    # it, or only its contents when an empty one was handed in.
-    made_dir = evidence is not None and not os.path.exists(evidence)
-    writing = False
+    made = []
     try:
         text = build(framing_path(args.adapter).read_text(encoding="utf-8"),
                      base, head, lens.strip(), evidence)
         if evidence is not None:
-            check_dest(args.target, evidence)
-            writing = True
-            materialize(args.target, base, head, evidence)
+            materialize(args.target, base, head, evidence, made)
     except (OSError, UnicodeDecodeError, ValueError, RuntimeError) as exc:
         # A half-written evidence directory would make the retry refuse, and
-        # reads like evidence to anyone who opens it: remove what this run made.
-        if writing and os.path.isdir(evidence):
-            for root, dirs, _files in os.walk(evidence):
-                os.chmod(root, stat.S_IRWXU)
-            if made_dir:
-                shutil.rmtree(evidence, ignore_errors=True)
-            else:
-                for child in os.listdir(evidence):
-                    child = os.path.join(evidence, child)
-                    shutil.rmtree(child) if os.path.isdir(child) else os.unlink(child)
+        # reads like evidence to anyone who opens it. Remove exactly what this
+        # run wrote, newest first; rmdir leaves a directory someone else filled.
+        for path in reversed(made):
+            try:
+                if path.is_dir() and not path.is_symlink():
+                    path.rmdir()
+                else:
+                    path.unlink()
+            except OSError:
+                pass
         sys.exit("%s: %s" % (prog, exc))
     sys.stdout.write(text)
 

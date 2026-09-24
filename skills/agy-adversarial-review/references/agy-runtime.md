@@ -465,7 +465,7 @@ second-pool Claude model is fine as an implementer anywhere, fine as a
 reviewer of Gemini/GPT work, and forbidden as a reviewer of Claude's own
 work.
 
-### Gemini 3.7 Flash: local catalogue baseline
+### Gemini 3.7 Flash: local catalogue baseline (historical; 3.8 is the current default)
 
 On 2026-08-14, this account's `agy models` catalogue included:
 
@@ -477,8 +477,9 @@ gemini-3.7-flash-low
 
 [Google's 3.7 Flash announcement](https://blog.google/innovation-and-ai/models-and-research/gemini-models/introducing-gemini-3-7-flash/)
 establishes the release, not an account entitlement or a quality gate. The
-role skills therefore use the matching `-high`/`high` pair as their current
-Gemini default, but a different account must substitute an available matched
+role skills then used the matching `-high`/`high` pair as their Gemini default;
+they now default to `gemini-3.8-flash-high` (the roster's, and [`data/launch.json`](../../../data/launch.json)'s
+examples, which have calibration rows below). A different account must substitute an available matched
 pair and verify the served model from its log. The first locally verified 3.7
 run is calibration: append its verified outcome to the local journal before
 using it to make dispatch or gate decisions.

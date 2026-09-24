@@ -93,7 +93,8 @@ Role-specific choices:
   reports). Never `--mode plan` here — measured twice returning empty
   stdout on exit 0, which reads as a completed run that found nothing.
 - **`--model` is the accounting decision.** Pin an explicit family-bearing
-  model (`gpt-…`, `claude-…`, `cursor-grok-…`, `kimi-…`) chosen for the
+  model (`gpt-…`, `claude-…`, `cursor-grok-…`, `kimi-…`, `gemini-…`,
+  `muse-spark-…`, `glm-…`) chosen for the
   round's cross-family needs; record adapter, flag, and the `request_id`
   returned in `$RUN_DIR/review.json` in the run log. `auto`/`composer-*` are
   extra eyes only.
