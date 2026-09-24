@@ -84,7 +84,7 @@ if mech == "model_suffix":
         sys.exit("leg-cmd: %s puts effort in the MODEL NAME, not a flag.\n"
                  "  drop --effort and use one of: %s"
                  % (a, ", ".join(eff.get("examples", []))))
-elif mech == "config_only" and role == eff.get("applies_to_role", role):
+elif mech == "config_only":
     if effort:
         sys.exit("leg-cmd: %s's %s path has no effort control at all.\n"
                  "  it reads %s from %s -- read that file and REPORT the value, do not assert one."

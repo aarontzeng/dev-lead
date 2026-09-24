@@ -105,10 +105,11 @@ def mechanism_for_role(eff, role, argv):
     IMPLEMENT stays effort-free -- `roster.py plan --implement claude=<model>`
     has no effort syntax, so a flag on both roles would make it unlaunchable.
     Every per-role DECISION -- leg-cmd.sh's refusal, lint.py's launch check,
-    triage.py's effort, this module's validation and plan args -- calls this.
-    What still reads applies_to_role directly is display and config_only
-    handling (leg-cmd's banner note, the in-force config line), which can
-    only apply on the scoped role anyway.
+    triage.py's effort, this module's validation, plan args and show -- calls
+    this. What still reads applies_to_role directly: leg-cmd's banner, for
+    DISPLAY only (which note to print, for any scoped mechanism; the in-force
+    config line, for config_only), and `config-effort`'s gate on writing a
+    machine's config file (config_only only).
     """
     only = eff.get("applies_to_role")
     if only is None or role == only:

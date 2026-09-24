@@ -317,8 +317,9 @@ model:
   exists nowhere, on a documentation packet, while its conclusions were
   partly right; on a code packet its quotes were exact but it put a test in
   the wrong change and called a present build line missing. A quote that is
-  not in the file at the cited lines voids that finding; an attribution or an
-  absence claim is checked against the diff before it is relayed.
+  not in the file at the cited lines voids that finding; an attribution is
+  checked against `COMMITS.txt` and `DIFF.patch`, and an absence claim against
+  the files, before either is relayed.
 - Review-only: do not apply fixes in the same breath unless asked.
 
 ## The refusal gotcha

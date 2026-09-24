@@ -1176,7 +1176,7 @@ def _check_effort_spelling(skill, lineno, cmdline, adapter, role, eff, argv=None
                 f"launch passes --effort/-e, but {adapter} uses effort mechanism "
                 f"'{mech}' -- run scripts/leg-cmd.sh for the right spelling")
     elif mech == "config_only":
-        if has_effort_flag and role == eff.get("applies_to_role", role):
+        if has_effort_flag:
             err(f"{rel(skill)}:{lineno}",
                 f"launch passes --effort, but {adapter}'s {role} path has no effort "
                 f"flag at all (it reads {eff.get('config_key')} from "
