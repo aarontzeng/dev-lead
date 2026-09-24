@@ -4815,12 +4815,35 @@ def test_triage(tmp):
     scoped = json.loads(got.stdout) if got.returncode == 0 else {}
     check("triage scope: runs on a rules file without the Gerrit keys",
           got.returncode == 0 and scoped.get("risk_floor") == "HIGH", got.stdout + got.stderr)
-    got = run(triage, "change", "1", "--query-json", str(scope_file), env=scope_env)
+    single_query = tmp / "query-single.json"
+    single_query.write_text(json.dumps({"number": 1, "project": "example-sdk"}) + "\n", encoding="utf-8")
+    got = run(triage, "change", "1", "--query-json", str(single_query), env=scope_env)
     check("triage change: a rules file without the Gerrit keys is an input error naming them",
           got.returncode == 2 and "gerrit, clones, gateways" in got.stderr and "Traceback" not in got.stderr,
           got.stdout + got.stderr)
+    got = run(triage, "change", "1", env=scope_env)
+    check("triage change: without --query-json the missing keys are named before any Gerrit query",
+          got.returncode == 2 and "gerrit, clones, gateways" in got.stderr and "Traceback" not in got.stderr,
+          got.stdout + got.stderr)
+    # Each key on its own: `check` accepts the file, and `change` names that
+    # key and no other, even with query JSON that would otherwise run.
+    for key in ("gerrit", "clones", "gateways"):
+        one_missing = {name: value for name, value in config.items() if name != key}
+        one_file = tmp / ("triage-no-%s.json" % key)
+        _write_doc(one_file, one_missing)
+        got = checked(one_file)
+        check("triage check: a rules file without only %s passes" % key,
+              got.returncode == 0 and got.stdout == "", got.stdout + got.stderr)
+        one_env = _roster_env(tmp, DEV_LEAD_ROSTER=roster_file, DEV_LEAD_TRIAGE=one_file)
+        got = run(triage, "change", "1", "--query-json", str(single_query), env=one_env)
+        others = [name for name in ("gerrit", "clones", "gateways") if name != key]
+        check("triage change: without only %s, the error names %s and nothing else" % (key, key),
+              got.returncode == 2 and "has no %s (" % key in got.stderr
+              and not any(name in got.stderr.split("has no", 1)[-1] for name in others)
+              and "Traceback" not in got.stderr, got.stdout + got.stderr)
     expect_bad("gerrit-not-object", lambda doc: doc.update({"gerrit": "alice@gerrit.example.com"}), "gerrit: must be an object")
     expect_bad("clones-not-object", lambda doc: doc.update({"clones": []}), "clones: must be an object")
+    expect_bad("gateways-not-object", lambda doc: doc.update({"gateways": "alpha"}), "gateways: must be an object")
 
     # Fix round 1: glob stars stay within one path segment and slash-less
     # patterns match basenames, not trailing path fragments.
