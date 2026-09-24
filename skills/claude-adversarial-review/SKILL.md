@@ -55,7 +55,7 @@ RUN_DIR=$(mktemp -d "${TMPDIR:-/tmp}/claude-review.XXXXXX")
 
 cd "$REVIEW_TARGET_DIR" && \
   [ "$(git rev-parse HEAD)" = "$REVIEW_HEAD" ] && \
-  claude -p --permission-mode plan --model <tier> \
+  claude -p --permission-mode plan --model <tier> --effort <level> \
     --strict-mcp-config --mcp-config '{"mcpServers":{}}' \
     < "$RUN_DIR/prompt.md" > "$RUN_DIR/review.out" 2>&1
 ```

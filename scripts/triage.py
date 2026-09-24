@@ -1146,7 +1146,8 @@ def _leg_effort(leg, floor):
     keeps its launch and carries effort_unmet for the lead to decide."""
     launch, _ = roster.data()
     effort = (launch.get(leg["adapter"]) or {}).get("effort") or {}
-    mechanism = effort.get("mechanism", "none")
+    # Review legs only: the mechanism that governs the adapter's REVIEW role.
+    mechanism = roster.role_mechanism(leg["adapter"], "review") if effort else "none"
     examples = [str(item) for item in effort.get("examples") or []]
     if mechanism == "none":
         return {"effort": None, "effort_in": "none"}

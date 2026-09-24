@@ -95,6 +95,30 @@ def roster_path():
     return Path.home() / ".claude" / "plugins" / "data" / "dev-lead-dev-lead" / "roster.json"
 
 
+def mechanism_for_role(eff, role, argv):
+    """The effort mechanism that governs ONE role of an adapter.
+
+    `applies_to_role` scopes the adapter's mechanism to that one role (0.6.35;
+    before, it scoped config_only only). Every other role follows its own argv
+    template: one carrying {EFFORT} takes the value as a flag, one without takes
+    none. That is what lets claude REVIEW require --effort while claude
+    IMPLEMENT stays effort-free -- `roster.py plan --implement claude=<model>`
+    has no effort syntax, so a flag on both roles would make it unlaunchable.
+    leg-cmd.sh, lint.py and triage.py all call this; there is no second copy.
+    """
+    only = eff.get("applies_to_role")
+    if only is None or role == only:
+        return eff["mechanism"]
+    return "flag" if any("{EFFORT}" in str(tok) for tok in argv or []) else "none"
+
+
+def role_mechanism(adapter, role):
+    """mechanism_for_role for an adapter in the loaded launch data."""
+    launch, _ = data()
+    spec = launch[adapter]
+    return mechanism_for_role(spec["effort"], role, (spec["role"].get(role) or {}).get("argv"))
+
+
 def effort_flag_refusal(adapter, role, effort):
     """Whether leg-cmd.sh would refuse this effort flag. None means it would not.
 
@@ -111,7 +135,7 @@ def effort_flag_refusal(adapter, role, effort):
     launch, _ = data()
     spec = launch[adapter]
     eff = spec["effort"]
-    mech = eff["mechanism"]
+    mech = role_mechanism(adapter, role)
     effort = effort or ""
     if mech == "model_suffix":
         if effort:
@@ -327,7 +351,7 @@ def _check_effort(leg, adapter, role, path, problems):
     {EFFORT} is empty.
     """
     eff = _effort_spec(adapter)
-    mech = eff["mechanism"]
+    mech = role_mechanism(adapter, role)
     applies = role == eff.get("applies_to_role", role)
     if "effort" in leg and not isinstance(leg["effort"], str):
         # A launch word, never a list or number: triage compares and passes it.
@@ -832,7 +856,7 @@ def cmd_path(path):
 
 def _effort_handling(adapter, role, leg):
     eff = _effort_spec(adapter)
-    mech = eff["mechanism"]
+    mech = role_mechanism(adapter, role)
     applies = role == eff.get("applies_to_role", role)
     if mech == "config_only" and applies:
         return "expected; read from %s %s" % (eff["config_file"], eff["config_key"])
@@ -854,7 +878,7 @@ def _args_for(adapter, role, model, effort_value):
     refuses the flag, and the value is only what to expect in the config file.
     """
     eff = _effort_spec(adapter)
-    mech = eff["mechanism"]
+    mech = role_mechanism(adapter, role)
     applies = role == eff.get("applies_to_role", role)
     if mech == "config_only" and applies:
         return "--model %s" % model

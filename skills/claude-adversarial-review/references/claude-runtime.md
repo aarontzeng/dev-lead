@@ -21,7 +21,7 @@ own working directory, its own permission mode, or a different model.
 Review / read-only worker:
 
 ```bash
-claude -p --permission-mode plan --model <tier> \
+claude -p --permission-mode plan --model <tier> --effort <level> \
   --strict-mcp-config --mcp-config '{"mcpServers":{}}' \
   < "$RUN_DIR/prompt.md"
 ```
@@ -61,10 +61,11 @@ cd "$WORKTREE" && claude -p "$(cat "$RUN_DIR/task.md")" \
 - `--model` selects the tier. Pick by the same logic as any delegate:
   capability for the work, and never the same family as the reviewer that
   will check it.
-- `--effort <low|medium|high|xhigh|max>` exists too (claude 2.1.281; 19
+- `--effort <low|medium|high|xhigh|max>` sets the depth (claude 2.1.281; 19
   headless plan-mode review runs at `high` completed normally, 2026-09-24).
-  The suite does not pass it yet, so the CLI's own default applies unless you
-  add it to the launch by hand; [`data/launch.json`](../../../data/launch.json) says why it is not wired.
+  Since 0.6.35 the REVIEW role requires it -- the roster or triage says which
+  level -- while the implement role passes none, so `roster.py plan
+  --implement claude=<model>` stays launchable ([`data/launch.json`](../../../data/launch.json), `applies_to_role`).
 - Do **not** pass `--dangerously-skip-permissions`. `acceptEdits` was
   sufficient for real write work in testing; the bypass flag would also
   auto-approve things the standing rules forbid.

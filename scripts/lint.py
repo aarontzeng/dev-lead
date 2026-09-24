@@ -1080,6 +1080,9 @@ def check_launch():
             err(rel(path), f"adapter '{name}' has unknown effort mechanism {mech!r}")
         if mech == "flag" and not eff.get("flag"):
             err(rel(path), f"adapter '{name}' declares a flag mechanism but names no flag")
+        only = eff.get("applies_to_role")
+        if only is not None and only not in spec.get("role", {}):
+            err(rel(path), f"adapter '{name}' scopes its effort to role {only!r}, which it does not have")
 
         # 2. the drift-catcher, rewritten 2026-09-08 after a four-leg review
         #    demonstrated the first version caught only the ONE shape its
@@ -1108,7 +1111,8 @@ def check_launch():
             # codex implement stays on the companion), so detect by the role's.
             role_cli = (spec.get("role", {}).get(role) or {}).get("cli", spec["cli"])
             for lineno, cmdline in _launch_commands(skill, role_cli.split()[0]):
-                _check_effort_spelling(skill, lineno, cmdline, name, role, eff)
+                _check_effort_spelling(skill, lineno, cmdline, name, role, eff,
+                                       (spec.get("role", {}).get(role) or {}).get("argv"))
             # The adapter's other CLI in this role's skill is a documented
             # fallback (codex review's companion `adversarial-review`), and that
             # path has no effort flag: one there is parsed as prompt text.
@@ -1161,8 +1165,9 @@ def _launch_commands(path, cli):
     return out
 
 
-def _check_effort_spelling(skill, lineno, cmdline, adapter, role, eff):
-    mech = eff.get("mechanism")
+def _check_effort_spelling(skill, lineno, cmdline, adapter, role, eff, argv=None):
+    import roster as _roster   # the one copy of the per-role rule
+    mech = _roster.mechanism_for_role(eff, role, argv) if eff.get("mechanism") else None
     has_effort_flag = bool(_EFFORT_TOKEN.search(cmdline))
 
     if mech in ("model_suffix", "none"):
@@ -1179,7 +1184,9 @@ def _check_effort_spelling(skill, lineno, cmdline, adapter, role, eff):
     elif mech == "flag":
         # codex's knob differs by role: `task --effort` to implement, `codex exec
         # -c model_reasoning_effort=` to review (0.6.28).
-        want = (eff.get("flag_by_role") or {}).get(role, eff.get("flag"))
+        # An argv-decided role outside applies_to_role names no flag of its own;
+        # `--effort` is the default leg-cmd.sh reports too.
+        want = (eff.get("flag_by_role") or {}).get(role, eff.get("flag", "--effort"))
         # The wrong-flag-name mistake, and it is not "the right knob is
         # missing" -- a command carrying BOTH its own knob and a neighbouring
         # family's is just as wrong, and that is the shape a lead produces

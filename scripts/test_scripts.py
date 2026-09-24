@@ -726,7 +726,7 @@ def test_lint_launch():
     sys.path.insert(0, str(SCRIPTS))
     import lint
 
-    def run_against(body, adapter, role, eff, cli):
+    def run_against(body, adapter, role, eff, cli, argv=None):
         with tempfile.TemporaryDirectory() as td:
             fake = Path(td)
             d = fake / "skills" / f"{adapter}-{role}"
@@ -738,7 +738,7 @@ def test_lint_launch():
                 for lineno, cmdline in lint._launch_commands(
                         d / "SKILL.md", cli):
                     lint._check_effort_spelling(d / "SKILL.md", lineno, cmdline,
-                                                adapter, role, eff)
+                                                adapter, role, eff, argv)
                 return list(lint.ERRORS)
             finally:
                 lint.ROOT, lint.ERRORS = real_root, real_errors
@@ -773,9 +773,24 @@ def test_lint_launch():
     # 4. ...and the SAME adapter's other role must NOT fire: config_only is
     #    role-scoped, and codex's task path really does take --effort
     got = run_against(fence('node "$(ls -d ...)" task --effort high\n'),
-                      "codex", "implement", CONFIG, "node")
+                      "codex", "implement", CONFIG, "node", ["task", "--effort", "{EFFORT}"])
     check("launch: does not flag --effort on the role the config does not cover",
           got == [], f"got {got}")
+
+    # 4b. a FLAG scoped to review (claude, 0.6.35): review must carry it, and the
+    #     implement role -- no {EFFORT} in its argv -- must not.
+    SCOPED = {"mechanism": "flag", "flag": "--effort", "applies_to_role": "review"}
+    got = run_against(fence('claude -p --permission-mode plan --model m\n'),
+                      "claude", "review", SCOPED, "claude", ["-p", "--model", "{MODEL}", "--effort", "{EFFORT}"])
+    check("launch: a review-scoped flag is required on review",
+          any("omits '--effort'" in e for e in got), f"got {got}")
+    got = run_against(fence('claude -p "$(cat t.md)" --permission-mode acceptEdits --model m --effort high\n'),
+                      "claude", "implement", SCOPED, "claude", ["-p", "{PROMPT}", "--model", "{MODEL}"])
+    check("launch: ...and refused on the role it does not cover",
+          any("passes --effort" in e for e in got), f"got {got}")
+    got = run_against(fence('claude -p "$(cat t.md)" --permission-mode acceptEdits --model m\n'),
+                      "claude", "implement", SCOPED, "claude", ["-p", "{PROMPT}", "--model", "{MODEL}"])
+    check("launch: ...where a launch without it is clean", got == [], f"got {got}")
 
     # 5. carrying a neighbour's knob ALONGSIDE the right one is still wrong —
     #    the shape a lead produces by copying between legs
@@ -845,6 +860,24 @@ def test_lint_launch():
     got = codex_review_errors('codex exec -C "$T" -s read-only -m m -- - < p.md  # leg-cmd.sh codex review\n')
     check("launch: a real codex exec launch mentioning leg-cmd.sh is still checked",
           any("model_reasoning_effort" in str(e) for e in got), got)
+
+    # 0.6.35: applies_to_role must name a role the adapter has.
+    with tempfile.TemporaryDirectory() as td:
+        fake = Path(td)
+        (fake / "data").mkdir()
+        launch = json.loads((SCRIPTS.parent / "data" / "launch.json").read_text(encoding="utf-8"))
+        bad = json.loads(json.dumps(launch["claude"]))
+        bad["effort"]["applies_to_role"] = "reveiw"
+        (fake / "data" / "launch.json").write_text(json.dumps({"claude": bad}), encoding="utf-8")
+        real_root, real_errors = lint.ROOT, lint.ERRORS
+        try:
+            lint.ROOT, lint.ERRORS = fake, []
+            lint.check_launch()
+            got = list(lint.ERRORS)
+        finally:
+            lint.ROOT, lint.ERRORS = real_root, real_errors
+    check("launch: an effort scoped to a role the adapter does not have is refused",
+          any("scopes its effort to role 'reveiw'" in str(e) for e in got), got)
 
 
 # --------------------------------------------------- lint delegate guardrails ----
@@ -2835,7 +2868,7 @@ def test_leg_cmd():
         (["agy", "implement", "--model", "gemini-3.8-flash-high",
           "--target", "/tmp/x"], "--mode accept-edits"),
         (["cursor", "implement", "--model", "cursor-grok-4.6-medium"], "--trust"),
-        (["claude", "review", "--model", "sonnet"], "--strict-mcp-config"),
+        (["claude", "review", "--model", "sonnet", "--effort", "high"], "--strict-mcp-config"),
         (["grok", "review", "--model", "grok-4.6", "--effort", "high",
           "--prompt-file", "/tmp/p"], "--disallowed-tools"),
     ):
@@ -2843,6 +2876,21 @@ def test_leg_cmd():
         check(f"leg-cmd: {argv[0]}/{argv[1]} renders", r.returncode == 0, r.stderr)
         check(f"leg-cmd: {argv[0]}/{argv[1]} keeps {needle}",
               needle in r.stdout, r.stdout)
+    # 0.6.35: claude's --effort is scoped to review (applies_to_role).
+    r = subprocess.run([str(script), "claude", "review", "--model", "opus"], capture_output=True, text=True)
+    check("leg-cmd: claude review without --effort is refused",
+          r.returncode != 0 and "needs --effort" in r.stderr and not r.stdout, r.stderr)
+    r = subprocess.run([str(script), "claude", "review", "--model", "opus", "--effort", "xhigh"],
+                       capture_output=True, text=True)
+    check("leg-cmd: claude review passes the effort to the CLI",
+          r.returncode == 0 and "--model opus --effort xhigh" in r.stdout, r.stdout + r.stderr)
+    r = subprocess.run([str(script), "claude", "implement", "--model", "opus", "--effort", "high"],
+                       capture_output=True, text=True)
+    check("leg-cmd: claude implement refuses --effort (the scope is review only)",
+          r.returncode != 0 and "passes no effort" in r.stderr and not r.stdout, r.stderr)
+    r = subprocess.run([str(script), "claude", "implement", "--model", "opus"], capture_output=True, text=True)
+    check("leg-cmd: claude implement without --effort renders, with no --effort in it",
+          r.returncode == 0 and "--effort" not in r.stdout, r.stdout + r.stderr)
     check("leg-cmd: cursor implement carries no forbidden --force",
           "--force" not in subprocess.run(
               [str(script), "cursor", "implement", "--model", "m"],
@@ -3826,6 +3874,32 @@ def test_roster(tmp):
     _write_doc(path, unlabelled)
     got = _checked(path)
     text = got.stdout + got.stderr
+    # 0.6.35: claude's effort is scoped to review. A review entry must carry
+    # one; an implement entry must not; and plan's implement override, which
+    # has no effort syntax, keeps working.
+    scoped = _roster_doc({"claude": {"model": "claude-opus-5-5", "family": "Claude"}},
+                         implement={"claude": {"model": "claude-opus-5-5", "family": "Claude", "effort": "high"}})
+    path_scoped = tmp / "claude-scoped.json"
+    _write_doc(path_scoped, scoped)
+    g35 = _checked(path_scoped)
+    text_scoped = g35.stdout + g35.stderr
+    check("roster check: a claude REVIEW leg without an effort is refused",
+          g35.returncode == 1 and "rounds.r1.review.claude.effort: missing effort" in text_scoped, text_scoped)
+    check("roster check: a claude IMPLEMENT leg with an effort is refused",
+          "rounds.r1.implement.claude.effort: effort key is not allowed" in text_scoped, text_scoped)
+    ok_doc = _roster_doc({"claude": {"model": "claude-opus-5-5", "family": "Claude", "effort": "xhigh"},
+                          "codex": _codex_leg()})
+    path_ok = tmp / "claude-scoped-ok.json"
+    _write_doc(path_ok, ok_doc)
+    g35 = run(roster, "plan", "--round", "r1", "--implement", "agy=gemini-3.8-flash-high:Gemini", "--review", "claude",
+              env=_roster_env(tmp, DEV_LEAD_ROSTER=path_ok))
+    check("roster plan: a claude review leg passes --effort",
+          g35.returncode == 0 and "--model claude-opus-5-5 --effort xhigh" in g35.stdout, g35.stdout + g35.stderr)
+    g35 = run(roster, "plan", "--round", "r1", "--implement", "claude=claude-opus-5-5", "--review", "codex",
+              env=_roster_env(tmp, DEV_LEAD_ROSTER=path_ok))
+    check("roster plan: the claude implement override still resolves without an effort",
+          g35.returncode == 0 and "missing effort" not in (g35.stdout + g35.stderr), g35.stdout + g35.stderr)
+
     check("roster check: a multi-family fallback without a family is refused",
           got.returncode == 1 and "rounds.r1.review.cursor.fallback.family" in text, text)
     got = run(roster, "plan", "--round", "r1", "--implement", "claude", "--review", "cursor",
@@ -5615,7 +5689,36 @@ def test_triage(tmp):
     check("triage effort: raising a -fast twin keeps the twin",
           entry["model"] == "cursor-grok-4.6-xhigh-fast" and got.get("effort") == "xhigh", (got, entry))
     entry, got = one("claude", "claude-sonnet", "high")
+    check("triage effort: claude's review role takes a flag since 0.6.35, so the table reaches it",
+          got == {"effort": "high", "effort_in": "flag", "effort_source": "table"}, got)
+    real_data_none = triage_module.roster.data
+    def none_data():
+        launch, families = real_data_none()
+        launch = json.loads(json.dumps(launch))
+        launch["claude"]["effort"] = {"mechanism": "none"}
+        return launch, families
+    triage_module.roster.data = none_data
+    try:
+        entry, got = one("claude", "claude-sonnet", "high")
+    finally:
+        triage_module.roster.data = real_data_none
     check("triage effort: an adapter the suite passes no effort for says so",
+          got == {"effort": None, "effort_in": "none"}, got)
+    # The REVIEW role's mechanism, not the adapter-wide one: a flag scoped to
+    # implement leaves a review argv without {EFFORT} at none.
+    def impl_scoped_data():
+        launch, families = real_data_none()
+        launch = json.loads(json.dumps(launch))
+        launch["claude"]["effort"]["applies_to_role"] = "implement"
+        launch["claude"]["role"]["review"]["argv"] = [t for t in launch["claude"]["role"]["review"]["argv"]
+                                                      if t not in ("--effort", "{EFFORT}")]
+        return launch, families
+    triage_module.roster.data = impl_scoped_data
+    try:
+        entry, got = one("claude", "claude-sonnet", "high")
+    finally:
+        triage_module.roster.data = real_data_none
+    check("triage effort: a flag scoped to another role leaves the review leg at none",
           got == {"effort": None, "effort_in": "none"}, got)
     # config_only is the pre-0.6.28 codex review; exercise it on the legacy data.
     real_data_cfg = triage_module.roster.data

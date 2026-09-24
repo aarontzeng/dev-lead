@@ -69,7 +69,13 @@ if role not in spec["role"]:
              % (a, role, ", ".join(spec["role"])))
 
 eff = spec["effort"]
-mech = eff["mechanism"]
+# The mechanism that governs THIS role -- roster.py's rule, imported rather
+# than copied (applies_to_role scopes it; another role follows its argv).
+import importlib.util as _ilu_m
+_rspec = _ilu_m.spec_from_file_location("dev_lead_roster_mech", os.path.join(os.environ["HERE"], "roster.py"))
+_rmod = _ilu_m.module_from_spec(_rspec)
+_rspec.loader.exec_module(_rmod)
+mech = _rmod.mechanism_for_role(eff, role, spec["role"][role].get("argv"))
 effort = os.environ.get("EFFORT", "")
 
 # The whole point: refuse the spellings that were actually got wrong.
@@ -85,7 +91,7 @@ elif mech == "config_only" and role == eff.get("applies_to_role", role):
                  % (a, role, eff["config_key"], eff["config_file"]))
 elif mech in ("flag",) and not effort:
     sys.exit("leg-cmd: %s needs --effort (it becomes %s); examples: %s"
-             % (a, (eff.get("flag_by_role") or {}).get(role, eff["flag"]),
+             % (a, (eff.get("flag_by_role") or {}).get(role, eff.get("flag", "--effort")),
                 ", ".join(eff.get("examples", []))))
 elif mech == "none" and effort:
     sys.exit("leg-cmd: the suite passes no effort for %s (its CLI default applies; see "
