@@ -2433,6 +2433,84 @@ def test_await_codex_job(tmp):
           'size=$(wc -c < "$log"' in body, "the size read is not `wc -c` any more")
 
 
+def test_common(tmp):
+    """scripts/_common.py and scripts/lib.sh: the one copy of what four
+    scripts used to carry each. Position: before test_leg_cmd."""
+    sys.path.insert(0, str(SCRIPTS))
+    import _common
+
+    for text, want in (("0.6.49", (0, 6, 49)), ("v0.6.49", None), ("0.6", None),
+                       (7, None), (None, None), ("0.6.49-rc1", None)):
+        check("common: semver(%r) -> %r" % (text, want), _common.semver(text) == want,
+              repr(_common.semver(text)))
+
+    check("common: an explicit family on the leg wins",
+          _common.infer_family(["Gemini", "Claude"], {"family": "Claude"}) == "Claude")
+    check("common: a single-family adapter is that family without the key",
+          _common.infer_family(["GPT"], {"model": "m"}) == "GPT")
+    check("common: a multi-family adapter is not guessed at",
+          _common.infer_family(["Gemini", "Claude"], {"model": "m"}) is None)
+    check("common: no adapter family is None, not an IndexError",
+          _common.infer_family([], None) is None)
+
+    root = tmp / "common-root"
+    (root / ".claude-plugin").mkdir(parents=True)
+    path, data, declared, version = _common.declared_version(root)
+    check("common: a missing manifest reads as data None",
+          data is None and declared is None and version is None and path.name == "plugin.json")
+    (root / ".claude-plugin" / "plugin.json").write_text("{nope")
+    _p, data, problem = _common.read_manifest(root)
+    check("common: a broken manifest names the JSON error",
+          data is None and problem.startswith("invalid JSON:"), problem)
+    (root / ".claude-plugin" / "plugin.json").write_text('{"version": "seven"}')
+    _p, data, declared, version = _common.declared_version(root)
+    check("common: a non-semver version is read as written, with version None",
+          data == {"version": "seven"} and declared == "seven" and version is None)
+    (root / ".claude-plugin" / "plugin.json").write_text('{"version": "1.2.3"}')
+    check("common: a semver version parses",
+          _common.declared_version(root)[2:] == ("1.2.3", (1, 2, 3)))
+
+    repo = tmp / "common-repo"
+    repo.mkdir()
+    subprocess.run(["git", "-C", str(repo), "init", "-q"], check=True)
+    r = _common.run_git(repo, "rev-parse", "--is-inside-work-tree", text=True)
+    check("common: run_git runs git -C <repo> and captures stdout",
+          r.returncode == 0 and r.stdout.strip() == "true", r)
+    r = _common.run_git(repo, "rev-parse", "--verify", "no-such-ref")
+    check("common: run_git leaves a non-zero status to the caller",
+          r.returncode != 0 and isinstance(r.stdout, bytes), r)
+
+    # lib.sh: die() speaks as the SCRIPT that sourced it, and the repo check
+    # names what was missing the way each caller's old copy did.
+    lib = SCRIPTS / "lib.sh"
+    prog = tmp / "speaker.sh"
+    prog.write_text('#!/usr/bin/env bash\nset -euo pipefail\n. "%s"\n'
+                    'case "$1" in\n  die) die "boom" ;;\n'
+                    '  repo) require_git_repo "$2" "target dir"; echo ok ;;\nesac\n' % lib)
+    r = subprocess.run(["bash", str(prog), "die"], capture_output=True, text=True)
+    check("lib.sh: die prefixes the calling script's name and exits 1",
+          r.returncode == 1 and r.stderr.strip() == "speaker: boom", r)
+    r = subprocess.run(["bash", str(prog), "die"], capture_output=True, text=True,
+                       env=dict(os.environ, DIE_PREFIX="other"))
+    check("lib.sh: DIE_PREFIX overrides the prefix",
+          r.returncode == 1 and r.stderr.strip() == "other: boom", r)
+    r = subprocess.run(["bash", str(prog), "repo", str(tmp / "nowhere")], capture_output=True, text=True)
+    check("lib.sh: a missing dir is named as what the caller called it",
+          r.returncode == 1 and r.stderr.strip() == "speaker: target dir does not exist: %s" % (tmp / "nowhere"), r)
+    plain = tmp / "common-plain"
+    plain.mkdir()
+    r = subprocess.run(["bash", str(prog), "repo", str(plain)], capture_output=True, text=True)
+    check("lib.sh: a directory outside git is refused",
+          r.returncode == 1 and r.stderr.strip() == "speaker: not a git repo: %s" % plain, r)
+    r = subprocess.run(["bash", str(prog), "repo", str(repo)], capture_output=True, text=True)
+    check("lib.sh: a git repo passes", r.returncode == 0 and r.stdout.strip() == "ok", r)
+    # every helper that dies goes through the one copy now
+    for name in ("freeze-target.sh", "verify-target.sh", "snapshot-refs.sh", "release.sh", "leg-cmd.sh"):
+        body = (SCRIPTS / name).read_text()
+        check("lib.sh: %s sources it instead of defining die()" % name,
+              '. "$here/lib.sh"' in body and "\ndie() {" not in body)
+
+
 def test_leg_cmd():
     """leg-cmd.sh must reject each spelling that was actually got wrong.
 
@@ -6354,6 +6432,9 @@ def main():
 
     print("lint.py check_delegate_audit_trails")
     test_lint_delegate_audit_trails()
+    print("scripts/_common.py and scripts/lib.sh")
+    with tempfile.TemporaryDirectory() as td:
+        test_common(Path(td))
     test_leg_cmd()
 
     print("roster.py")

@@ -13,6 +13,7 @@ from collections import Counter
 from pathlib import Path
 
 import roster
+from _common import infer_family, run_git
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -384,7 +385,7 @@ def _timeout(default):
 
 def _git(repo, *args, timeout=None):
     try:
-        result = subprocess.run(["git", "-C", str(repo), *args], capture_output=True, timeout=timeout)
+        result = run_git(repo, *args, timeout=timeout)
     except OSError as exc:
         raise InputError("git: %s" % exc)
     except subprocess.TimeoutExpired:
@@ -397,8 +398,7 @@ def _git(repo, *args, timeout=None):
 
 def _object_exists(repo, revision):
     try:
-        result = subprocess.run(["git", "-C", str(repo), "cat-file", "-e", revision + "^{commit}"],
-                                capture_output=True)
+        result = run_git(repo, "cat-file", "-e", revision + "^{commit}")
     except OSError as exc:
         raise InputError("git: %s" % exc)
     return result.returncode == 0
@@ -738,8 +738,7 @@ def _tree_text(repo, revision, path):
     """The blob at that path, raw (no textconv), or None when there is none:
     a missing path, a directory or a submodule. Decided by git's exit code."""
     try:
-        result = subprocess.run(["git", "-C", str(repo), "cat-file", "blob", "%s:%s" % (revision, path)],
-                                capture_output=True)
+        result = run_git(repo, "cat-file", "blob", "%s:%s" % (revision, path))
     except OSError as exc:
         raise InputError("git: %s" % exc)
     if result.returncode:
@@ -757,12 +756,10 @@ def _tree_has(repo, revision, path):
     if path in ("", "."):
         return True
     try:
-        result = subprocess.run(["git", "-C", str(repo), "cat-file", "-e", "%s:%s" % (revision, path)],
-                                capture_output=True)
+        result = run_git(repo, "cat-file", "-e", "%s:%s" % (revision, path))
         if result.returncode == 0:
             return True
-        listing = subprocess.run(["git", "-C", str(repo), "--literal-pathspecs", "ls-tree",
-                                  str(revision), "--", path], capture_output=True)
+        listing = run_git(repo, "--literal-pathspecs", "ls-tree", str(revision), "--", path)
     except OSError as exc:
         raise InputError("git: %s" % exc)
     return listing.returncode == 0 and bool(listing.stdout.strip())
@@ -1107,10 +1104,7 @@ def _review_legs(lens_classes, config=None, risk_floor=None):
                                  "can stand in" % (wanted, gate))
         if not isinstance(chosen, dict) or not chosen.get("model"):
             continue
-        family = chosen.get("family")
-        if not family:
-            serves = families.get("adapters", {}).get(adapter, {}).get("serves", [])
-            family = serves[0] if len(serves) == 1 else None
+        family = infer_family(families.get("adapters", {}).get(adapter, {}).get("serves", []), chosen)
         entry = {"adapter": adapter, "model": chosen["model"], "family": family,
                  "_declared_effort": chosen.get("effort")}
         if gate:

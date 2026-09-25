@@ -28,9 +28,10 @@ import argparse
 import os
 import re
 import stat
-import subprocess
 import sys
 from pathlib import Path
+
+from _common import run_git
 
 SKILLS = Path(__file__).resolve().parent.parent / "skills"
 
@@ -59,7 +60,7 @@ def build(frame, base, head, lens, evidence=None):
 
 
 def _git(target, *args, binary=False):
-    r = subprocess.run(["git", "-C", target, *args], capture_output=True)
+    r = run_git(target, *args)
     if r.returncode:
         raise RuntimeError("git %s: %s" % (" ".join(args), r.stderr.decode(errors="replace").strip()))
     return r.stdout if binary else r.stdout.decode("utf-8", "surrogateescape")
@@ -161,13 +162,11 @@ def main(argv=None, prog="review-prompt"):
     lens = sys.stdin.read()
     if not lens.strip():
         sys.exit("%s: empty lens on stdin -- refusing to build a prompt with no brief" % prog)
-    head = subprocess.run(["git", "-C", args.target, "rev-parse", "--verify", "HEAD"],
-                          capture_output=True, text=True)
+    head = run_git(args.target, "rev-parse", "--verify", "HEAD", text=True)
     if head.returncode:
         sys.exit("%s: cannot read HEAD of %s: %s" % (prog, args.target, head.stderr.strip()))
     head = head.stdout.strip()
-    base = subprocess.run(["git", "-C", args.target, "rev-parse", "--verify", "--quiet",
-                           args.base + "^{commit}"], capture_output=True, text=True)
+    base = run_git(args.target, "rev-parse", "--verify", "--quiet", args.base + "^{commit}", text=True)
     if base.returncode:
         sys.exit("%s: --base %s is not a commit in %s" % (prog, args.base, args.target))
     base = base.stdout.strip()

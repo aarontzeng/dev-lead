@@ -11,18 +11,15 @@
 # Prints: the resolved 40-char SHA on stdout (capture it as REVIEW_HEAD)
 set -euo pipefail
 
-die() { echo "freeze-target: $*" >&2; exit 1; }
+here=$(cd -- "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}" 2>/dev/null || echo "${BASH_SOURCE[0]}")")" && pwd)
+. "$here/lib.sh"
 # resolved up front, before anything is created, so it cannot fail past cleanup
-# through symlinks: the helper is a sibling of the REAL file, not of a link to it
-self=$(readlink -f -- "${BASH_SOURCE[0]}" 2>/dev/null || echo "${BASH_SOURCE[0]}")
-here=${self%/*}; [ "$here" != "$self" ] || here=.
-[ -x "$here/renorm-only.sh" ] || die "cannot find renorm-only.sh next to $self"
+[ -x "$here/renorm-only.sh" ] || die "cannot find renorm-only.sh next to ${BASH_SOURCE[0]}"
 
 [ $# -eq 3 ] || die "usage: freeze-target.sh <repo-dir> <committish> <dest-dir>"
 repo=$1; committish=$2; dest=$3
 
-[ -d "$repo" ] || die "repo dir does not exist: $repo"
-git -C "$repo" rev-parse --git-dir >/dev/null 2>&1 || die "not a git repo: $repo"
+require_git_repo "$repo" "repo dir"
 
 # Resolve BEFORE creating anything: a branch name resolves now and may move
 # later, which is exactly what a frozen target must not depend on.

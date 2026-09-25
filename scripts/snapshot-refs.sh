@@ -14,13 +14,13 @@
 #        snapshot-refs.sh check <dir> <outfile>
 set -euo pipefail
 
-die() { echo "snapshot-refs: $*" >&2; exit 1; }
+here=$(cd -- "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}" 2>/dev/null || echo "${BASH_SOURCE[0]}")")" && pwd)
+. "$here/lib.sh"
 
 [ $# -eq 3 ] || die "usage: snapshot-refs.sh save|check <dir> <outfile>"
 mode=$1; dir=$2; file=$3
 
-[ -d "$dir" ] || die "dir does not exist: $dir"
-git -C "$dir" rev-parse --git-dir >/dev/null 2>&1 || die "not a git repo: $dir"
+require_git_repo "$dir"
 
 case "$mode" in
   save)

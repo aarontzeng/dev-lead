@@ -29,9 +29,9 @@
 # stays usable while the warnings still reach a human.
 set -euo pipefail
 
-die() { echo "leg-cmd: $*" >&2; exit 1; }
-
-HERE=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+here=$(cd -- "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}" 2>/dev/null || echo "${BASH_SOURCE[0]}")")" && pwd)
+. "$here/lib.sh"
+HERE=$here
 DATA="${DEV_LEAD_LAUNCH:-$HERE/../data/launch.json}"   # override: test seam only
 [ -z "${DEV_LEAD_LAUNCH:-}" ] || echo "leg-cmd: launch data overridden by DEV_LEAD_LAUNCH=$DATA" >&2
 [ -f "$DATA" ] || die "cannot find data/launch.json at $DATA"
@@ -87,29 +87,24 @@ _rspec.loader.exec_module(_rmod)
 mech = _rmod.mechanism_for_role(eff, role, spec["role"][role].get("argv"))
 effort = os.environ.get("EFFORT", "")
 
-# The whole point: refuse the spellings that were actually got wrong.
-if mech == "model_suffix":
-    if effort:
-        sys.exit("leg-cmd: %s puts effort in the MODEL NAME, not a flag.\n"
-                 "  drop --effort and use one of: %s"
-                 % (a, ", ".join(eff.get("examples", []))))
-elif mech == "config_only":
-    if effort:
-        sys.exit("leg-cmd: %s's %s path has no effort control at all.\n"
-                 "  it reads %s from %s -- read that file and REPORT the value, do not assert one."
-                 % (a, role, eff["config_key"], eff["config_file"]))
-elif mech in ("flag",) and not effort:
-    sys.exit("leg-cmd: %s needs --effort (it becomes %s); examples: %s"
-             % (a, (eff.get("flag_by_role") or {}).get(role, eff.get("flag", "--effort")),
-                ", ".join(eff.get("examples", []))))
-elif mech == "none" and effort:
-    sys.exit("leg-cmd: the suite passes no effort for %s %s (its CLI default applies; see "
-             "data/launch.json); --model selects the tier" % (a, role))
-elif mech not in ("model_suffix", "flag", "config_only", "none"):
-    # No silent fall-through: an unrecognised mechanism means the guardrails
-    # above did not run, so the command below is unvalidated. Refuse it.
-    sys.exit("leg-cmd: %s declares unknown effort mechanism %r -- refusing to "
-             "emit an unvalidated command" % (a, mech))
+# The whole point: refuse the spellings that were actually got wrong. The
+# DECISION is roster.py's effort_flag_refusal (one copy, since 0.6.49; the
+# if/elif here used to mirror it and the docstring said so); what this script
+# adds is the hint that gets the caller to the right spelling. An
+# unrecognised mechanism is refused too: the guardrails did not run, so the
+# command below would be unvalidated.
+reason = _rmod.effort_flag_refusal(a, role, effort)
+if reason:
+    hints = {
+        "model_suffix": ".\n  drop --effort and use one of: %s" % ", ".join(eff.get("examples", [])),
+        "config_only": ".\n  it reads %s from %s -- read that file and REPORT the value, do not assert one."
+                       % (eff.get("config_key"), eff.get("config_file")),
+        "flag": " (it becomes %s); examples: %s"
+                % ((eff.get("flag_by_role") or {}).get(role, eff.get("flag", "--effort")),
+                   ", ".join(eff.get("examples", []))),
+        "none": " (its CLI default applies; see data/launch.json); --model selects the tier",
+    }
+    sys.exit("leg-cmd: %s%s" % (reason, hints.get(mech, " -- refusing to emit an unvalidated command")))
 
 # A model id whose provider prefix is missing is accepted by the CLI and then
 # fails SERVER-side -- `UnknownError: Unexpected server error`, step=0, nothing

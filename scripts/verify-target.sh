@@ -28,13 +28,13 @@
 # Usage: verify-target.sh <dir> <expected-sha> [expected-path ...]
 set -euo pipefail
 
-die() { echo "verify-target: $*" >&2; exit 1; }
+here=$(cd -- "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}" 2>/dev/null || echo "${BASH_SOURCE[0]}")")" && pwd)
+. "$here/lib.sh"
 
 [ $# -ge 2 ] || die "usage: verify-target.sh <dir> <expected-sha> [expected-path ...]"
 dir=$1; expected=$2; shift 2
 
-[ -d "$dir" ] || die "target dir does not exist: $dir"
-git -C "$dir" rev-parse --git-dir >/dev/null 2>&1 || die "not a git repo: $dir"
+require_git_repo "$dir" "target dir"
 
 actual=$(git -C "$dir" rev-parse HEAD)
 if [ "$actual" != "$expected" ]; then

@@ -35,9 +35,9 @@
 #         ever going out separately.
 set -euo pipefail
 
-die() { echo "release: $*" >&2; exit 1; }
-
-ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+here=$(cd -- "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}" 2>/dev/null || echo "${BASH_SOURCE[0]}")")" && pwd)
+. "$here/lib.sh"
+ROOT=$(cd "$here/.." && pwd)
 cd "$ROOT"
 
 [ $# -eq 1 ] || die "usage: release.sh <notes-file>"

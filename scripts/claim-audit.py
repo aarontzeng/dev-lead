@@ -122,8 +122,9 @@ scanned the entire history behind it.)
 from __future__ import annotations
 
 import re
-import subprocess
 import sys
+
+from _common import run_git
 
 # Curated from the sentences that actually shipped false, then NARROWED by
 # measurement on four real commits. A bare absolute-word filter was tried first
@@ -225,8 +226,7 @@ def git(dir_: str, *args: str) -> str:
     # errors="replace" so one invalid UTF-8 byte in a diff or a commit message
     # degrades that character instead of raising out of the exit-code contract.
     try:
-        r = subprocess.run(["git", "-C", dir_, *args],
-                           capture_output=True, text=True, errors="replace")
+        r = run_git(dir_, *args, text=True, errors="replace")
     except OSError as e:                 # no git on PATH, dir_ not usable
         sys.stderr.write(f"claim-audit: cannot run git: {e}\n")
         sys.exit(2)

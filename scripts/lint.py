@@ -53,6 +53,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from _common import declared_version, read_manifest, run_git, semver as _semver
+
 ROOT = Path(__file__).resolve().parents[1]
 FAMILIES = ("claude", "codex", "agy", "opencode", "grok", "cursor")
 ERRORS = []
@@ -113,14 +115,9 @@ def check_frontmatter():
 
 # ---- manifest ----
 def check_manifest():
-    manifest = ROOT / ".claude-plugin" / "plugin.json"
-    if not manifest.is_file():
-        err(".claude-plugin/plugin.json", "missing")
-        return
-    try:
-        data = json.loads(manifest.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as e:
-        err(rel(manifest), f"invalid JSON: {e}")
+    manifest, data, problem = read_manifest(ROOT)
+    if problem:
+        err(".claude-plugin/plugin.json", problem)
         return
     for key in ("name", "description", "version"):
         if not data.get(key):
@@ -195,36 +192,16 @@ def check_manifest():
 # case is deliberately not an error), but it no longer stays SILENT: it emits a
 # note saying which rule went unchecked and what to run. The distinction being
 # preserved is "this check did not fail" versus "this check did not happen".
-VERSION_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
-
-
-def _semver(text):
-    """(major, minor, patch), or None if `text` is not exactly X.Y.Z.
-
-    A non-string is None too, not a TypeError: a manifest can say
-    `"version": 7`, and every caller treats None as "not a version"."""
-    if not isinstance(text, str):
-        return None
-    m = VERSION_RE.match(text)
-    return tuple(int(g) for g in m.groups()) if m else None
-
-
 def _git(*args):
     """stdout, or None when git fails — no tags, no repo, a shallow clone."""
-    p = subprocess.run(["git", "-C", str(ROOT), *args],
-                       capture_output=True, text=True)
+    p = run_git(ROOT, *args, text=True)
     return p.stdout.strip() if p.returncode == 0 else None
 
 
 def check_version():
-    manifest = ROOT / ".claude-plugin" / "plugin.json"
-    if not manifest.is_file():
+    manifest, data, declared, version = declared_version(ROOT)
+    if data is None:
         return                                  # check_manifest() reported it
-    try:
-        declared = json.loads(manifest.read_text(encoding="utf-8")).get("version")
-    except json.JSONDecodeError:
-        return                                  # ditto
-    version = _semver(declared)
     if version is None:
         err(rel(manifest), f"version '{declared}' is not X.Y.Z — the tag "
                            "comparison below and any consumer's own version "
@@ -296,9 +273,8 @@ def _published_max():
     all-clear. Distinguishing the two is the whole point of the note() below.
     """
     try:
-        p = subprocess.run(
-            ["git", "-C", str(ROOT), "ls-remote", "--tags", "--refs", "origin", "v*"],
-            capture_output=True, text=True, timeout=REMOTE_TIMEOUT_S)
+        p = run_git(ROOT, "ls-remote", "--tags", "--refs", "origin", "v*",
+                    text=True, timeout=REMOTE_TIMEOUT_S)
     except (subprocess.TimeoutExpired, OSError):
         return None
     if p.returncode != 0:
@@ -328,15 +304,13 @@ def _tag_on_origin_points_at_head(declared):
         return False
     ref = "refs/tags/v" + declared
     try:
-        p = subprocess.run(
-            # BOTH patterns. A pattern filters the peeled line out too, and
-            # for an ANNOTATED tag the unpeeled line carries the tag OBJECT's
-            # sha, which can never equal a commit -- so asking for the plain
-            # ref alone makes this function answer False for every annotated
-            # tag, i.e. for every release this repo cuts.
-            ["git", "-C", str(ROOT), "ls-remote", "--tags", "origin",
-             ref, ref + "^{}"],
-            capture_output=True, text=True, timeout=REMOTE_TIMEOUT_S)
+        # BOTH patterns. A pattern filters the peeled line out too, and
+        # for an ANNOTATED tag the unpeeled line carries the tag OBJECT's
+        # sha, which can never equal a commit -- so asking for the plain
+        # ref alone makes this function answer False for every annotated
+        # tag, i.e. for every release this repo cuts.
+        p = run_git(ROOT, "ls-remote", "--tags", "origin", ref, ref + "^{}",
+                    text=True, timeout=REMOTE_TIMEOUT_S)
     except (subprocess.TimeoutExpired, OSError):
         return False
     if p.returncode != 0:
@@ -355,16 +329,9 @@ def _tag_on_origin_points_at_head(declared):
 
 
 def check_version_not_published():
-    manifest = ROOT / ".claude-plugin" / "plugin.json"
-    if not manifest.is_file():
-        return                                  # check_manifest() reported it
-    try:
-        declared = json.loads(manifest.read_text(encoding="utf-8")).get("version")
-    except json.JSONDecodeError:
-        return                                  # ditto
-    version = _semver(declared)
-    if version is None:
-        return                                  # check_version() reported it
+    manifest, data, declared, version = declared_version(ROOT)
+    if data is None or version is None:
+        return                                  # check_manifest() / check_version() reported it
 
     # The release commit itself declares the version being released, and by the
     # time this runs that tag exists. Flagging it would make the check unable to
@@ -440,16 +407,9 @@ LINT_BASE_ENV = "LINT_BASE"
 
 
 def check_version_moves_with_content():
-    manifest = ROOT / ".claude-plugin" / "plugin.json"
-    if not manifest.is_file():
-        return                                  # check_manifest() reported it
-    try:
-        declared = json.loads(manifest.read_text(encoding="utf-8")).get("version")
-    except json.JSONDecodeError:
-        return                                  # ditto
-    version = _semver(declared)
-    if version is None:
-        return                                  # check_version() reported it
+    manifest, data, declared, version = declared_version(ROOT)
+    if data is None or version is None:
+        return                                  # check_manifest() / check_version() reported it
 
     base = os.environ.get(LINT_BASE_ENV, "").strip()
     if base and set(base) == {"0"}:
@@ -478,8 +438,7 @@ def check_version_moves_with_content():
              "nothing. `git fetch origin` and re-run.")
         return
 
-    diff = subprocess.run(["git", "-C", str(ROOT), "diff", "--quiet", base_sha, "--"],
-                          capture_output=True, text=True)
+    diff = run_git(ROOT, "diff", "--quiet", base_sha, "--", text=True)
     if diff.returncode == 0:
         return                                  # same tree as published: nothing moved
     if diff.returncode != 1:
@@ -750,14 +709,15 @@ def check_helper_args():
 
 # ---- tracked: files a contributor's global gitignore might silently eat ----
 def check_tracked():
-    out = subprocess.run(
-        ["git", "-C", str(ROOT), "ls-files"],
-        capture_output=True, text=True, check=True,
-    ).stdout.splitlines()
+    listed = run_git(ROOT, "ls-files", text=True)
+    listed.check_returncode()
+    out = listed.stdout.splitlines()
     for must in ("templates/AGENTS.md", ".claude-plugin/plugin.json",
                  ".github/workflows/ci.yml", "data/families.json",
                  "scripts/freeze-target.sh", "scripts/verify-target.sh",
-                 "scripts/snapshot-refs.sh"):
+                 "scripts/snapshot-refs.sh",
+                 # every helper sources or imports these two
+                 "scripts/lib.sh", "scripts/_common.py"):
         if must not in out:
             err(must, "not tracked by git (a global gitignore may have silently eaten it)")
     # a helper that lost its +x bit is a helper the skills' call sites cannot run

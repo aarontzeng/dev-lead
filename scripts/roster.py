@@ -22,6 +22,13 @@ import tempfile
 from datetime import date, datetime
 from pathlib import Path
 
+# leg-cmd.sh loads this file by path (importlib), which puts nothing on
+# sys.path; the sibling module must be found the same way either way.
+if str(Path(__file__).resolve().parent) not in sys.path:
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _common import infer_family  # noqa: E402
+from pathlib import Path
+
 ROOT = Path(__file__).resolve().parent.parent
 # DEV_LEAD_LAUNCH is a test seam: the suite points it at a launch.json whose
 # codex still reads its review effort from config.toml, to keep exercising the
@@ -482,18 +489,26 @@ def _check_leg(leg, adapter, role, path, problems, *, fallback=False, opencode_r
 
 
 def _collision_family(adapter, leg):
-    """Family a collision check can see.
+    """Family a collision check can see: the one inference (_common) that
+    `_family_of` also uses when planning. validate() allows the omission."""
+    return infer_family(_serves(adapter), leg)
 
-    An explicit family wins. Otherwise the same inference `_family_of` uses
-    when planning: an adapter that serves exactly one family is that family
-    even when the leg omits the key. validate() allows that omission.
+
+def _family_clashes(groups):
+    """Pairs of entries from DIFFERENT groups that share a family.
+
+    A group is a list of alternatives (only one of which runs, so they are
+    never compared with each other); an alternative is a list of
+    (label, family). Yields (label_a, label_b, family), first group first.
     """
-    if isinstance(leg, dict) and leg.get("family"):
-        return leg["family"]
-    serves = _serves(adapter)
-    if len(serves) == 1:
-        return serves[0]
-    return None
+    for i in range(len(groups)):
+        for j in range(i + 1, len(groups)):
+            for alt_a in groups[i]:
+                for alt_b in groups[j]:
+                    for label_a, fam_a in alt_a:
+                        for label_b, fam_b in alt_b:
+                            if fam_a and fam_a == fam_b:
+                                yield label_a, label_b, fam_a
 
 
 def _leg_families(adapter, leg, label):
@@ -541,19 +556,8 @@ def _collision_errors(review, path):
         if str(adapter).startswith("_") or leg is None:
             continue
         grouped.append(_leg_families(adapter, leg, adapter))
-    found = []
-    for i in range(len(grouped)):
-        for j in range(i + 1, len(grouped)):
-            for alt_a in grouped[i]:
-                for alt_b in grouped[j]:
-                    for label_a, fam_a in alt_a:
-                        for label_b, fam_b in alt_b:
-                            if fam_a and fam_a == fam_b:
-                                found.append(
-                                    "roster: %s: %s and %s share family %s"
-                                    % (path, label_a, label_b, fam_a)
-                                )
-    return found
+    return ["roster: %s: %s and %s share family %s" % (path, label_a, label_b, fam)
+            for label_a, label_b, fam in _family_clashes(grouped)]
 
 
 def _nonnull_review_legs(rnd):
@@ -1096,11 +1100,10 @@ def _family_of(adapter, explicit, leg):
         if explicit not in _serves(adapter):
             return None, "unknown family %r" % (explicit,)
         return explicit, None
-    if isinstance(leg, dict) and leg.get("family"):
-        return leg["family"], None
     serves = _serves(adapter)
-    if len(serves) == 1:
-        return serves[0], None
+    family = infer_family(serves, leg)
+    if family:
+        return family, None
     if len(serves) == 0:
         return None, "unknown adapter family"
     return None, "family required (%s serves %s); pass ADAPTER=MODEL:FAMILY" % (
@@ -1213,23 +1216,16 @@ def cmd_plan(path, round_name, implement, review, lens):
                     "rounds.%s" % round_name,
                     "%s implement and %s review fallback share family %s" % (adapter, rev, impl_family),
                 )
-    for i, (rev_a, leg_a, fam_a) in enumerate(resolved_reviews):
-        families_a = [(rev_a + " review", fam_a)]
-        fb = leg_a.get("fallback")
+    groups = []
+    for rev, leg, fam in resolved_reviews:
+        entries = [(rev + " review", fam)]
+        fb = leg.get("fallback")
         if isinstance(fb, dict) and fb.get("family"):
-            families_a.append((rev_a + " review fallback", fb["family"]))
-        for rev_b, leg_b, fam_b in resolved_reviews[i + 1:]:
-            families_b = [(rev_b + " review", fam_b)]
-            fb_b = leg_b.get("fallback")
-            if isinstance(fb_b, dict) and fb_b.get("family"):
-                families_b.append((rev_b + " review fallback", fb_b["family"]))
-            for label_a, fa in families_a:
-                for label_b, fb_fam in families_b:
-                    if fa and fa == fb_fam:
-                        problems.error(
-                            "rounds.%s.review" % round_name,
-                            "%s and %s share family %s" % (label_a, label_b, fa),
-                        )
+            entries.append((rev + " review fallback", fb["family"]))
+        groups.append([entries])          # a resolved leg is one alternative
+    for label_a, label_b, fam in _family_clashes(groups):
+        problems.error("rounds.%s.review" % round_name,
+                       "%s and %s share family %s" % (label_a, label_b, fam))
 
     if problems.errors:
         for line in problems.errors:
