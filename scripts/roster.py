@@ -11,6 +11,7 @@ Data files are located from this script's path, never from the cwd — a skill
 runs with the target repo as cwd.
 """
 import argparse
+import contextlib
 import copy
 import json
 import os
@@ -19,7 +20,13 @@ import shutil
 import stat
 import sys
 import tempfile
+import time
 from datetime import date, datetime
+
+try:
+    import fcntl
+except ImportError:                 # not a POSIX host; the scripts are bash-only anyway
+    fcntl = None
 from pathlib import Path
 
 # leg-cmd.sh loads this file by path (importlib), which puts nothing on
@@ -723,7 +730,14 @@ def dumps(doc):
 
 
 def atomic_write(path, text):
-    """Write the symlink target, not the link, or the link becomes a second copy."""
+    """Write the symlink target, not the link, or the link becomes a second copy.
+
+    The temp file is fsync'd before the rename and the directory after it
+    (since 0.6.51): rename-over-file is atomic against a concurrent READER,
+    not against power loss, and without the fsyncs a crash could leave the
+    roster as an empty file under its own name. The config-effort backup had
+    always done this; the roster itself had not.
+    """
     target = Path(os.path.realpath(path))
     target.parent.mkdir(parents=True, exist_ok=True)
     if target.exists():
@@ -734,6 +748,8 @@ def atomic_write(path, text):
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
         os.chmod(tmp_name, mode)
         os.replace(tmp_name, target)
     except Exception:
@@ -742,6 +758,87 @@ def atomic_write(path, text):
         except OSError:
             pass
         raise
+    try:
+        dfd = os.open(str(target.parent), os.O_RDONLY)
+    except OSError:
+        return                      # a directory that cannot be opened for fsync (some filesystems)
+    try:
+        os.fsync(dfd)
+    except OSError:
+        pass
+    finally:
+        os.close(dfd)
+
+
+LOCK_WAIT_SECS = 10     # DEV_LEAD_ROSTER_LOCK_SECS overrides: a test seam, or a slow disk
+
+
+class RosterLocked(Exception):
+    pass
+
+
+@contextlib.contextmanager
+def _locked(path):
+    """Exclusive lock around one read-modify-write of the roster.
+
+    Two `roster.py set` calls in flight at once -- a lead's parallel legs, or
+    a person and a lead -- each read the file, changed their key and wrote
+    the whole document back, and the second write dropped the first's change
+    with no error (found 2026-09-25). The lock is a sidecar `<roster>.lock`
+    beside the REAL file (through a symlink, like the write), held across
+    the read and the write; it stays behind, empty, because unlinking it
+    races the next taker. flock ships on every macOS and Linux. A wait past
+    the bound raises RosterLocked, which the command reports and exits 1 on,
+    rather than hanging a lead's shell.
+    """
+    if fcntl is None:
+        yield
+        return
+    target = Path(os.path.realpath(path))
+    target.parent.mkdir(parents=True, exist_ok=True)
+    lock = target.with_name(target.name + ".lock")
+    wait = float(os.environ.get("DEV_LEAD_ROSTER_LOCK_SECS", LOCK_WAIT_SECS))
+    fd = os.open(str(lock), os.O_RDWR | os.O_CREAT, 0o644)
+    try:
+        deadline = time.monotonic() + wait
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    raise RosterLocked("roster: %s: another roster.py has been writing it for %gs "
+                                       "(lock %s); try again" % (path, wait, lock))
+                time.sleep(0.05)
+        yield
+    finally:
+        os.close(fd)                # releases the lock
+
+
+def _rewrite(path, mutate, must_exist=False):
+    """Load (or start) the roster, apply `mutate(doc)`, validate, write --
+    under the lock, so no concurrent edit is lost. `mutate` returns a problem
+    string to refuse, or None. Every writing command goes through here."""
+    try:
+        with _locked(path):
+            if must_exist:
+                if not Path(path).exists():
+                    print("roster: %s: file not found" % path)
+                    return 1
+                doc, err = load_roster(path)
+            else:
+                doc, err = _load_or_skeleton(path)
+            if err:
+                print(err)
+                return 1
+            problem = mutate(doc)
+            if problem:
+                print(problem)
+                return 1
+            return _commit(path, doc)
+    except RosterLocked as exc:
+        print(exc)
+        return 1
 
 
 def skeleton():
@@ -1291,12 +1388,7 @@ def cmd_set(path, args):
         if args.round != "fix" or args.role or args.adapter or args.model:
             print("roster: set fix --inherit r1 [--why TEXT]")
             return 1
-        doc, err = _load_or_skeleton(path)
-        if err:
-            print(err)
-            return 1
-        _apply_inherit(doc, args.why)
-        return _commit(path, doc)
+        return _rewrite(path, lambda doc: _apply_inherit(doc, args.why))
     if not args.role or not args.adapter or not args.model or not args.why:
         print("roster: set <round> <role> <adapter> --model M [--effort E] "
               "[--family F] [--lens L] --why TEXT")
@@ -1307,26 +1399,18 @@ def cmd_set(path, args):
     if args.round not in ("r1", "fix"):
         print("roster: rounds.%s: unknown round %r" % (args.round, args.round))
         return 1
-    doc, err = _load_or_skeleton(path)
-    if err:
-        print(err)
-        return 1
     leg = _build_leg(args.model, args.effort, args.family, args.why)
-    _apply_leg(doc, args.round, args.role, args.adapter, leg, args.lens)
-    return _commit(path, doc)
+    return _rewrite(path, lambda doc: _apply_leg(doc, args.round, args.role, args.adapter, leg, args.lens))
 
 
 def cmd_gate(path, args):
     if not args.why:
         print('roster: gate <%s> --why TEXT' % "|".join(MERGE_GATE_MODES))
         return 1
-    doc, err = _load_or_skeleton(path)
-    if err:
-        print(err)
-        return 1
-    doc["merge_gate"] = {"mode": args.mode, "set_on": date.today().isoformat(),
-                         "why": args.why}
-    return _commit(path, doc)
+    def gate(doc):
+        doc["merge_gate"] = {"mode": args.mode, "set_on": date.today().isoformat(),
+                             "why": args.why}
+    return _rewrite(path, gate)
 
 
 
@@ -1487,19 +1571,8 @@ def cmd_unset(path, args):
     if args.round not in ("r1", "fix"):
         print("roster: rounds.%s: unknown round %r" % (args.round, args.round))
         return 1
-    path = Path(path)
-    if not path.exists():
-        print("roster: %s: file not found" % path)
-        return 1
-    doc, err = load_roster(path)
-    if err:
-        print(err)
-        return 1
-    problem = _apply_unset(doc, args.round, args.role, args.adapter)
-    if problem:
-        print(problem)
-        return 1
-    return _commit(path, doc)
+    return _rewrite(path, lambda doc: _apply_unset(doc, args.round, args.role, args.adapter),
+                    must_exist=True)
 
 
 def main(argv=None):

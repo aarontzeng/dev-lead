@@ -4055,6 +4055,77 @@ def _checked(path):
     return run(SCRIPTS / "roster.py", "check", "--file", str(path), env=env)
 
 
+def test_roster_write_lock(tmp):
+    """Every roster writer runs its read-modify-write under a lock (0.6.51):
+    two `set` calls in flight at once used to drop one change silently. The
+    holder here is a separate process, the way a parallel leg would be.
+    Position: before test_roster."""
+    roster = SCRIPTS / "roster.py"
+    home = tmp / "lock-home"
+    home.mkdir()
+    real_dir = tmp / "lock-real"
+    real_dir.mkdir()
+    real = real_dir / "roster.json"
+    link = tmp / "roster-link.json"
+    link.symlink_to(real)
+    env = _roster_env(home, DEV_LEAD_ROSTER=link)
+    lock = real_dir / "roster.json.lock"
+
+    got = run(roster, "set", "r1", "review", "codex", "--model", "gpt-5.6-terra",
+              "--effort", "high", "--why", "t", env=env)
+    check("roster lock: a write through a symlink leaves the lock beside the REAL file",
+          got.returncode == 0 and lock.is_file() and not (tmp / "roster-link.json.lock").exists(),
+          got.stdout + got.stderr + " " + str(sorted(p.name for p in real_dir.iterdir())))
+
+    holder_src = ("import fcntl, os, sys, time\n"
+                  "fd = os.open(sys.argv[1], os.O_RDWR | os.O_CREAT)\n"
+                  "fcntl.flock(fd, fcntl.LOCK_EX)\n"
+                  "print('held', flush=True)\n"
+                  "time.sleep(float(sys.argv[2]))\n")
+
+    def hold(seconds):
+        proc = subprocess.Popen([sys.executable, "-c", holder_src, str(lock), str(seconds)],
+                                stdout=subprocess.PIPE, text=True)
+        assert proc.stdout.readline().strip() == "held"
+        return proc
+
+    # bounded wait: a holder that outlives the bound is reported, not waited on forever
+    proc = hold(6)
+    started = time.monotonic()
+    got = run(roster, "gate", "lead", "--why", "w", env=dict(env, DEV_LEAD_ROSTER_LOCK_SECS="0.5"))
+    elapsed = time.monotonic() - started
+    proc.kill(); proc.wait()
+    check("roster lock: a held lock past the bound is an error naming the lock, not a hang",
+          got.returncode == 1 and "another roster.py has been writing it for 0.5s" in got.stdout
+          and str(lock) in got.stdout and elapsed < 5, "rc=%s out=%r %.1fs" % (got.returncode, got.stdout, elapsed))
+    check("roster lock: ...and nothing was written past the holder",
+          "merge_gate" not in real.read_text(), real.read_text()[:200])
+
+    # a holder that lets go inside the bound: the write waits for it, then lands
+    proc = hold(1.5)
+    started = time.monotonic()
+    got = run(roster, "gate", "lead", "--why", "w", env=env)
+    elapsed = time.monotonic() - started
+    proc.wait()
+    check("roster lock: a write waits for a holder that releases in time",
+          got.returncode == 0 and elapsed >= 1.0 and json.loads(real.read_text())["merge_gate"]["mode"] == "lead",
+          "rc=%s out=%r %.1fs" % (got.returncode, got.stdout, elapsed))
+
+    # the write itself is durable: the temp file and its directory are fsync'd
+    import importlib.util as _ilu
+    _spec = _ilu.spec_from_file_location("roster_fsync_probe", roster)
+    _mod = _ilu.module_from_spec(_spec)
+    _spec.loader.exec_module(_mod)
+    synced, saved = [], os.fsync
+    os.fsync = lambda fd: synced.append(fd)
+    try:
+        _mod.atomic_write(real, real.read_text())
+    finally:
+        os.fsync = saved
+    check("roster lock: atomic_write fsyncs the file and then its directory",
+          len(synced) == 2, synced)
+
+
 def test_roster(tmp):
     import importlib.util
     from datetime import date
@@ -6645,6 +6716,9 @@ def main():
     with tempfile.TemporaryDirectory() as td:
         test_common(Path(td))
     test_leg_cmd()
+    print("roster.py write lock")
+    with tempfile.TemporaryDirectory() as td:
+        test_roster_write_lock(Path(td))
 
     print("roster.py")
     with tempfile.TemporaryDirectory() as td:
