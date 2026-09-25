@@ -902,7 +902,11 @@ def _lint_against(files, *checks, git=False):
                 path.chmod(0o755)
         if git:
             subprocess.run(["git", "-C", td, "init", "-q"], check=True)
-            subprocess.run(["git", "-C", td, "add", "-A"], check=True)
+            # The runner's global gitignore must not decide what the fixture
+            # holds: one that ignores AGENTS.md or .github/ -- the very hazard
+            # check_tracked exists for -- would drop files and fail the "every
+            # file committed" case on that machine only.
+            subprocess.run(["git", "-C", td, "-c", "core.excludesFile=/dev/null", "add", "-A"], check=True)
         real_root, real_errors = lint.ROOT, lint.ERRORS
         try:
             lint.ROOT, lint.ERRORS = fake, []
