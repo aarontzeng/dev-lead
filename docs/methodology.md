@@ -453,8 +453,10 @@ Nothing a delegate self-reports is evidence. The lead:
    un-fixed code, then pass against the fix. The catalogue of ways this
    quietly lies — stale binaries, combined reverts masking uncovered fixes,
    assertions that fire after an earlier failure already decided the outcome,
-   zero-matching test filters that exit green — lives in `dev-lead` Phase 2,
-   every clause paid for with a live false result.
+   zero-matching test filters that exit green — lives in the
+   [mutation runbook](../skills/dev-lead/references/mutation-runbook.md)
+   that `dev-lead` Phase 2 points at, every clause paid for with a live
+   false result.
 5. Verifies every review finding against the code before acting, and holds
    **rejections to the same evidence standard as findings** — a correctly
    rejected false positive and a wrongly dismissed real bug otherwise leave an
@@ -721,8 +723,12 @@ merging and pushing are the lead's to do in the same run, without a second
 ask (changed 2026-09-11 — the per-push question had been answered yes every
 time and protected nothing the verdict did not); the lead pushes only to the
 ref the project's contract names and reports it at once. Delegates never
-push, in every mode — that is a machine-enforced boundary per adapter, not
-a courtesy. Re-verify the target branch's *identity* at the gate, not just
+push, in every mode — but HOW that holds differs per adapter, and the
+[adapter table in workflow.md](workflow.md#the-adapters-side-by-side) says which: agy and
+opencode enforce it by machine config, claude, codex, grok and cursor at
+instruction level only, which is why every write leg runs behind the
+`snapshot-refs.sh` tripwire that fails the handoff closed on any remote-ref
+delta. Re-verify the target branch's *identity* at the gate, not just
 its cleanliness: humans rebase main checkouts mid-round, merged commits come
 back with new SHAs, and `--ff-only` refusing is the guard working — never
 switch to `--no-ff` to get past it.

@@ -135,7 +135,8 @@ defects, at a small false-positive cost (runtime file, calibration table).
 ```bash
 RUN_DIR=$(mktemp -d "${TMPDIR:-/tmp}/agy-review.XXXXXX")   # fresh per leg
 # Write the lens to "$RUN_DIR/prompt.md" in its own step.
-# Confirm this Gemini model is in the account catalogue; if not, pick an
+# The roster names the model for this leg (roster.py plan); this is an
+# example spelling. Confirm it is in the account catalogue; if not, pick an
 # available suffix variant.
 AGY_MODEL=gemini-3.8-flash-high
 BASE=$(git -C "$REVIEW_TARGET_DIR" merge-base origin/main HEAD)   # the span: see below
@@ -183,8 +184,10 @@ Role-specific choices in that command:
   2026-09-24), a real review of a few files 5–10, and the CLI default (5m0s)
   cuts it off mid-flight. 20 leaves room above the frame's 15-minute budget;
   a run that hits the timeout returns PARTIAL output, which is not a review.
-- **Gemini model, effort omitted** — the current review default is
-  `gemini-3.8-flash-high` (the roster's), only when the account catalogue offers it. The
+- **Gemini model, effort omitted** — `AGY_MODEL` above is an EXAMPLE
+  spelling; the model is whatever the roster names for this leg (the
+  maintainer's example roster says `gemini-3.8-flash-medium`), and only when
+  the account catalogue offers it. The
   `-high` suffix IS the effort; do not pass `--effort` (measured: omitting it
   works, and a mismatched value is a hard CLI error, so the flag can only
   break the run or restate the suffix). Verify from the log which model

@@ -68,7 +68,7 @@ wrap the thing that takes the time.**
   there forever — the prompt is already in argv, so nothing will ever arrive.
   It looks exactly like a long-running review: the process is alive, the CPU is
   idle, the output file holds those 39 bytes and never grows. One round lost
-  ten minutes to it before anyone read the file. The other three adapters in
+  ten minutes to it before anyone read the file. The other adapters in
   this suite do not do this, so a lead who has only launched them will not
   expect it.
 

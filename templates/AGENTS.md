@@ -23,7 +23,9 @@ allow-list), grant it read access to `$DEV_LEAD_ROOT`.
 ## Reading order
 
 1. `docs/methodology.md` — the rules that govern every role. Read it once
-   per session before doing anything else. Non-negotiables: the cross-family
+   per session before doing anything else (if you have never seen a run's
+   shape, `docs/workflow.md` first, as methodology itself says: it maps the
+   phases the rules refer to). Non-negotiables: the cross-family
    review rule, frozen review targets, merge-base spans, evidence gates,
    mutation-proofing, the merge gate (the person's approval by default; see
    §9 for the `merge_gate.mode = lead` setting and what it does NOT change).

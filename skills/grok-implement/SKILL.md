@@ -17,8 +17,9 @@ Read **[`references/grok-runtime.md`](../grok-adversarial-review/references/grok
 The items that bite the write role hardest: the machine's `config.toml` may
 carry a global always-approve default (state the posture explicitly, never
 inherit it), the sandbox is kernel-gated and silently unenforced on old
-kernels, and the family has **zero calibration-journal rows** — first
-dispatches are calibration runs, verified accordingly.
+kernels, and this adapter has **zero calibration-journal rows of its own**
+(the Grok-family rows in cursor-runtime.md were served through cursor) —
+first dispatches are calibration runs, verified accordingly.
 
 ## Worktree, snapshot, then dispatch
 

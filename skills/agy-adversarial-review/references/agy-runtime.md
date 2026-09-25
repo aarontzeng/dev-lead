@@ -478,8 +478,10 @@ gemini-3.7-flash-low
 [Google's 3.7 Flash announcement](https://blog.google/innovation-and-ai/models-and-research/gemini-models/introducing-gemini-3-7-flash/)
 establishes the release, not an account entitlement or a quality gate. The
 role skills then used the matching `-high`/`high` pair as their Gemini default;
-they now default to `gemini-3.8-flash-high` (the roster's, and [`data/launch.json`](../../../data/launch.json)'s
-examples, which have calibration rows below). A different account must substitute an available matched
+their example spellings are now `gemini-3.8-flash-high` ([`data/launch.json`](../../../data/launch.json)'s
+examples, which have calibration rows below) -- an example, not a default: the
+roster names the model for each leg, and the maintainer's own review roster has
+been `gemini-3.8-flash-medium` since 2026-09-05 (see the 2026-09-07 row). A different account must substitute an available matched
 pair and verify the served model from its log. The first locally verified 3.7
 run is calibration: append its verified outcome to the local journal before
 using it to make dispatch or gate decisions.
@@ -679,11 +681,13 @@ Per [`docs/calibration-journal.md`](../../../docs/calibration-journal.md):
 one table per family, appended and never rewritten, one row per run, the
 outcome column carrying VERIFIED hit rates rather than impressions.
 
-**This file deliberately ships NO rows.** The journal's opening section is
-titled "why the tables in the skills are not your tables", and a maintainer's
-hit rates on a maintainer's account, repos and week are exactly what a reader
-must not inherit as if it were shipped calibration. Start your own table here
-and keep it out of any upstream contribution:
+**The rows below are the maintainer's, not shipped calibration.** The
+journal's opening section is titled "why the tables in the skills are not
+your tables", and a maintainer's hit rates on a maintainer's account, repos
+and week are exactly what a reader must not inherit as if they were. They
+are kept because the *shape* of a row -- what was posed, what was verified,
+what was rejected and why -- is the method. Start your own table under them
+and keep your rows out of any upstream contribution:
 
 | date | model | role | outcome |
 |---|---|---|---|

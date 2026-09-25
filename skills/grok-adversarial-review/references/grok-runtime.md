@@ -135,7 +135,10 @@ pool is a weekly budget, not congestion.
 | date | model | role | outcome |
 |---|---|---|---|
 
-No rows yet. The first quota'd sessions ARE the calibration sessions — append
+No rows yet for this CLI. The Grok family has rows served through cursor
+(`cursor-grok-4.6-*`, `grok-4.7-*` in cursor-runtime.md); they calibrate the
+family's verdicts, not this adapter's mechanics. The first quota'd sessions
+here ARE the calibration sessions — append
 verified hit rates per run, per the journal's format rules, before this
 family's rows are cited in any dispatch decision.
 

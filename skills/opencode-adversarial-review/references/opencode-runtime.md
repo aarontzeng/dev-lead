@@ -413,7 +413,8 @@ tokens, so raising it costs most on the models that are already dear**:
 effort from the LENS, not from the model.
 
 **This is cost information, NOT a roster default.** The roster is the
-owner's and lives in their `CLAUDE.md`; a leg changes only when they say so
+owner's, in `roster.json` (located per `/dev-lead:config`; it lived in their
+`CLAUDE.md` before the roster existed); a leg changes only when they say so
 for that round. 0.6.6 of this file wrote "default to `opencode-go/glm-5.3`",
 which took a peer's *recommendation* and shipped it as policy — corrected
 here, and by the peer who proposed it. What the numbers legitimately say: IF

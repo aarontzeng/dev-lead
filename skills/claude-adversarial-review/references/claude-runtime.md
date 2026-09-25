@@ -7,7 +7,7 @@ It sits under the review skill's directory for the same reason the other
 families' runtime files do.
 
 This is the delegate direction for the Claude family: how **any lead —
-including a codex or agy lead** — hands bounded work to Claude. All four
+including a codex or agy lead** — hands bounded work to Claude. All six
 CLIs can share one skills directory (symlink the others' skills paths to
 Claude's), so a foreign lead can find and follow these files.
 

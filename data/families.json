@@ -26,7 +26,7 @@
     },
     "opencode": {
       "cli": "opencode",
-      "serves": ["DeepSeek", "Nemotron", "GLM", "North", "Inkling", "Laguna", "Xiaomi", "Tencent", "Meta", "Kimi", "unknown"],
+      "serves": ["DeepSeek", "Nemotron", "GLM", "North", "Inkling", "Laguna", "Xiaomi", "Tencent", "Meta", "Kimi", "Qwen", "MiniMax", "Meituan", "unknown"],
       "note": "free pool; catalogue changes, verify with `opencode models`. Kimi is reachable via the paid opencode-go/kimi-k3 pool, not the free one (opencode-runtime.md)"
     },
     "grok": {
@@ -55,6 +55,9 @@
     "Meta": {"accounting_valid": true, "note": "marketed as Muse Spark; native opencode free pool, e.g. opencode/muse-spark-1.2-contributor-free"},
     "Grok": {"accounting_valid": true},
     "Kimi": {"accounting_valid": true},
+    "Qwen": {"accounting_valid": true, "note": "Alibaba; opencode-go paid pool, e.g. opencode-go/qwen3.8-max (the review skill's top-tier judgement leg). Added 2026-09-25: the skill routed to it while this file did not know the family, so the accounting rule could not be applied to that leg"},
+    "MiniMax": {"accounting_valid": true, "note": "opencode-go paid pool, e.g. opencode-go/minimax-m3"},
+    "Meituan": {"accounting_valid": true, "note": "LongCat; opencode-go paid pool, e.g. opencode-go/longcat-2.0"},
     "Composer": {
       "accounting_valid": false,
       "why": "Cursor's in-house model; its pretraining lineage is undisclosed, which is the stealth-model hazard again -- it might share any family's blind spots. Extra eyes, never the accounting leg"

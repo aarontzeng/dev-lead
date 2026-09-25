@@ -18,9 +18,12 @@ directory). It holds the family-level mechanics — the always-approve config
 trap, the three read-only layers and which one is actually load-bearing, the
 old-kernel sandbox no-op, the prompt-file rule, the measured quota
 fingerprint — plus the UNVERIFIED list this young family still carries.
-**This family has zero calibration-journal rows**: until the first verified
-hit rates land, treat its verdicts as one more pair of eyes, not the gate
-leg, and record every run.
+**This adapter has zero calibration-journal rows of its own** (the Grok
+family's rows so far were all served through cursor -- `cursor-grok-4.6-*`,
+`grok-4.7-*` in cursor-runtime.md -- and say nothing about this CLI's
+permission and sandbox behaviour): until the first verified hit rates land
+here, treat its verdicts as one more pair of eyes, not the gate leg, and
+record every run.
 
 ## Establish an immutable review target
 

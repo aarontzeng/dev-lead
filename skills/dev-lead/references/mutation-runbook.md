@@ -10,7 +10,7 @@ where the harness reported something that was not true and a human nearly
 believed it. Ordered roughly by how early in a round they bite.
 
 > [!WARNING]
-> The single most destructive item is the third one: `git restore` /
+> The single most destructive item is the second one: `git restore` /
 > `git checkout --` on an uncommitted tree destroys the only copy of the
 > implementation. Commit first, always — including your own edits.
 

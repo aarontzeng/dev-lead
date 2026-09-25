@@ -23,8 +23,10 @@ lines. This file assumes them and covers only the review role.
 
 ## Choosing the model for this leg — by LENS, not a fixed favourite
 
-**The owner ruled this on 2026-09-16 and it now lives in their `CLAUDE.md`**,
-which is the roster; what follows is the same rule with the numbers behind it,
+**The owner ruled this on 2026-09-16 and it now lives in their roster**
+(`roster.json`, located per [`/dev-lead:config`](../config/SKILL.md); it was
+in their `CLAUDE.md` before the roster existed); what follows is the same
+rule with the numbers behind it,
 and this file is where those numbers belong. The division is now explicit in
 both directions — the roster names which leg, dev-lead holds prices, buckets
 and calibration rows. (The earlier attempt to write a single model in here as
