@@ -49,7 +49,8 @@ with a moving branch name during verification.
 ## Create the isolation boundary
 
 ```bash
-git worktree add -b codex/<short-task-slug> ../<repo>-codex-<short-task-slug> "$BASE"
+WORKTREE=../<repo>-codex-<short-task-slug>
+git worktree add -b codex/<short-task-slug> "$WORKTREE" "$BASE"
 ```
 
 Worktrees isolate tracked working files, not databases, ports, credentials,
@@ -123,7 +124,9 @@ file, then:
 
 ```bash
 cd "$WORKTREE" && node "$SCRIPT" task \
-  --background --write --fresh --model <model> --effort high --prompt-file "$TASK_FILE"
+  --background --write --fresh --model <model> --effort high --prompt-file "$TASK_FILE" \
+  > "$RUN_DIR/launch.log" 2>&1
+JOB=$(grep -o 'task-[a-z0-9-]*' "$RUN_DIR/launch.log" | head -1)   # the id the waiter below takes
 ```
 
 Model and effort (verified against companion source at 1.0.6: `--effort`
@@ -158,7 +161,7 @@ and codex's does not.
 
 ```bash
 DEV_LEAD=${DEV_LEAD_ROOT:-$(ls -d "$HOME"/.claude/plugins/cache/dev-lead/dev-lead/* 2>/dev/null | sort -V | tail -1)}
-"$DEV_LEAD/scripts/await-codex-job.sh" "$JOB_ID" "$WORKTREE"
+"$DEV_LEAD/scripts/await-codex-job.sh" "$JOB" "$WORKTREE"
 ```
 
 Run THAT under the host's background mechanism — it blocks until the job

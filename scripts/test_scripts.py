@@ -2479,6 +2479,23 @@ def test_leg_cmd():
         check(f"leg-cmd: explains why -- {label}", needle in r.stderr,
               f"stderr={r.stderr!r}")
 
+    # The brief's name follows the role. Every implement skill writes
+    # "$RUN_DIR/task.md" and every review skill "$RUN_DIR/prompt.md"; until
+    # 0.6.46 the script read prompt.md for both, so a composed implement
+    # launch failed its own guard against a brief the skill had written.
+    for argv in (["codex", "--model", "m", "--effort", "high"],
+                 ["agy", "--model", "gemini-3.8-flash-high", "--target", "/tmp/x"],
+                 ["cursor", "--model", "cursor-grok-4.6-medium"],
+                 ["opencode", "--model", "opencode/x", "--effort", "high"],
+                 ["claude", "--model", "opus"]):
+        adapter = argv[0]
+        r = subprocess.run([str(script), adapter, "implement", *argv[1:]],
+                           capture_output=True, text=True)
+        check(f"leg-cmd: {adapter} implement reads the brief the skill writes (task.md)",
+              r.returncode == 0 and '"$RUN_DIR/task.md"' in r.stdout
+              and "prompt.md" not in r.stdout,
+              f"rc={r.returncode} stdout={r.stdout!r} stderr={r.stderr[-200:]!r}")
+
     # A value option given LAST with no value. `MODEL=${2:-}; shift 2` under
     # `set -e` exited 1 with nothing on stderr (measured 2026-09-25), so an
     # `eval "$(leg-cmd.sh ... --model)"` composed nothing and said nothing.

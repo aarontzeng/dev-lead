@@ -15,9 +15,14 @@
 #
 # Not every option applies to every adapter, and one that does not is REFUSED,
 # never dropped: --target/--base/--prompt-file only where the adapter's template
-# has that slot (--prompt-file: grok; the others read "$RUN_DIR/prompt.md", so
-# give them --run-dir), --add-dir only where data/launch.json names the
+# has that slot (--prompt-file: grok; the others read the brief under $RUN_DIR,
+# so give them --run-dir), --add-dir only where data/launch.json names the
 # adapter's add_dir_flag (cursor).
+#
+# The brief's name follows the role, matching what the skills write: a review
+# leg reads "$RUN_DIR/prompt.md" (the lens), an implement leg "$RUN_DIR/task.md".
+# Until 0.6.46 both read prompt.md while every implement skill wrote task.md,
+# so a composed implement launch failed its own brief guard.
 #
 # Prints the command on stdout and the adapter's gotchas on stderr, so
 #   eval "$(leg-cmd.sh agy review --model gemini-3.8-flash-medium --target "$T")"
@@ -142,13 +147,15 @@ if prefix and ("/" not in _m or not all(_m.split("/"))):
              % (a, _m, _why, prefix + _m, spec["cli"]))
 
 r = spec["role"][role]
+BRIEF = '"$RUN_DIR/%s"' % ("task.md" if role == "implement" else "prompt.md")
+BRIEF_ARG = '"$(cat %s)"' % BRIEF
 subst = {"{MODEL}": os.environ["MODEL"], "{EFFORT}": effort,
          "{TARGET}": os.environ.get("TARGET", ""), "{BASE}": os.environ.get("BASE", ""),
          "{PROMPT_FILE}": os.environ.get("PROMPT_FILE", "")}
 argv, missing = [], set()
 for tok in r["argv"]:
     if tok == "{PROMPT}":
-        argv.append('"$(cat "$RUN_DIR/prompt.md")"' if r["prompt_delivery"] == "argv" else tok)
+        argv.append(BRIEF_ARG if r["prompt_delivery"] == "argv" else tok)
         continue
     for k, v in subst.items():
         if k in tok:
@@ -223,7 +230,7 @@ if add_dirs:
                  "data/launch.json, so it would be silently dropped.\n  %s"
                  % (a, spec.get("add_dir_note",
                                 "put the context inside the directory the leg runs in.")))
-    at = next((i for i, t in enumerate(argv) if t == '"$(cat "$RUN_DIR/prompt.md")"'), len(argv))
+    at = next((i for i, t in enumerate(argv) if t == BRIEF_ARG), len(argv))
     extra = []
     for d_ in add_dirs:
         extra += [flag, d_]
@@ -235,7 +242,7 @@ if add_dirs:
 # lets every one of those through. Measured 2026-09-08 on this very script:
 # `--model 'x`+chr(96)+'id'+chr(96)+'y'` rendered unquoted.
 # The two exceptions are strings this script emits itself and means as shell.
-OURS = ('"$(cat "$RUN_DIR/prompt.md")"',)
+OURS = (BRIEF_ARG,)
 # A template token under $RUN_DIR (codex review's -o file) is ours too, and must
 # expand: single-quoting it would write to a file literally named $RUN_DIR/...
 def _emit(t):
@@ -267,9 +274,9 @@ if frame:
         # --target, so the leg must run THERE, not wherever the lead happens to
         # be: a subshell, so the caller's own cwd is left alone under eval.
         cmd = "( cd %s && %s )" % (shlex.quote(os.environ.get("TARGET", "")), cmd)
-    cmd = '%s < "$RUN_DIR/prompt.md" > "$RUN_DIR/framed-prompt.md" && %s' % (builder, cmd)
+    cmd = '%s < %s > "$RUN_DIR/framed-prompt.md" && %s' % (builder, BRIEF, cmd)
 elif r["prompt_delivery"] == "stdin":
-    cmd += ' < "$RUN_DIR/prompt.md"'
+    cmd += ' < %s' % BRIEF
 
 w = sys.stderr
 print("# adapter %s / role %s   (data/launch.json, verified %s)" % (a, role, spec["verified"]), file=w)
@@ -338,8 +345,7 @@ if spec.get("not_flags") and applies:
 # should do. What `exit 1` would have added is killing the shell of the
 # interactive caller too, and that is the case this chain exists to avoid.
 delivery = r["prompt_delivery"]
-brief = (shlex.quote(os.environ["PROMPT_FILE"]) if delivery == "prompt_file"
-         else '"$RUN_DIR/prompt.md"')
+brief = shlex.quote(os.environ["PROMPT_FILE"]) if delivery == "prompt_file" else BRIEF
 
 pre = []
 if delivery != "prompt_file":
@@ -353,7 +359,7 @@ if delivery != "prompt_file":
         print("# RUN_DIR must be exported on its own line before this command. "
               "A prefix assignment (`RUN_DIR=/p cmd \"$(cat \"$RUN_DIR/...\")\"`) "
               "expands the argument BEFORE the assignment takes effect, so the "
-              "leg reads /prompt.md and the failure looks like a path bug in "
+              "leg reads /<brief> and the failure looks like a path bug in "
               "this script. Pass --run-dir to have the export emitted for you.",
               file=w)
 # An UNSET RUN_DIR makes the assertion read `test -s /prompt.md`, which passes

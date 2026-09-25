@@ -93,18 +93,27 @@ eval "$("$DEV_LEAD/scripts/leg-cmd.sh" codex review --model <model> --effort <ti
   --base "$BASE" --target "$REVIEW_TARGET_DIR" --run-dir "$RUN_DIR")" > "$RUN_DIR/review.log" 2>&1
 ```
 
-What it runs, spelled out (for a lead without the script):
+What the script emits, spelled out (for a lead without it): an `export
+RUN_DIR=…`, a guard that the brief exists and is not empty, then the builder
+and the run chained with `&&`. Nothing else -- the checks under it are the
+lead's, before and after.
 
 ```bash
-set -euo pipefail
-python3 "$DEV_LEAD/scripts/codex-review-prompt.py" --base "$BASE" --target "$REVIEW_TARGET_DIR" \
-  < "$RUN_DIR/prompt.md" > "$RUN_DIR/framed-prompt.md"
-"$DEV_LEAD/scripts/verify-target.sh" "$REVIEW_TARGET_DIR" "$REVIEW_HEAD"
-rm -f "$RUN_DIR/review.md"
-rc=0
+# export RUN_DIR=<the --run-dir, made absolute>   -- emitted first, on its own line
+test -n "$RUN_DIR" && test -s "$RUN_DIR/prompt.md" || { echo 'leg-cmd: RUN_DIR unset, or brief empty/missing:' "$RUN_DIR/prompt.md" >&2; false; } &&
+python3 "$DEV_LEAD/scripts/review-prompt.py" --adapter codex --base "$BASE" --target "$REVIEW_TARGET_DIR" \
+  < "$RUN_DIR/prompt.md" > "$RUN_DIR/framed-prompt.md" && \
 codex exec -C "$REVIEW_TARGET_DIR" -s read-only -m "$MODEL" -c "model_reasoning_effort=$TIER" \
-  -o "$RUN_DIR/review.md" -- - < "$RUN_DIR/framed-prompt.md" > "$RUN_DIR/review.log" 2>&1 || rc=$?
-"$DEV_LEAD/scripts/verify-target.sh" "$REVIEW_TARGET_DIR" "$REVIEW_HEAD"
+  -o "$RUN_DIR/review.md" -- - < "$RUN_DIR/framed-prompt.md"
+```
+
+Around it, the lead runs (these are NOT in the emitted command):
+
+```bash
+"$DEV_LEAD/scripts/verify-target.sh" "$REVIEW_TARGET_DIR" "$REVIEW_HEAD"   # before: frozen at the right SHA
+rm -f "$RUN_DIR/review.md"                                                 # a stale report cannot pass for this run
+rc=0; eval "$(…leg-cmd.sh codex review …)" > "$RUN_DIR/review.log" 2>&1 || rc=$?
+"$DEV_LEAD/scripts/verify-target.sh" "$REVIEW_TARGET_DIR" "$REVIEW_HEAD"   # after: nothing touched it
 [ "$rc" -eq 0 ] || { echo "codex exec exited $rc; see review.log" >&2; exit 1; }
 used=$(sed -n 's/^reasoning effort: //p' "$RUN_DIR/review.log" | head -1)
 [ "$used" = "$TIER" ] || { echo "effort used '$used', wanted '$TIER'" >&2; exit 1; }

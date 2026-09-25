@@ -21,7 +21,8 @@ and the instruction-layer inheritance property are there and assumed here.
 
 ```bash
 BASE=$(git rev-parse HEAD)   # from a clean checkout, recorded before anything
-git worktree add -b claude/<short-task-slug> ../<repo>-claude-<short-task-slug> "$BASE"
+WORKTREE=../<repo>-claude-<short-task-slug>
+git worktree add -b claude/<short-task-slug> "$WORKTREE" "$BASE"
 ```
 
 Verify against that exact SHA later — never against a moving branch name.

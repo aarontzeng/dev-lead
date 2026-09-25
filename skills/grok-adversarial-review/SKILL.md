@@ -48,6 +48,7 @@ is embedded in the prompt because a delegate without a shell cannot run git
 Pre-launch guard:
 
 ```bash
+BASE=$(git -C "$REVIEW_TARGET_DIR" merge-base origin/main "$REVIEW_HEAD")   # the branch point, never a branch name
 git diff --stat "$BASE" "$REVIEW_HEAD"  # file list must match the change under review
 ```
 
