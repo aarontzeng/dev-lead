@@ -4116,24 +4116,6 @@ def test_roster_write_lock(tmp):
           got.returncode == 0 and elapsed >= 1.0 and json.loads(real.read_text())["merge_gate"]["mode"] == "lead",
           "rc=%s out=%r %.1fs" % (got.returncode, got.stdout, elapsed))
 
-    # no lost update: a waiting writer reads the roster only once it holds the
-    # lock. While the holder has it, the holder's own change lands on disk; a
-    # `set` that read before locking would write the old document back over it.
-    proc = hold(2.5)
-    waiting = subprocess.Popen([sys.executable, str(roster), "set", "r1", "review", "codex", "--model",
-                                "gpt-6-luna", "--effort", "xhigh", "--why", "t"],
-                               env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-    time.sleep(1.0)
-    held_doc = json.loads(real.read_text())
-    held_doc["_probe"] = "written while the lock was held"
-    real.write_text(json.dumps(held_doc, indent=2) + "\n")
-    proc.wait()
-    out, _ = waiting.communicate(timeout=30)
-    final = json.loads(real.read_text())
-    check("roster lock: a writer that waited keeps the change made while it waited",
-          waiting.returncode == 0 and final.get("_probe") == "written while the lock was held"
-          and final["rounds"]["r1"]["review"]["codex"]["model"] == "gpt-6-luna", out + real.read_text()[:300])
-
     # the write itself is durable: the temp file and its directory are fsync'd
     import importlib.util as _ilu
     _spec = _ilu.spec_from_file_location("roster_fsync_probe", roster)
@@ -4148,6 +4130,32 @@ def test_roster_write_lock(tmp):
         os.fsync = saved
     check("roster lock: atomic_write fsyncs the file and then its directory",
           synced == [False, True], synced)
+
+    # no lost update: the read happens while the lock is held. A second open of
+    # the lock file cannot take it at that moment, so a _rewrite that loaded the
+    # roster before locking -- two writers both reading the old document --
+    # shows up here without depending on timing.
+    import fcntl
+    held, saved_load = [], _mod._load_or_skeleton
+
+    def probing_load(path):
+        fd = os.open(str(lock), os.O_RDWR)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            held.append(False)
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        except BlockingIOError:
+            held.append(True)
+        finally:
+            os.close(fd)
+        return saved_load(path)
+
+    _mod._load_or_skeleton = probing_load
+    try:
+        rc = _mod._rewrite(real, lambda doc: None)
+    finally:
+        _mod._load_or_skeleton = saved_load
+    check("roster lock: the roster is read while the write lock is held", rc == 0 and held == [True], (rc, held))
 
 
 def test_roster(tmp):
