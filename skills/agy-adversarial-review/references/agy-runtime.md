@@ -147,10 +147,10 @@ install). Read it before the first `agy` run of a session.
 > With it true, the file tool reached `/etc/hostname` despite `read_file` being
 > scoped to one project glob. False confines it.
 >
-> A bounded note on (3): `trustedWorkspaces` on the first host contains `/home/aaron`,
+> A bounded note on (3): `trustedWorkspaces` on the first host contains `$HOME`,
 > so the flag looks weaker than it is — but measured, with the flag false, a
-> leg was denied both a listing of `/home/aaron` and a read of
-> `/home/aaron/.bashrc`. Being a trusted workspace did not by itself grant
+> leg was denied both a listing of `$HOME` and a read of
+> `$HOME/.bashrc`. Being a trusted workspace did not by itself grant
 > reads here. That is one host with deny-by-default; do not carry it to a
 > `proceed-in-sandbox` machine.
 >
@@ -226,7 +226,7 @@ Measured on the first host 2026-09-15, both directions in the real posture:
 | | result |
 |---|---|
 | read the `--add-dir` target, run `git log --oneline` | **works** — the positive control, so the leg is alive |
-| read `/etc/hostname`, list `/home/aaron` | auto-denied |
+| read `/etc/hostname`, list `$HOME` | auto-denied |
 | call an MCP tool the LIVE config allows (an issue-tracker tool) | refused — the profile declares no `mcp(` entries |
 | read its own `$HOME/.gemini/antigravity-cli/decoy.txt` | **auto-denied**, zero output |
 | **write outside `--add-dir` with `write_to_file`** | **succeeds — see the caution above. The profile does not close this.** |

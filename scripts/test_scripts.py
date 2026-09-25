@@ -880,6 +880,213 @@ def test_lint_launch():
           any("scopes its effort to role 'reveiw'" in str(e) for e in got), got)
 
 
+# ------------------------------------------------------ lint: the plain checks ----
+def _lint_against(files, *checks, git=False):
+    """Run lint checks against a synthetic tree and return their errors.
+
+    `files` maps repo-relative paths to text (a value of None makes the path
+    an empty directory). With git=True the tree is a git repo with every file
+    committed, for the checks that read `git ls-files`."""
+    sys.path.insert(0, str(SCRIPTS))
+    import lint
+    with tempfile.TemporaryDirectory() as td:
+        fake = Path(td)
+        for name, body in files.items():
+            path = fake / name
+            if body is None:
+                path.mkdir(parents=True, exist_ok=True)
+                continue
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(body)
+            if name.endswith(".sh"):
+                path.chmod(0o755)
+        if git:
+            subprocess.run(["git", "-C", td, "init", "-q"], check=True)
+            subprocess.run(["git", "-C", td, "add", "-A"], check=True)
+        real_root, real_errors = lint.ROOT, lint.ERRORS
+        try:
+            lint.ROOT, lint.ERRORS = fake, []
+            for check in checks:
+                check()
+            return list(lint.ERRORS)
+        finally:
+            lint.ROOT, lint.ERRORS = real_root, real_errors
+
+
+def test_lint_plain_checks():
+    """The nine checks that ran only against the real repo in CI until
+    0.6.50: structure, frontmatter, manifest, links, fences, var_order,
+    tracked, sentinels and families. Each is exercised with a tree that
+    passes and one broken the way the check exists to catch."""
+    sys.path.insert(0, str(SCRIPTS))
+    import lint
+
+    def skill(name, body="", runtime=True):
+        fam = name.split("-")[0]
+        ref = "\nRead references/%s-runtime.md first.\n" % fam if runtime else "\n"
+        return "---\nname: %s\ndescription: a %s skill\n---\n%s%s" % (name, name, ref, body)
+
+    tree = {"skills/dev-lead/SKILL.md": skill("dev-lead")}
+    for fam in lint.FAMILIES:
+        tree["skills/%s-implement/SKILL.md" % fam] = skill(
+            "%s-implement" % fam, "Every change gets a cross-family review.\n")
+        tree["skills/%s-adversarial-review/SKILL.md" % fam] = skill("%s-adversarial-review" % fam)
+        tree["skills/%s-adversarial-review/references/%s-runtime.md" % (fam, fam)] = "# runtime\n"
+
+    # structure
+    check("lint structure: the full tree passes", _lint_against(tree, lint.check_structure) == [])
+    missing = dict(tree); del missing["skills/grok-implement/SKILL.md"]
+    got = _lint_against(missing, lint.check_structure)
+    check("lint structure: a missing role skill is named",
+          any("grok-implement/SKILL.md" in e and "missing" in e for e in got), got)
+    no_lead = dict(tree); del no_lead["skills/dev-lead/SKILL.md"]
+    got = _lint_against(no_lead, lint.check_structure)
+    check("lint structure: the orchestrator skill is required",
+          any("orchestrator" in e for e in got), got)
+
+    # frontmatter
+    check("lint frontmatter: the full tree passes", _lint_against(tree, lint.check_frontmatter) == [])
+    for label, body, needle in (
+            ("no block", "# no frontmatter\n", "no frontmatter block"),
+            ("no name", "---\ndescription: x\n---\n", "has no name:"),
+            ("wrong name", "---\nname: other\ndescription: x\n---\n", "!= directory"),
+            ("no description", "---\nname: dev-lead\n---\n", "has no description:")):
+        broken = dict(tree); broken["skills/dev-lead/SKILL.md"] = body
+        got = _lint_against(broken, lint.check_frontmatter)
+        check("lint frontmatter: flags %s" % label, any(needle in e for e in got), got)
+
+    # manifest (plugin.json and, since the repo is its own marketplace, marketplace.json)
+    skill_dirs = sorted({p.split("/")[1] for p in tree})
+    manifest_ok = json.dumps({"name": "dev-lead", "description": "d", "version": "1.2.3",
+                              "skills": ["./skills/%s" % d for d in skill_dirs]})
+    market_ok = json.dumps({"name": "dev-lead", "owner": {"name": "o"}, "description": "d",
+                            "plugins": [{"name": "dev-lead", "source": "./"}]})
+    with_manifest = dict(tree, **{".claude-plugin/plugin.json": manifest_ok,
+                                  ".claude-plugin/marketplace.json": market_ok})
+    check("lint manifest: a manifest listing every skill, with its marketplace, passes",
+          _lint_against(with_manifest, lint.check_manifest) == [],
+          _lint_against(with_manifest, lint.check_manifest))
+    got = _lint_against(tree, lint.check_manifest)
+    check("lint manifest: a missing manifest is reported", any("missing" in e for e in got), got)
+    got = _lint_against(dict(tree, **{".claude-plugin/plugin.json": "{nope"}), lint.check_manifest)
+    check("lint manifest: invalid JSON is reported with the parser's message",
+          any("invalid JSON" in e for e in got), got)
+    short = json.loads(manifest_ok)
+    short["skills"] = [s for s in short["skills"] if not s.endswith("/grok-implement")] + ["./skills/phantom"]
+    del short["version"]
+    got = _lint_against(dict(with_manifest, **{".claude-plugin/plugin.json": json.dumps(short)}), lint.check_manifest)
+    check("lint manifest: an unlisted skill, a phantom entry and a missing key are all named",
+          any("'grok-implement' exists on disk but is not in the skills list" in e for e in got)
+          and any("names 'phantom'" in e for e in got) and any("'version'" in e for e in got), got)
+    got = _lint_against(dict(tree, **{".claude-plugin/plugin.json": manifest_ok}), lint.check_manifest)
+    check("lint manifest: a missing marketplace.json is reported",
+          any("marketplace.json" in e and "missing" in e for e in got), got)
+    other = json.loads(market_ok); other["plugins"][0]["name"] = "someone-else"
+    got = _lint_against(dict(with_manifest, **{".claude-plugin/marketplace.json": json.dumps(other)}),
+                        lint.check_manifest)
+    check("lint manifest: a marketplace that does not list this plugin is named",
+          any("does not list this repo's own plugin 'dev-lead'" in e for e in got), got)
+
+    # links and placeholders
+    linked = dict(tree, **{"docs/a.md": "see [b](b.md) and [up](../README.md)\n",
+                           "docs/b.md": "# b\n", "README.md": "# r\n"})
+    check("lint links: resolving relative links pass", _lint_against(linked, lint.check_links) == [])
+    broken = dict(linked, **{"docs/a.md": "see [gone](nowhere.md) and TODO later\n"})
+    got = _lint_against(broken, lint.check_links)
+    check("lint links: a dangling relative link is named with its line",
+          any("relative link 'nowhere.md' does not resolve" in e and "line 1" in e for e in got), got)
+    check("lint links: a left-in placeholder is named",
+          any("placeholder 'TODO'" in e for e in got), got)
+
+    # fences
+    fenced = dict(tree, **{"docs/f.md": "```bash\necho hi\n```\n"})
+    check("lint fences: balanced fences pass", _lint_against(fenced, lint.check_fences) == [])
+    got = _lint_against(dict(tree, **{"docs/f.md": "```bash\necho hi\n"}), lint.check_fences)
+    check("lint fences: an unclosed fence is counted", any("odd number of ``` fence lines (1)" in e for e in got), got)
+
+    # var_order
+    ordered = dict(tree, **{"docs/v.md": "```bash\nRUN_DIR=/tmp/x\necho \"$RUN_DIR\"\n```\n"})
+    check("lint var_order: assign-then-use passes", _lint_against(ordered, lint.check_var_order) == [])
+    got = _lint_against(dict(tree, **{"docs/v.md": "```bash\necho \"$RUN_DIR\"\nRUN_DIR=/tmp/x\n```\n"}),
+                        lint.check_var_order)
+    check("lint var_order: use-before-assignment is named with both lines",
+          any("$RUN_DIR used before its assignment" in e and "line 2" in e and "line 3" in e for e in got), got)
+    external = dict(tree, **{"docs/v.md": "```bash\necho \"$SCRIPT\"\n```\n"})
+    check("lint var_order: a never-assigned variable is a documented external, not an error",
+          _lint_against(external, lint.check_var_order) == [])
+
+    # sentinels
+    check("lint sentinels: the full tree passes", _lint_against(tree, lint.check_sentinels) == [])
+    quiet = dict(tree); quiet["skills/agy-implement/SKILL.md"] = skill("agy-implement", "just do it\n")
+    got = _lint_against(quiet, lint.check_sentinels)
+    check("lint sentinels: an implement skill without the cross-family rule is named",
+          any("agy-implement" in e and "headline rule is gone" in e for e in got), got)
+    unlinked = dict(tree); unlinked["skills/codex-adversarial-review/SKILL.md"] = skill(
+        "codex-adversarial-review", runtime=False)
+    got = _lint_against(unlinked, lint.check_sentinels)
+    check("lint sentinels: a skill that never names its runtime file is named",
+          any("codex-adversarial-review" in e and "codex-runtime.md" in e for e in got), got)
+
+    # tracked
+    tracked = dict(tree, **{"templates/AGENTS.md": "# a\n", ".claude-plugin/plugin.json": manifest_ok,
+                            ".github/workflows/ci.yml": "on: push\n", "data/families.json": "{}",
+                            "scripts/freeze-target.sh": "#!/bin/sh\n", "scripts/verify-target.sh": "#!/bin/sh\n",
+                            "scripts/snapshot-refs.sh": "#!/bin/sh\n", "scripts/lib.sh": "#!/bin/sh\n",
+                            "scripts/_common.py": "# c\n"})
+    check("lint tracked: a tree with every required file committed passes",
+          _lint_against(tracked, lint.check_tracked, git=True) == [],
+          _lint_against(tracked, lint.check_tracked, git=True))
+    untracked = dict(tracked); del untracked["scripts/lib.sh"]
+    got = _lint_against(untracked, lint.check_tracked, git=True)
+    check("lint tracked: a required file git does not hold is named",
+          any("scripts/lib.sh" in e and "not tracked" in e for e in got), got)
+    with tempfile.TemporaryDirectory() as td:
+        fake = Path(td)
+        for name, body in tracked.items():
+            (fake / name).parent.mkdir(parents=True, exist_ok=True)
+            (fake / name).write_text(body)
+        subprocess.run(["git", "-C", td, "init", "-q"], check=True)
+        subprocess.run(["git", "-C", td, "add", "-A"], check=True)
+        (fake / "scripts/freeze-target.sh").chmod(0o644)
+        real_root, real_errors = lint.ROOT, lint.ERRORS
+        try:
+            lint.ROOT, lint.ERRORS = fake, []
+            lint.check_tracked()
+            got = list(lint.ERRORS)
+        finally:
+            lint.ROOT, lint.ERRORS = real_root, real_errors
+    check("lint tracked: a helper without its +x bit is named",
+          any("freeze-target.sh" in e and "not executable" in e for e in got), got)
+
+    # families
+    fam_ok = {"adapters": {f: {"serves": [f.title()]} for f in lint.FAMILIES},
+              "families": {f.title(): {"accounting_valid": True} for f in lint.FAMILIES}}
+    fam_ok["adapters"]["cursor"]["serves"] = ["Cursor", "Codex", "unknown"]
+    fam_ok["families"]["unknown"] = {"accounting_valid": False, "why": "undisclosed"}
+    fam_tree = dict(tree, **{"data/families.json": json.dumps(fam_ok),
+                             "skills/cursor-adversarial-review/references/cursor-runtime.md":
+                                 "serves the Cursor and Codex families\n"})
+    check("lint families: a consistent model passes",
+          _lint_against(fam_tree, lint.check_families) == [], _lint_against(fam_tree, lint.check_families))
+    for label, mutate, needle in (
+            ("an adapter missing from the file", lambda d: d["adapters"].pop("grok"), "!= skills on disk"),
+            ("an undeclared served family", lambda d: d["adapters"]["grok"]["serves"].append("Ghost"),
+             "serves undeclared family 'Ghost'"),
+            ("a family no adapter serves", lambda d: d["families"].update({"Orphan": {"accounting_valid": True}}),
+             "family 'Orphan' is declared but no adapter serves it"),
+            ("no accounting-invalid family", lambda d: d["families"].update({"unknown": {"accounting_valid": True}}),
+             "no family is marked accounting_valid:false"),
+            ("an invalid family without a why", lambda d: d["families"]["unknown"].pop("why"),
+             "accounting-invalid without a 'why'")):
+        doc = json.loads(json.dumps(fam_ok)); mutate(doc)
+        got = _lint_against(dict(fam_tree, **{"data/families.json": json.dumps(doc)}), lint.check_families)
+        check("lint families: flags %s" % label, any(needle in e for e in got), got)
+    silent = dict(fam_tree, **{"skills/cursor-adversarial-review/references/cursor-runtime.md": "# nothing\n"})
+    got = _lint_against(silent, lint.check_families)
+    check("lint families: a multi-family adapter whose runtime file never names a family is flagged",
+          any("never names ['Cursor', 'Codex']" in e for e in got), got)
+
+
 # --------------------------------------------------- lint delegate guardrails ----
 def test_lint_delegate_guardrails():
     """check_delegate_guardrails(): dispatch safety must stay fail-closed.
@@ -3260,7 +3467,7 @@ def test_leg_cmd():
 
 # ---------------------------------------------------------------- roster ----
 def test_merge_gate(tmp, roster):
-    """The merge gate is configuration, not memory (Aaron, 2026-09-23):
+    """The merge gate is configuration, not memory (owner ruling, 2026-09-23):
     `lead` lets a fully green verdict land itself, `user` keeps the person's
     approval. Position: its own function, called from test_roster."""
     path = tmp / "gate.json"
@@ -3441,7 +3648,7 @@ def test_config_effort(tmp):
 
 def test_config_effort_write(tmp):
     """`roster.py config-effort` -- the ONE path that writes a user's config
-    (Aaron, 2026-09-23: "做，但要先備份並回報前後值"). Dry run by default;
+    (the owner, 2026-09-23: "做，但要先備份並回報前後值"). Dry run by default;
     --yes backs up first, changes one line, reads back, reports old -> new.
     Position: after test_config_effort."""
     home = tmp / "cehome"
@@ -3889,7 +4096,7 @@ def test_roster(tmp):
           "the path that `roster.py path` prints first" in example.read_text(encoding="utf-8"),
           example.read_text(encoding="utf-8"))
 
-    # Aaron, 2026-09-22 (/dev-lead:config): opencode-go/kimi-k3 is CALLABLE
+    # the owner, 2026-09-22 (/dev-lead:config): opencode-go/kimi-k3 is CALLABLE
     # (calibration row in opencode-runtime.md, 2026-09-16) and CLAUDE.md's own
     # roster policy names it a legitimate top-tier judgment leg -- but
     # data/families.json had not registered Kimi under opencode's `serves`,
@@ -6427,6 +6634,8 @@ def main():
     print("lint.py check_launch")
     test_lint_launch()
 
+    print("lint.py plain checks (structure, frontmatter, manifest, links, fences, var_order, tracked, sentinels, families)")
+    test_lint_plain_checks()
     print("lint.py check_delegate_guardrails")
     test_lint_delegate_guardrails()
 

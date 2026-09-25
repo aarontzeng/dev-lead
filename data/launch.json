@@ -13,6 +13,7 @@
     "",
     "Like data/families.json this file DECLARES. It generates no documentation.",
     "The lint rule only checks that the prose does not CONTRADICT it.",
+    "What each key means is written up in docs/launch-json.md.",
     "",
     "effort.mechanism is the field that keeps being got wrong, because the",
     "adapters spell it differently:",

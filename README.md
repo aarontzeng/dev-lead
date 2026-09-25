@@ -204,7 +204,9 @@ test watched failing before it was allowed to pass.
 **[docs/workflow.md](docs/workflow.md)** expands this into the full phase
 diagram, a round-by-round sequence, what each phase owes the next, and the
 six adapters side by side (including how each one really enforces no-push —
-one of them only by accident).
+one of them only by accident). The launch mechanics themselves live in
+`data/launch.json`, whose fields are explained in
+[docs/launch-json.md](docs/launch-json.md).
 
 ## What's in the box
 

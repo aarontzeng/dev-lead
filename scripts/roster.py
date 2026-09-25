@@ -46,7 +46,7 @@ LEG_KEYS = {
 OPENCODE_REVIEW_KEYS = {"by_lens", "top_tier_judgment_only"}
 FALLBACK_KEYS = {"when"}
 INHERIT_KEYS = {"inherit", "set_on", "why"}
-# Who decides that a green verdict may land (Aaron, 2026-09-23). "user" is the
+# Who decides that a green verdict may land (owner ruling, 2026-09-23). "user" is the
 # doctrine the skill has always had: the person approves the verdict and the
 # diff, then the lead merges and pushes in the same run. "lead" makes a fully
 # green verdict its own approval -- a standing version of the per-run
@@ -1346,7 +1346,7 @@ def cmd_config_effort(path, args):
     """Offer, then (only with --yes) make, the machine's config agree with the
     roster's declared effort for a config_only leg.
 
-    Aaron, 2026-09-23: "做，但要先備份並回報前後值". This is the ONE place
+    the owner, 2026-09-23: "做，但要先備份並回報前後值". This is the ONE place
     dev-lead writes a user's config file, and only on an explicit yes given in
     /dev-lead:config: the file is shared with the user's interactive CLI and
     with other sessions, which is why no skill RUN ever touches it. Backup

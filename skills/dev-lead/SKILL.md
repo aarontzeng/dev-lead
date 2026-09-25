@@ -169,7 +169,7 @@ which leg changed and why. Never drop a leg silently. An unset leg is the
 same stop: ask, do not invent a model.
 
 **A fix round's cross-family requirement is relative to who implemented THAT
-round, not to r1** (Aaron, 2026-09-22). `fix.review` inheriting r1's full leg
+round, not to r1** (owner ruling, 2026-09-22). `fix.review` inheriting r1's full leg
 set is a menu, not a floor — how many of those legs a given fix round
 actually needs is the same SIZE judgment Phase 0 already makes for r1, not a
 fixed leg count tied to being a fix round. When the lead writes the fix
@@ -285,83 +285,27 @@ files explicitly — an eight-line list beats a one-line range, and it is the
 only form that survives the sandbox. Where a read command is pinned, confirm
 it is on THAT family's allow-list before it goes in the preamble.
 
-**The worktree is missing everything the suite needs that git does not track,
-and the delegate will not tell you — it will quietly use something else.**
-Worktree isolation is usually discussed as "what is shared" (databases, ports,
-the `.git` index). The failure that actually bites is the opposite category:
-the virtualenv, the `.env`, the built assets, the fixture cache. They are
-gitignored, so they exist only in the main checkout, and a pinned test command
-naming any of them cannot run in the worktree at all.
+**The worktree is missing everything the suite needs that git does not
+track, and the delegate will not tell you.** The virtualenv, the `.env`, the
+built assets, the fixture cache are gitignored, so a pinned test command
+naming any of them cannot run in the worktree at all -- and a delegate falls
+back to something else and reports that as green (measured: 2511 passed /
+137 skipped against a baseline of 2649). Before dispatch, run the pinned
+command in the worktree yourself, provision what it needs, and compare every
+reported total to your baseline digit for digit. Three rules, each paid for
+in [`references/worktree-provisioning.md`](references/worktree-provisioning.md):
 
-Measured: a lead pinned `cd backend && source venv/bin/activate && pytest …`
-with a baseline of "2649 passed". `venv/` is gitignored. The delegate found the
-activate script absent, fell back to the login shell's `python`, and reported
-**2511 passed / 137 skipped** as its green. Nothing lied — but a different
-interpreter's green and the repo's green are not the same claim, and 137 skips
-is what missing extras look like when nobody compares the totals. The lead's
-own re-run in the worktree then failed at *collection* until `.env` was copied
-in, which no test output would have explained.
+- **Re-run the specific tests a round turns on**; matching totals do not
+  clear them (a mock left unbound in a sandbox without network passed there
+  and failed here).
+- **Never symlink the lead's copy of a shared directory** into the worktree;
+  a delete goes through the link (645 of 693 `node_modules` entries gutted).
+  Give each worktree its own install or a hardlink copy.
+- **"Provision" is not "copy the real one."** The delegate gets a sanitized
+  minimum and nothing secret; the lead's own verification run uses the real
+  file. A suite that cannot start without a real secret is a finding about
+  the repo, not a reason to ship the secret into a sandbox.
 
-So, before dispatch: run the pinned command in the worktree yourself, provision
-what it needs, and say in the task prompt which interpreter to use. And when a
-delegate reports a suite total, **compare it to your baseline digit for
-digit** — a total that differs by more than the tests you added is a different
-environment, not a different result.
-
-**Matching totals do not clear it, though — the same test can pass there and
-fail here.** Measured 2026-08-30: a delegate reported "3 passed" for the three
-tests the lead was measuring as failed on the same commit, with identical suite
-totals. The sandbox has no network; the test's mock was unbound, so the real
-function underneath reached out, raised, and the code returned a fallback the
-assertion accepted. No error, no skip, nothing for a totals diff to catch. When
-a round turns on specific tests, **re-run those tests yourself** rather than
-diffing counts — and treat the divergence as a finding in its own right, since
-a test whose verdict depends on the runner having network is a test hitting
-live network.
-
-**Never provision a shared directory by SYMLINKING the lead's copy into the
-delegate's worktree.** It looks like the cheap answer for a 700-package
-`node_modules` and it puts the lead's own installation inside the delegate's
-blast radius. Measured 2026-08-30, twice in one day, from a single symlink:
-
-- The delegate's `git add` swept the LINK into its feature commit —
-  `.gitignore`'s `node_modules/` (trailing slash) matches directories, not
-  symlinks — and the merge then replaced the real directory with a
-  self-pointing broken link in the main checkout.
-- Both delegates independently judged the link "broken" and replaced it with
-  their own install. The `rm -rf` went THROUGH the link and gutted the LEAD's
-  `node_modules`: 645 of 693 entries left as empty directories, `.bin` empty.
-  Nothing in git was lost, and nothing announced itself either — it surfaced
-  an hour later as a launcher that could not find its own binary.
-
-Give each worktree a real directory: its own `npm ci`/`uv sync` (slow, always
-correct), or a hardlink copy (`cp -al`) if the ecosystem tolerates it —
-separate directory entries, so a delete cannot reach back. And note that this
-is not just an efficiency trade: two delegates that "fixed" the link both
-produced test runs against an install the lead never verified, which is the
-same class of false green as the interpreter mismatch above.
-
-**"Provision" is not "copy the real one."** The untracked file the suite wants
-is very often the one holding every credential the project has, and a write
-delegate has its whole worktree inside its sandbox — so copying it in hands a
-third-party model your API keys, your database URL, and, in the repo this was
-measured on, a **broker** key that moves real money. Twenty-two credential keys
-in one `.env`. Never that.
-
-The split that keeps both halves honest:
-
-- **Delegate worktree** — the minimum sanitized config, and nothing that is
-  secret. Better still, let the delegate mint its own: measured on the same
-  run, the delegate hit the missing config, set a throwaway
-  `SECRET_KEY='test-only-<slug>'` inline, and completed 2511 tests without ever
-  needing a real value. The safe path is not a compromise here; it is what
-  actually happened, unprompted.
-- **The lead's own verification run** — the real file is fine. The lead already
-  holds these credentials; using them is not an exposure. This is the run whose
-  total is authoritative anyway.
-
-If the suite genuinely cannot start without a real secret, that is a finding
-about the repo's test setup, not a reason to ship the secret into a sandbox.
 
 Reviewer — the cross-family rule is absolute (implementer's family never
 reviews its own change). Review is the leverage point, so it gets the
@@ -634,95 +578,18 @@ two rounds and would have run a third on no principle at all.
 
    **Writing a NEW statement? Name what would make it false.** The grep rule
    above catches a sentence that went stale; it cannot catch one that was false
-   on arrival, and mutating the code under test does not reach it either — that
-   sentence is not in anything the suite executes (measured: 20 mutants died in a
-   round whose three false sentences all survived). A lint rule *over* prose is
-   executable and can be mutation-proofed; the prose it judges is not. Run
+   on arrival, or one that was true when written and went false because the
+   WORLD moved (a vote, "the current patchset", a count of open items). Run
    `python3 "$DEV_LEAD/scripts/claim-audit.py" "$WORKTREE" "$BASE...HEAD"` and
    answer its question per hit: **if this sentence were false, which test goes
-   red?** Naming a test that runs nearby is not an answer — the assertion has to
-   fail on THIS claim being false.
+   red?** Naming a test that runs nearby is not an answer. It is an attention
+   cue, not a control: it exits 0 either way, and a silent run is not evidence
+   that claims were checked. Commit what the audit changed before the target is
+   frozen, and mutation-proof any test it produced. The three shapes of false
+   statement, the monotonicity test for a perishable fact, how to read the
+   count, and the two shapes only a cross-family reviewer catches are in
+   [`references/claim-audit.md`](references/claim-audit.md).
 
-   **Writing a statement that is TRUE NOW? Ask whether it can go false with
-   nobody editing this file.** The two rules above cover a sentence you made
-   stale by editing its neighbour, and a sentence that was false on arrival.
-   Neither reaches the third shape: true when written, untouched by any later
-   diff, and false anyway because the WORLD moved. That happens when a durable
-   document cites a fact scoped to something outside it — a review vote, "the
-   current patchset", "nobody has reviewed this yet", "the newest release", a
-   count of open items.
-
-   Measured, one session: a normative document argued that another document
-   must not be the tie-breaker partly because "its current patchset carries an
-   Owner -1". Uploading the next patchset of that document outdated the vote, so
-   the sentence was false within the hour — self-invalidating, in a file meant
-   to outlive the review that produced it. In the same round a four-family
-   review found the same file resting its ONLY recorded owner acceptance on
-   "change N, patch set 10 carries a +1", linked to a host that had since been
-   decommissioned: a perishable fact behind a dead link, in the document that
-   had just declared such facts invalid. And an operational gate — whether an
-   operator may enable a mode — read "current-patchset review", so it changed
-   when the review tool changed rather than when the design or the software did.
-
-   **The test is MONOTONICITY, not volatility**, and getting this wrong makes
-   the rule worse than not having it. "Change N is merged" is volatile in
-   the sense that it was once untrue — but it can only go from false to true, so
-   citing it is safe. "PS4 carries a +1" goes from true to false. In the same
-   round a leg applied the rule mechanically and flagged every "merged" as a
-   perishable fact; acting on that would have deleted correct sentences. Ask
-   which DIRECTION the sentence can flip, not whether it can.
-
-   The fix is almost never to delete the fact — it is to cite the durable thing
-   the perishable one was evidence for. An acceptance is durable; the vote that
-   expressed it is not. A merged change is durable; the patchset that became it
-   is not. Record "Owner X accepted on DATE (change NNNNN)", not "PS10 carries
-   their +1".
-
-   **It is an attention cue, not a control.** It verifies nothing and exits 0
-   either way; a silent run means "nothing matched the noun list", NOT "the prose
-   is anchored", and it is never evidence that claims were checked.
-
-   **Commit what the audit changed, before the target is frozen.** A downgrade
-   or a new test is a working-tree edit at this point, and the next phase freezes
-   and reviews an exact `HEAD` commit while the merge gate fast-forwards that
-   committed branch. Anything left uncommitted here is reviewed by nobody and
-   merged nowhere — a successful audit silently losing its own fix. So: resolve
-   the hits, re-run the suite, amend or extend the checkpoint commit, and only
-   then freeze.
-
-   **A test this step adds is a new regression test, and step 2's
-   mutation-proofing already ran before it existed.** Re-running the suite is
-   not that check: it shows the test passes, not that it would fail if the
-   claim were false. So mutation-proof any test the audit produced, after
-   committing it and before freezing. This is not bookkeeping — the question
-   being answered is *which test goes red?*, and a vacuous test is the same
-   wrong answer as naming one that runs nearby, just written down instead of
-   asserted.
-
-   For the measurement, run the BARE revision at **both** checkpoints:
-   `python3 "$DEV_LEAD/scripts/claim-audit.py" "$WORKTREE" "$BASE"`, once before
-   the prose pass and once after. Do not compare it against the `$BASE...HEAD`
-   audit run — that form audits prose **and commit messages**, while the bare
-   form audits prose only (no commits in a worktree range), so the count falls
-   by the excluded class alone. Measured: a range with one commit-message claim
-   and no prose edit whatsoever reports `hits=1` ranged and `hits=0` bare. Two
-   different input classes are not a before and an after.
-
-   A drop then means a sentence was downgraded. **An unchanged count is not
-   evidence of no value** — this step offers two outcomes, and pinning the
-   premise with a test leaves the claim standing and still matching. So record
-   one line per round: did any hit lead to a downgrade or to a new test? That,
-   not the number alone, is what says whether the step earns its place.
-
-   Two shapes no filter can flag, and no prompt can force either — a review leg
-   from another family is what catches them, so raise them there rather than
-   here: a **right conclusion resting on a wrong mechanism** (a doc said two rows "return the same shape, so this is not
-   an existence oracle" — both rows really did share those fields, but a third
-   field differed; the conclusion was right and the stated reason was not, and a
-   wrong mechanism gets reused as a premise by whoever reads it next), and a
-   **proxy written up as the property** (64 cores and 112 GiB free were measured
-   and true, and became "feasibility is not the obstacle" — the attempt hard-reset
-   the host; capacity is not feasibility).
 
    Mutation mechanics live in
    **[`references/mutation-runbook.md`](references/mutation-runbook.md)** —
@@ -848,7 +715,7 @@ Rebase the branch onto the moved target and re-run the ff. The human owns the
 main checkout; assume it moves.
 
 **Which gate is in force is what `roster.py show` prints, not memory and
-not the raw JSON field** (`merge_gate.mode`, added 2026-09-23 on Aaron's
+not the raw JSON field** (`merge_gate.mode`, added 2026-09-23 on the owner's
 ruling; `roster.py gate <user|lead> --why "…"` changes it). Absent means
 `user`, and so does any roster `check` would refuse: `show` then prints
 INVALID and the person's gate, whatever the field says. Read it at the start of Phase 3 — a lead that assumes the
