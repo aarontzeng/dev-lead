@@ -4116,19 +4116,38 @@ def test_roster_write_lock(tmp):
           got.returncode == 0 and elapsed >= 1.0 and json.loads(real.read_text())["merge_gate"]["mode"] == "lead",
           "rc=%s out=%r %.1fs" % (got.returncode, got.stdout, elapsed))
 
+    # no lost update: a waiting writer reads the roster only once it holds the
+    # lock. While the holder has it, the holder's own change lands on disk; a
+    # `set` that read before locking would write the old document back over it.
+    proc = hold(2.5)
+    waiting = subprocess.Popen([sys.executable, str(roster), "set", "r1", "review", "codex", "--model",
+                                "gpt-6-luna", "--effort", "xhigh", "--why", "t"],
+                               env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    time.sleep(1.0)
+    held_doc = json.loads(real.read_text())
+    held_doc["_probe"] = "written while the lock was held"
+    real.write_text(json.dumps(held_doc, indent=2) + "\n")
+    proc.wait()
+    out, _ = waiting.communicate(timeout=30)
+    final = json.loads(real.read_text())
+    check("roster lock: a writer that waited keeps the change made while it waited",
+          waiting.returncode == 0 and final.get("_probe") == "written while the lock was held"
+          and final["rounds"]["r1"]["review"]["codex"]["model"] == "gpt-6-luna", out + real.read_text()[:300])
+
     # the write itself is durable: the temp file and its directory are fsync'd
     import importlib.util as _ilu
     _spec = _ilu.spec_from_file_location("roster_fsync_probe", roster)
     _mod = _ilu.module_from_spec(_spec)
     _spec.loader.exec_module(_mod)
+    import stat
     synced, saved = [], os.fsync
-    os.fsync = lambda fd: synced.append(fd)
+    os.fsync = lambda fd: synced.append(stat.S_ISDIR(os.fstat(fd).st_mode))
     try:
         _mod.atomic_write(real, real.read_text())
     finally:
         os.fsync = saved
     check("roster lock: atomic_write fsyncs the file and then its directory",
-          len(synced) == 2, synced)
+          synced == [False, True], synced)
 
 
 def test_roster(tmp):

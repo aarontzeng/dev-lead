@@ -55,8 +55,11 @@ while [ "$SECONDS" -lt "$deadline" ]; do
             ;;
     esac
 
-    # Fallback for the launcher-output mode where no job is registered at all:
-    # if a log exists and has not grown for $QUIET seconds, treat it as finished.
+    # Fallback: if a log exists and has not grown for $QUIET seconds, treat the
+    # job as finished -- for the launcher-output mode where no job is registered
+    # at all, AND for a registered job whose status still reads "running":
+    # status computes that from startedAt and never checks the process (above),
+    # so it is no evidence of life. QUIESCENT, not TERMINAL, says which ended it.
     log=$(find_log)
     if [ -n "$log" ] && [ -f "$log" ]; then
         # `wc -c` is the one byte count spelled the same on macOS and Linux. The
