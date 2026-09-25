@@ -3790,6 +3790,22 @@ def test_roster(tmp):
     got = _checked(example)
     check("roster: templates/roster.example.json passes check",
           got.returncode == 0 and got.stdout == "", got.stdout + got.stderr)
+
+    # The plugin's own data files, missing or broken: named, exit 2, no
+    # traceback -- the way load_roster has always answered for the roster.
+    # Until 0.6.48 data() read them bare and the first command to touch them
+    # died in json.loads (measured with DEV_LEAD_LAUNCH pointing at nothing).
+    gone = tmp / "no-such-launch.json"
+    got = run(roster, "check", "--file", str(live), env=_roster_env(tmp, DEV_LEAD_LAUNCH=str(gone)))
+    check("roster: a missing launch.json is named, exit 2, no traceback",
+          got.returncode == 2 and str(gone) in got.stderr and "Traceback" not in got.stderr,
+          got.stdout + got.stderr[-300:])
+    broken = tmp / "broken-launch.json"
+    broken.write_text("{not json")
+    got = run(roster, "check", "--file", str(live), env=_roster_env(tmp, DEV_LEAD_LAUNCH=str(broken)))
+    check("roster: a broken launch.json is named as invalid JSON, exit 2, no traceback",
+          got.returncode == 2 and "invalid JSON" in got.stderr and str(broken) in got.stderr
+          and "Traceback" not in got.stderr, got.stdout + got.stderr[-300:])
     # Found by review (codex): the wording fix (F5) had no test at all.
     check("roster: the example's comment matches path's real two-token output",
           "the path that `roster.py path` prints first" in example.read_text(encoding="utf-8"),
@@ -4618,6 +4634,29 @@ def test_triage(tmp):
               query(103, [patch(1, ps1, base)], wip=True), "--include-wip", env=env)
     included = json.loads(got.stdout) if got.returncode == 0 else {}
     check("triage change: --include-wip does not skip", got.returncode == 0 and included.get("skip") is None, got.stdout + got.stderr)
+
+    # Two inputs that left as tracebacks until 0.6.48 (the README promises
+    # exit 2 and a message for bad input): a query line that is valid JSON
+    # but not an object, and a patch set whose number is not digits.
+    listy = tmp / "query-listy.json"
+    listy.write_text('["not", "an", "object"]\n' + json.dumps({"type": "stats", "rowCount": 1}) + "\n")
+    got = run(triage, "change", "1", "--query-json", str(listy), env=env)
+    check("triage change: a non-object query line is an input error, not a traceback",
+          got.returncode == 2 and "must be a JSON object" in got.stderr and "Traceback" not in got.stderr,
+          got.stdout + got.stderr[-300:])
+    odd = patch(1, ps1, base)
+    odd["number"] = "one"
+    got = run(triage, "change", "105", "--query-json", query(105, [odd]), env=env)
+    check("triage change: a non-numeric CURRENT patch set is an input error, not a traceback",
+          got.returncode == 2 and "current patch set number must be digits" in got.stderr
+          and "Traceback" not in got.stderr, got.stdout + got.stderr[-300:])
+    # ...and a vote cast on such a set (Gerrit lists it, the span ignores it)
+    # is reported as cast on it, not as a ValueError.
+    voted_odd = patch(1, ps1, base, approvals=[approval("+1")])
+    voted_odd["number"] = "draft"
+    got = run(triage, "change", "106", "--query-json", query(106, [voted_odd, patch(2, ps3, ps1)]), env=env)
+    check("triage change: a vote on a non-numeric patch set is not a traceback",
+          got.returncode == 0 and "Traceback" not in got.stderr, got.stdout[:200] + got.stderr[-300:])
 
     # A carry-over does not produce new lenses or risk depth.
     write("src/value.txt", "rebased\n")
@@ -5542,6 +5581,29 @@ def test_triage(tmp):
     ssh_argv = argv_log.read_text().splitlines() if argv_log.exists() else []
     check("triage ssh: `--` precedes the destination",
           ssh_argv[:4] == ["-p", "29418", "--", "alice@gerrit.example.com"], ssh_argv)
+
+    # A host that accepts the connection and never answers. Until 0.6.48 the
+    # query had no bound and the patrol hung; now it is an input error naming
+    # the destination, within the (overridden) timeout.
+    slow_bin = tmp / "slow-ssh-bin"
+    slow_bin.mkdir(exist_ok=True)
+    (slow_bin / "ssh").write_text("#!/bin/sh\nsleep 30\n")
+    (slow_bin / "ssh").chmod(0o755)
+    os.environ["PATH"] = str(slow_bin) + os.pathsep + saved_path
+    os.environ["TRIAGE_TIMEOUT_SECS"] = "1"
+    started = time.monotonic()
+    try:
+        triage_module._gerrit_rows({"gerrit": {"ssh": "alice@gerrit.example.com", "port": 29418}}, "change:1")
+        timed_out = None
+    except triage_module.InputError as exc:
+        timed_out = str(exc)
+    finally:
+        os.environ["PATH"] = saved_path
+        del os.environ["TRIAGE_TIMEOUT_SECS"]
+    elapsed = time.monotonic() - started
+    check("triage ssh: a silent host is an input error within the timeout",
+          timed_out is not None and "no answer from alice@gerrit.example.com after 1s" in timed_out
+          and elapsed < 10, "exc=%r elapsed=%.1fs" % (timed_out, elapsed))
     # The change query asks for submit records: the dropped-hold flag says
     # SUBMITTABLE from them (2026-09-24). The fake ssh returns nothing, so the
     # query itself fails -- the argv is what is being checked.

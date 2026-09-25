@@ -362,11 +362,33 @@ def _decoded(value):
     return value.decode("utf-8", errors="surrogateescape")
 
 
-def _git(repo, *args):
+# The two calls that leave the machine. Neither had a bound until 0.6.48: a
+# Gerrit host that accepts the TCP connection and never answers, or a fetch
+# stalled mid-pack, hung the patrol for good (lint's ls-remote has had 10 s
+# all along). The values are generous because a fetch of a large change is
+# legitimately slow; TRIAGE_TIMEOUT_SECS overrides both, for a slow network
+# and for the test that exercises the bound.
+SSH_TIMEOUT_SECS = 120
+FETCH_TIMEOUT_SECS = 600
+
+
+def _timeout(default):
+    override = os.environ.get("TRIAGE_TIMEOUT_SECS")
+    if not override:
+        return default
     try:
-        result = subprocess.run(["git", "-C", str(repo), *args], capture_output=True)
+        return float(override)
+    except ValueError:
+        raise InputError("TRIAGE_TIMEOUT_SECS: must be a number of seconds, got %r" % override)
+
+
+def _git(repo, *args, timeout=None):
+    try:
+        result = subprocess.run(["git", "-C", str(repo), *args], capture_output=True, timeout=timeout)
     except OSError as exc:
         raise InputError("git: %s" % exc)
+    except subprocess.TimeoutExpired:
+        raise InputError("git: %s timed out after %gs" % (args[0] if args else "command", timeout))
     if result.returncode:
         message = _decoded(result.stderr).strip() or _decoded(result.stdout).strip() or "git failed"
         raise InputError("git: %s" % message)
@@ -395,7 +417,7 @@ def _ensure_revision(repo, change, patch_set, revision):
         # --no-tags / --no-recurse-submodules keep tags and submodules out.
         # The only thing a triage run adds to a clone is objects.
         _git(repo, "fetch", "--no-write-fetch-head", "--refmap=", "--no-tags", "--no-recurse-submodules",
-             "origin", ref)
+             "origin", ref, timeout=_timeout(FETCH_TIMEOUT_SECS))
     except InputError as exc:
         raise InputError("git: could not fetch revision %s from %s: %s" % (revision, ref, exc))
     if not _object_exists(repo, revision):
@@ -468,8 +490,13 @@ def _patch_sets(change, as_of=None):
                 for key, value in entry.items():
                     if key not in unique[number]:
                         unique[number][key] = value
+    # A patch set whose number is not digits is tolerated in the list (it is
+    # simply not in the span; see _later_patch_set), but it can never be THE
+    # current one, and until 0.6.48 the int() calls below let such a number
+    # out as a ValueError traceback instead of this message.
+    numeric = [key for key in unique if key.isdigit()]
     if current_number is None:
-        current_number = max(unique, key=lambda item: int(item)) if unique else None
+        current_number = max(numeric, key=int) if numeric else None
     if as_of is not None:
         try:
             current_number = str(int(as_of))
@@ -477,9 +504,12 @@ def _patch_sets(change, as_of=None):
             raise InputError("change: --as-of-ps must be a patch set number")
         if current_number not in unique:
             raise InputError("change: patch set %s is missing from patchSets" % current_number)
-        unique = {key: value for key, value in unique.items() if int(key) <= int(current_number)}
+        unique = {key: value for key, value in unique.items()
+                  if key.isdigit() and int(key) <= int(current_number)}
     if not current_number or current_number not in unique:
         raise InputError("change: current patch set is missing from patchSets")
+    if not current_number.isdigit():
+        raise InputError("change: current patch set number must be digits, got %r" % current_number)
     change["patchSets"] = list(unique.values())
     change["currentPatchSet"] = unique[current_number]
     return unique, unique[current_number]
@@ -1216,6 +1246,10 @@ def _rows_from(text):
             row = json.loads(line)
         except json.JSONDecodeError as exc:
             raise InputError("query JSON: invalid JSON: %s" % exc)
+        if not isinstance(row, dict):
+            # Valid JSON that is not an object (a list, a string) reached
+            # `row.get` and left as an AttributeError traceback (2026-09-25).
+            raise InputError("query JSON: each line must be a JSON object, got %s" % type(row).__name__)
         if row.get("type") != "stats":
             rows.append(row)
     return rows
@@ -1230,10 +1264,13 @@ def _gerrit_rows(config, *query):
         raise InputError("gerrit.ssh: must be user@host")
     command = ["ssh", "-p", str(int(config["gerrit"]["port"])), "--", destination,
                "gerrit", "query", "--format=JSON", *query]
+    timeout = _timeout(SSH_TIMEOUT_SECS)
     try:
-        result = subprocess.run(command, capture_output=True, text=True)
+        result = subprocess.run(command, capture_output=True, text=True, timeout=timeout)
     except OSError as exc:
         raise InputError("gerrit query: %s" % exc)
+    except subprocess.TimeoutExpired:
+        raise InputError("gerrit query: no answer from %s after %gs" % (destination, timeout))
     if result.returncode:
         raise InputError("gerrit query: %s" % (result.stderr.strip() or result.stdout.strip()))
     return _rows_from(result.stdout)
@@ -1301,7 +1338,9 @@ def _last_vote(change, identifiers):
     _when, patch_set, approval = max(found, key=lambda item: _time(item[0]))
     if _approval_value(approval) in (None, 0):
         return None, None, None
-    return patch_set, approval, {"ps": int(patch_set["number"]), "value": approval.get("value")}
+    voted_on = _number(patch_set)   # digits, or a non-numeric set the span ignores
+    return patch_set, approval, {"ps": int(voted_on) if voted_on.isdigit() else voted_on,
+                                 "value": approval.get("value")}
 
 
 def _at_or_after(left, right):

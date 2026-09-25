@@ -67,8 +67,24 @@ def data():
         if os.environ.get("DEV_LEAD_LAUNCH"):
             # A test seam: never silent, so a real shell that inherits it sees it.
             print("roster: launch data overridden by DEV_LEAD_LAUNCH=%s" % LAUNCH_PATH, file=sys.stderr)
-        _CACHE["launch"] = json.loads(LAUNCH_PATH.read_text(encoding="utf-8"))
-        _CACHE["families"] = json.loads(FAMILIES_PATH.read_text(encoding="utf-8"))
+        # The plugin's own data files. A missing or broken one is a broken
+        # install (or a bad DEV_LEAD_LAUNCH), and until 0.6.48 it surfaced as
+        # a traceback from whichever command read it first; load_roster and
+        # triage's load_config had always named the file instead.
+        loaded = {}
+        for key, path in (("launch", LAUNCH_PATH), ("families", FAMILIES_PATH)):
+            try:
+                loaded[key] = json.loads(path.read_text(encoding="utf-8"))
+            except OSError as exc:
+                print("roster: %s: %s" % (path, exc), file=sys.stderr)
+                raise SystemExit(2)
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                print("roster: %s: invalid JSON: %s" % (path, exc), file=sys.stderr)
+                raise SystemExit(2)
+            if not isinstance(loaded[key], dict):
+                print("roster: %s: must be a JSON object" % path, file=sys.stderr)
+                raise SystemExit(2)
+        _CACHE.update(loaded)
     return _CACHE["launch"], _CACHE["families"]
 
 
