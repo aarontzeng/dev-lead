@@ -35,14 +35,18 @@ DATA="${DEV_LEAD_LAUNCH:-$HERE/../data/launch.json}"   # override: test seam onl
 ADAPTER=$1; ROLE=$2; shift 2
 
 MODEL=""; EFFORT=""; TARGET=""; BASE=""; PROMPT_FILE=""; RUN_DIR_ARG=""; CHECK=0; ADD_DIRS=""
+# Every value option checks its value is there before `shift 2`: under
+# `set -e`, `shift 2` with one argument left exits 1 with NO message, so a
+# trailing `--model` used to end the script silently (found 2026-09-25).
+needs_value() { [ $# -ge 2 ] || die "$1 needs a value"; }
 while [ $# -gt 0 ]; do
   case "$1" in
-    --model)       MODEL=${2:-}; shift 2 ;;
-    --effort)      EFFORT=${2:-}; shift 2 ;;
-    --target)      TARGET=${2:-}; shift 2 ;;
-    --base)        BASE=${2:-}; shift 2 ;;
-    --prompt-file) PROMPT_FILE=${2:-}; shift 2 ;;
-    --run-dir)     RUN_DIR_ARG=${2:-}; shift 2 ;;
+    --model)       needs_value "$@"; MODEL=$2; shift 2 ;;
+    --effort)      needs_value "$@"; EFFORT=$2; shift 2 ;;
+    --target)      needs_value "$@"; TARGET=$2; shift 2 ;;
+    --base)        needs_value "$@"; BASE=$2; shift 2 ;;
+    --prompt-file) needs_value "$@"; PROMPT_FILE=$2; shift 2 ;;
+    --run-dir)     needs_value "$@"; RUN_DIR_ARG=$2; shift 2 ;;
     --add-dir)     [ -n "${2:-}" ] || die "--add-dir needs a directory"
                    case "$2" in -*) die "--add-dir: '$2' starts with '-' and would read as a flag; use ./$2" ;; esac
                    case "$2" in *$'\n'*) die "--add-dir: a directory name may not contain a newline" ;; esac

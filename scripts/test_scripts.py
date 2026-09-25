@@ -897,6 +897,10 @@ def test_lint_delegate_guardrails():
             '"$DEV_LEAD/scripts/snapshot-refs.sh" check "$WORKTREE" "$RUN_DIR/remote-refs.before" || exit 1\n',
         "skills/cursor-implement/SKILL.md":
             '"$DEV_LEAD/scripts/snapshot-refs.sh" check "$WORKTREE" "$RUN_DIR/remote-refs.before" || exit 1\n',
+        "skills/agy-implement/SKILL.md":
+            '"$DEV_LEAD/scripts/snapshot-refs.sh" check "$WORKTREE" "$RUN_DIR/remote-refs.before" || exit 1\n',
+        "skills/opencode-implement/SKILL.md":
+            '"$DEV_LEAD/scripts/snapshot-refs.sh" check "$WORKTREE" "$RUN_DIR/remote-refs.before" || exit 1\n',
     }
 
     def run_against(files):
@@ -944,6 +948,20 @@ def test_lint_delegate_guardrails():
     check("delegate: flags a Cursor handoff without fail-closed ref check",
           any("cursor-implement" in e and "snapshot-refs.sh" in e for e in got),
           f"got {got}")
+
+    # agy and opencode shipped the check WITHOUT `|| exit 1` until 2026-09-25:
+    # a detected push printed its delta and the handoff carried on. Both are
+    # in the table now, so the open form fails lint for every implement skill.
+    for skill in ("agy", "opencode"):
+        open_form = dict(good)
+        open_form[f"skills/{skill}-implement/SKILL.md"] = (
+            '"$DEV_LEAD/scripts/snapshot-refs.sh" check "$WORKTREE" '
+            '"$RUN_DIR/remote-refs.before"\n'
+        )
+        got = run_against(open_form)
+        check(f"delegate: flags a {skill} ref check that can continue after failure",
+              any(f"{skill}-implement" in e and "|| exit 1" in e for e in got),
+              f"got {got}")
 
 
 # ------------------------------------------------ lint delegate audit trails ----
@@ -2386,6 +2404,34 @@ def test_await_codex_job(tmp):
     check("await-codex-job.sh resolves the companion under $HOME/.claude",
           "plugins/cache/openai-codex/codex" in body)
 
+    # The QUIESCENT fallback, run for real with the windows shortened. It had
+    # never been exercised, and that is how a broken size read shipped twice:
+    # GNU `stat -c` returned 0 forever on macOS (a flat timer), and the
+    # BSD-first `stat -f %z || stat -c %s` that replaced it SUCCEEDS on Linux
+    # with filesystem free-space figures, so the log never read as unchanged
+    # and the fallback could not fire at all (found 2026-09-25). A fake
+    # companion that never goes terminal plus a log nobody writes to must end
+    # in QUIESCENT, rc 0, before the deadline that would say TIMEOUT.
+    quiet_home = tmp / "quiet-home"
+    c = quiet_home / ".claude/plugins/cache/openai-codex/codex/9.9.9/scripts"
+    c.mkdir(parents=True, exist_ok=True)
+    (c / "codex-companion.mjs").write_text(
+        "console.log('- task-q | running | rescue | Codex Task');\n")
+    jobs = quiet_home / ".claude/plugins/data/codex-openai-codex/state/s1/jobs"
+    jobs.mkdir(parents=True, exist_ok=True)
+    (jobs / "task-q.log").write_text("delegate output that then stops\n")
+    r = subprocess.run(["bash", str(await_sh), "task-q", str(tmp), "30"],
+                       capture_output=True, text=True, timeout=120,
+                       env=dict(os.environ, HOME=str(quiet_home),
+                                AWAIT_QUIET_SECS="2", AWAIT_POLL_SECS="1"))
+    check("await-codex-job.sh treats an unchanged log as QUIESCENT, before the deadline",
+          r.returncode == 0 and "QUIESCENT" in r.stdout and "TIMEOUT" not in r.stderr,
+          f"rc={r.returncode} out={(r.stdout + r.stderr)[:160]}")
+    check("await-codex-job.sh reports the log's real byte count",
+          "(32 bytes)" in r.stdout, r.stdout[:160])
+    check("await-codex-job.sh reads the size with the one spelling both platforms share",
+          'size=$(wc -c < "$log"' in body, "the size read is not `wc -c` any more")
+
 
 def test_leg_cmd():
     """leg-cmd.sh must reject each spelling that was actually got wrong.
@@ -2432,6 +2478,16 @@ def test_leg_cmd():
               f"accepted {argv}")
         check(f"leg-cmd: explains why -- {label}", needle in r.stderr,
               f"stderr={r.stderr!r}")
+
+    # A value option given LAST with no value. `MODEL=${2:-}; shift 2` under
+    # `set -e` exited 1 with nothing on stderr (measured 2026-09-25), so an
+    # `eval "$(leg-cmd.sh ... --model)"` composed nothing and said nothing.
+    for opt in ("--model", "--effort", "--target", "--base", "--prompt-file", "--run-dir"):
+        r = subprocess.run([str(script), "codex", "review", opt],
+                           capture_output=True, text=True)
+        check(f"leg-cmd: a trailing {opt} is a usage error, not a silent exit",
+              r.returncode != 0 and f"{opt} needs a value" in r.stderr,
+              f"rc={r.returncode} stderr={r.stderr!r}")
 
     r = subprocess.run([str(script), "agy", "review", "--model",
                         "gemini-3.8-flash-medium", "--base", "abc", "--target", "/tmp/x"],

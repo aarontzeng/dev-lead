@@ -18,6 +18,12 @@ set -u
 JOB=${1:?usage: await-codex-job.sh <job-id> [worktree] [max-seconds]}
 WT=${2:-$PWD}
 MAX=${3:-5400}
+# How long a job log may sit unchanged before the fallback below calls the
+# job done. 20 minutes because the job writes nothing while parked inside a
+# collaboration/wait tool, and one such pause has lasted well past 10. The
+# override exists for the test that exercises the fallback.
+QUIET=${AWAIT_QUIET_SECS:-1200}
+POLL=${AWAIT_POLL_SECS:-20}
 
 SCRIPT=$(ls -d "$HOME"/.claude/plugins/cache/openai-codex/codex/*/scripts/codex-companion.mjs \
     2>/dev/null | sort -V | tail -1)
@@ -50,18 +56,20 @@ while [ "$SECONDS" -lt "$deadline" ]; do
     esac
 
     # Fallback for the launcher-output mode where no job is registered at all:
-    # if a log exists and has not grown for 20 minutes, treat it as finished.
-    # 20 minutes because the job writes nothing while parked inside a
-    # collaboration/wait tool, and one such pause has lasted well past 10.
+    # if a log exists and has not grown for $QUIET seconds, treat it as finished.
     log=$(find_log)
     if [ -n "$log" ] && [ -f "$log" ]; then
-        # BSD stat first (macOS), GNU as fallback — the GNU-only spelling
-        # returned 0 forever on macOS, degrading this into a flat 20-minute timer.
-        size=$(stat -f %z "$log" 2>/dev/null || stat -c %s "$log" 2>/dev/null || echo 0)
+        # `wc -c` is the one byte count spelled the same on macOS and Linux. The
+        # GNU-only `stat -c` returned 0 forever on macOS (a flat timer); the
+        # BSD-first `stat -f %z || stat -c %s` that replaced it was worse on
+        # Linux, where `stat -f` is FILESYSTEM status and SUCCEEDS -- so `size`
+        # held a block of free-space figures that changed with every write to
+        # the disk, and the fallback could not fire at all (found 2026-09-25).
+        size=$(wc -c < "$log" 2>/dev/null | tr -d ' ' || echo 0)
         if [ "$size" = "$last_size" ]; then
             [ "$quiet_since" -eq 0 ] && quiet_since=$SECONDS
-            if [ $(( SECONDS - quiet_since )) -ge 1200 ]; then
-                echo "QUIESCENT: $JOB log unchanged for 20m ($size bytes) — treating as done"
+            if [ $(( SECONDS - quiet_since )) -ge "$QUIET" ]; then
+                echo "QUIESCENT: $JOB log unchanged for ${QUIET}s ($size bytes) — treating as done"
                 exit 0
             fi
         else
@@ -70,7 +78,7 @@ while [ "$SECONDS" -lt "$deadline" ]; do
         fi
     fi
 
-    sleep 20
+    sleep "$POLL"
 done
 
 echo "TIMEOUT: $JOB still not terminal after ${MAX}s" >&2

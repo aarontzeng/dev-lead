@@ -978,6 +978,23 @@ DELEGATE_GUARDRAILS = {
         ),
         "forbidden": ("remote-refs.after",),
     },
+    # Added 2026-09-25. These two ran the check without `|| exit 1`, so a
+    # detected push printed its delta and the handoff carried on -- the one
+    # shape the other four say never to drop.
+    "skills/agy-implement/SKILL.md": {
+        "required": (
+            '"$DEV_LEAD/scripts/snapshot-refs.sh" check "$WORKTREE" '
+            '"$RUN_DIR/remote-refs.before" || exit 1',
+        ),
+        "forbidden": ("remote-refs.after",),
+    },
+    "skills/opencode-implement/SKILL.md": {
+        "required": (
+            '"$DEV_LEAD/scripts/snapshot-refs.sh" check "$WORKTREE" '
+            '"$RUN_DIR/remote-refs.before" || exit 1',
+        ),
+        "forbidden": ("remote-refs.after",),
+    },
 }
 
 
