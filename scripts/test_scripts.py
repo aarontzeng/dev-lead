@@ -2469,6 +2469,7 @@ def test_release(tmp):
         # inside the fixture, exactly where a real one lives.
         (work / "scripts").mkdir(exist_ok=True)
         shutil.copy2(release, work / "scripts" / "release.sh")
+        shutil.copy2(SCRIPTS / "lib.sh", work / "scripts" / "lib.sh")   # release.sh sources it (0.6.49)
         git(work, "add", "-A")
         git(work, "commit", "-qm", "content")
         git(work, "push", "-q", "origin", "master")
@@ -5010,7 +5011,7 @@ def test_triage(tmp):
     # is reported as cast on it, not as a ValueError.
     voted_odd = patch(1, ps1, base, approvals=[approval("+1")])
     voted_odd["number"] = "draft"
-    got = run(triage, "change", "106", "--query-json", query(106, [voted_odd, patch(2, ps3, ps1)]), env=env)
+    got = run(triage, "change", "106", "--query-json", query(106, [voted_odd, patch(2, ps1, base)]), env=env)
     check("triage change: a vote on a non-numeric patch set is not a traceback",
           got.returncode == 0 and "Traceback" not in got.stderr, got.stdout[:200] + got.stderr[-300:])
 
