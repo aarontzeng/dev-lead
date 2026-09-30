@@ -132,6 +132,9 @@ output (runtime file). Adopted on measurement: three frozen targets with known
 answers, three runs per arm, the plain brief 3 and this frame 8 of the known
 defects, at a small false-positive cost (runtime file, calibration table).
 
+Before this recipe, complete the frozen-target triage step in dev-lead Phase 2;
+the review launcher requires its record for this exact commit.
+
 ```bash
 RUN_DIR=$(mktemp -d "${TMPDIR:-/tmp}/agy-review.XXXXXX")   # fresh per leg
 # Write the lens to "$RUN_DIR/prompt.md" in its own step.

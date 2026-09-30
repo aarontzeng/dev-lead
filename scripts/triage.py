@@ -10,6 +10,7 @@ import re
 import subprocess
 import sys
 from collections import Counter
+from datetime import datetime, timezone
 from pathlib import Path
 
 import roster
@@ -19,6 +20,9 @@ from _common import infer_family, run_git
 ROOT = Path(__file__).resolve().parent.parent
 RISKS = ("LOW", "MEDIUM", "HIGH")
 RISK_VALUE = {name: number for number, name in enumerate(RISKS)}
+# SKILL.md's reviewer table requires two independent families for HIGH and
+# says to take the second reviewer for MEDIUM; LOW keeps one review leg.
+MIN_REVIEW_LEGS = {"HIGH": 2, "MEDIUM": 2, "LOW": 1}
 ROOT_KEYS = {
     "version", "me", "lens_classes",
     "lenses", "delta_triggers", "risk_default", "move_check",
@@ -80,6 +84,38 @@ def triage_path():
     if explicit:
         return Path(explicit)
     return roster.roster_path().parent / "triage.json"
+
+
+def records_path():
+    """The per-rules triage record directory shared with leg-cmd.sh."""
+    return triage_path().parent / "triage-records"
+
+
+def _record_path(head):
+    return records_path() / (head + ".json")
+
+
+def _recorded_at():
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _write_record(output, head, mode):
+    path = _record_path(head)
+    output["record"] = str(path)
+    document = dict(output)
+    document.update({"recorded_at": _recorded_at(), "mode": mode})
+    try:
+        roster.atomic_write(path, json.dumps(document, sort_keys=True) + "\n")
+    except OSError as exc:
+        raise InputError("triage: cannot write record %s: %s" % (path, exc))
+    return document
+
+
+def _unmatched_files(config, files):
+    """Paths covered by neither a lens rule nor a delta-trigger rule."""
+    globs = [rule["glob"] for rule in config["lenses"]]
+    globs.extend(rule["glob"] for rule in config["delta_triggers"])
+    return sorted(path for path in files if not any(glob_matches(glob, path) for glob in globs))
 
 
 def glob_regex(pattern):
@@ -1534,7 +1570,8 @@ def triage_change(config, raw, path, number, query_json, include_wip, as_of=None
     if skip:
         _fired(fired, "legs", "no legs for skip")
         common.update({"ps_kind": None, "delta_files": None, "lenses": None, "risk_floor": None,
-                       "legs": "none", "review_legs": [], "flags": None, "fired_rules": fired})
+                       "legs": "none", "review_legs": [], "unmatched_files": [], "min_review_legs": 0,
+                       "flags": None, "fired_rules": fired, "head": current["revision"]})
         return common
     clone = config["clones"].get(project)
     if not clone:
@@ -1641,14 +1678,18 @@ def triage_change(config, raw, path, number, query_json, include_wip, as_of=None
                % (selected_lens, _line_count(delta_line_data)))
     common.update({
         "ps_kind": ps_kind, "delta_files": files, "lenses": lenses, "risk_floor": risk_floor,
-        "legs": legs, "review_legs": review_legs, "flags": flags, "fired_rules": fired,
+        "legs": legs, "review_legs": review_legs,
+        "unmatched_files": _unmatched_files(config, files),
+        "min_review_legs": MIN_REVIEW_LEGS.get(risk_floor, 0) if legs == "roster" else 0,
+        "flags": flags, "fired_rules": fired, "head": current["revision"],
     })
     return common
 
 
-def scope(config, raw, path, files, category):
+def scope(config, raw, path, files, category, *, delta_lines=None, path_only=True, review_legs=False):
     fired = []
-    lenses, risk_floor, _flags = _lenses_and_triggers(config, files, ([], []), fired, path_only=True)
+    lenses, risk_floor, _flags = _lenses_and_triggers(
+        config, files, delta_lines if delta_lines is not None else {}, fired, path_only=path_only)
     if risk_floor == "HIGH":
         implementer = "HIGH risk or ambiguous spec | **the lead implements directly** — delegation adds a supervision layer exactly where supervision is hardest"
         reviewers = "HIGH risk, any implementer | **two independent reviewers from two families** — measured: two families independently converging on the same root cause was itself the strongest signal the finding was real"
@@ -1659,9 +1700,129 @@ def scope(config, raw, path, files, category):
         implementer = "LOW, mechanical sweep, time matters | cheapest capable *paid* tier"
         reviewers = "SKILL.md has no reviewer-table row for LOW risk."
     _fired(fired, "scope", "risk floor %s%s" % (risk_floor, " for " + category if category else ""))
-    return {"rules": rules_identity(config, raw, path), "lenses": lenses, "risk_floor": risk_floor,
-            "suggestion": {"implementer": implementer, "reviewers": reviewers},
-            "note": "suggestion only; the lead decides, and rules only raise", "fired_rules": fired}
+    output = {"rules": rules_identity(config, raw, path), "lenses": lenses, "risk_floor": risk_floor,
+              "unmatched_files": _unmatched_files(config, files), "min_review_legs": MIN_REVIEW_LEGS[risk_floor],
+              "suggestion": {"implementer": implementer, "reviewers": reviewers},
+              "note": "suggestion only; the lead decides, and rules only raise", "fired_rules": fired}
+    if review_legs:
+        output["review_legs"], _selected_lens = _review_legs(
+            {lens["class"] for lens in lenses}, config, risk_floor)
+    return output
+
+
+def _scope_range(base_ref, target):
+    target = Path(target)
+    status = _git(target, "-c", "core.quotePath=false", "status", "--porcelain=v1", "--untracked-files=no")
+    renorm = Path(__file__).resolve().parent / "renorm-only.sh"
+    try:
+        filtered = subprocess.run([str(renorm), "--filter", str(target)], input=status,
+                                  capture_output=True, text=True)
+    except OSError as exc:
+        raise InputError("triage scope: cannot check line-ending renormalization: %s" % exc)
+    if filtered.returncode:
+        raise InputError("triage scope: cannot check line-ending renormalization: %s"
+                         % (filtered.stderr.strip() or "renorm-only.sh failed"))
+    dirty = filtered.stdout
+    if dirty:
+        raise InputError("triage scope: %s has modified or staged tracked files; commit or restore them first"
+                         % target)
+    head = _git(target, "rev-parse", "--verify", "HEAD").strip()
+    base = _git(target, "rev-parse", "--verify", base_ref + "^{commit}").strip()
+    entries = _diff_entries(target, base, head)
+    pairs = [(None, entry) for entry in entries]
+    files = sorted({name for entry in entries for name in _paths_for(entry)})
+    return head, base, files, _delta_lines(pairs)
+
+
+def _load_record(head):
+    path = _record_path(head)
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        raise InputError("triage round-check: no record for %s; run triage.py scope --base <base> --target <frozen dir> "
+                         "or triage.py change <number> first" % head)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise InputError("triage round-check: cannot read record %s: %s" % (path, exc))
+    if not isinstance(document, dict):
+        raise InputError("triage round-check: record %s must be a JSON object" % path)
+    return document
+
+
+def _read_skips(head):
+    path = records_path() / "skips.jsonl"
+    rows, unreadable = [], 0
+    try:
+        with path.open(encoding="utf-8", errors="replace") as handle:
+            for line in handle:
+                if not line.strip():
+                    continue
+                try:
+                    entry = json.loads(line)
+                except json.JSONDecodeError:
+                    unreadable += 1
+                    continue
+                if not isinstance(entry, dict):
+                    unreadable += 1
+                    continue
+                if entry.get("sha") == head:
+                    rows.append(entry)
+    except FileNotFoundError:
+        return rows, unreadable
+    except OSError as exc:
+        raise InputError("triage round-check: cannot read skips from %s: %s" % (path, exc))
+    return rows, unreadable
+
+
+def round_check(head_ref, legs, target=None, expect=None):
+    repo = Path(target) if target else Path.cwd()
+    head = _git(repo, "rev-parse", "--verify", head_ref + "^{commit}").strip()
+    record = _load_record(head)
+    try:
+        risk_floor = record["risk_floor"]
+        minimum = record["min_review_legs"]
+    except KeyError as exc:
+        raise InputError("triage round-check: record %s lacks %s" % (_record_path(head), exc.args[0]))
+    families = {entry.get("adapter"): entry.get("family") for entry in record.get("review_legs", [])
+                if isinstance(entry, dict) and entry.get("adapter")}
+    delivered, failed, distinct = [], [], set()
+    checker = Path(__file__).resolve().parent / "leg-log-check.sh"
+    _, family_data = roster.data()
+    adapters = family_data.get("adapters", {})
+    # data/families.json marks some families (unknown, Composer) as never
+    # satisfying the cross-family rule; a leg in one is delivered, not counted.
+    invalid = {name for name, spec in (family_data.get("families") or {}).items()
+               if isinstance(spec, dict) and spec.get("accounting_valid") is False}
+    for adapter, declared, _log in legs:
+        if declared is not None and declared not in (adapters.get(adapter) or {}).get("serves", []):
+            raise InputError("triage round-check: %s does not serve family %r (data/families.json)" % (adapter, declared))
+    for adapter, declared, log in legs:
+        command = [str(checker), adapter, log]
+        if expect is not None:
+            command += ["--expect", expect]
+        result = subprocess.run(command, capture_output=True, text=True)
+        if result.returncode == 0:
+            # Families are declared, never guessed from a model name (the
+            # roster's rule): a declared family must be one this adapter
+            # serves; without one, the record's family for the adapter.
+            family = declared if declared is not None else families.get(adapter)
+            delivered.append({"adapter": adapter, "family": family, "log": log})
+            if family is not None and family not in invalid:
+                distinct.add(family)
+        else:
+            message = result.stderr.strip() or result.stdout.strip() or "leg-log-check failed"
+            failed.append({"adapter": adapter, "log": log, "message": message})
+    skips, unreadable = _read_skips(head)
+    output = {"head": head, "risk_floor": risk_floor, "min_review_legs": minimum,
+              "delivered": delivered, "failed": failed, "distinct_families": len(distinct),
+              "skips": skips, "skips_unreadable": unreadable}
+    if any(item["family"] is None for item in delivered):
+        output["family_note"] = "a delivered leg with family null does not count; declare it as adapter:family=log"
+    uncounted = sorted({item["family"] for item in delivered if item["family"] in invalid})
+    if uncounted:
+        output["accounting_note"] = ("delivered but not counted: %s cannot satisfy the cross-family rule "
+                                     "(data/families.json accounting_valid false)" % ", ".join(uncounted))
+    output["ok"] = output["distinct_families"] >= minimum
+    return output
 
 
 def cmd_check(path):
@@ -1702,20 +1863,70 @@ def main(argv=None):
     change.add_argument("--as-of-ps", help=("replay before my own vote and messages on that patch set; "
                                              "those actions are excluded on purpose"))
     scope_parser = sub.add_parser("scope")
-    scope_parser.add_argument("--files", nargs="+", required=True)
+    scope_input = scope_parser.add_mutually_exclusive_group(required=True)
+    scope_input.add_argument("--files", nargs="+")
+    scope_input.add_argument("--base")
+    scope_parser.add_argument("--target")
     scope_parser.add_argument("--category")
+    round_parser = sub.add_parser("round-check")
+    round_parser.add_argument("--head", required=True)
+    round_parser.add_argument("--leg", action="append",
+                              help="adapter[:family]=path-to-review-log (repeat per leg)")
+    round_parser.add_argument("--expect", help="regex a delivered review log must contain")
+    round_parser.add_argument("--target")
     args = parser.parse_args(argv)
     if args.cmd == "check":
         return cmd_check(Path(args.file) if args.file else triage_path())
     if args.cmd == "init":
         return cmd_init(args.force)
     try:
+        if args.cmd == "round-check":
+            legs, logs = [], set()
+            for item in args.leg or []:
+                if "=" not in item:
+                    raise InputError("triage round-check: --leg must be <adapter>[:<family>]=<log>")
+                adapter_model, log = item.split("=", 1)
+                adapter, separator, family = adapter_model.partition(":")
+                if not adapter or not log or (separator and not family):
+                    raise InputError("triage round-check: --leg must be <adapter>[:<family>]=<log>")
+                # Two legs never write byte-identical reviews: the same file
+                # (a symlink, a hard link, another spelling) or a copy of it is
+                # one review, and counting it twice fakes a second family. Only
+                # a non-empty regular file is compared by content: two empty
+                # logs are two silent deaths, which leg-log-check reports as
+                # two failed legs.
+                real_log = os.path.realpath(log)
+                keys = {("path", real_log)}
+                try:
+                    if os.path.isfile(log) and os.path.getsize(log) > 0:
+                        with open(log, "rb") as handle:
+                            keys.add(("sha256", hashlib.sha256(handle.read()).hexdigest()))
+                except OSError:
+                    pass   # an unreadable log is leg-log-check's to report
+                if keys & logs:
+                    raise InputError("triage round-check: the same log was given more than once: %s" % real_log)
+                logs |= keys
+                legs.append((adapter, family if separator else None, log))
+            output = round_check(args.head, legs, args.target, args.expect)
+            print(json.dumps(output, sort_keys=True))
+            return 0 if output["ok"] else 1
         config, raw, path = load_config(triage_path())
         if args.cmd == "change":
             number = _change_number(args.number)
             output = triage_change(config, raw, path, number, args.query_json, args.include_wip, args.as_of_ps)
+            _write_record(output, output["head"], "change")
         else:
-            output = scope(config, raw, path, args.files, args.category)
+            if bool(args.base) != bool(args.target):
+                raise InputError("triage scope: --base and --target must be given together (or use --files)")
+            if args.files:
+                output = scope(config, raw, path, args.files, args.category)
+                output["record"] = None
+            else:
+                head, base, files, delta_lines = _scope_range(args.base, args.target)
+                output = scope(config, raw, path, files, args.category, delta_lines=delta_lines,
+                               path_only=False, review_legs=True)
+                output.update({"head": head, "base": base, "files": files})
+                _write_record(output, head, "scope")
     except InputError as exc:
         print(exc, file=sys.stderr)
         return 2

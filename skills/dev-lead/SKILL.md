@@ -106,7 +106,9 @@ Refuse to dispatch until the task has:
 
 If a `triage.json` exists, run `"$DEV_LEAD/scripts/triage.py" scope --files <planned paths>`
 for a risk floor and lenses; it only raises. The tables still decide; record
-the suggestion next to the final decision in the run log.
+the suggestion next to the final decision in the run log. `unmatched_files`
+means the local rules have a gap worth fixing. This planned-path form has no
+commit identity; Phase 2 records the frozen commit before any review launch.
 
 Survey the code yourself first — **premise-check the task's factual claims**.
 The measured incident: a task said "remove the duplicate query" about a query
@@ -628,6 +630,24 @@ two rounds and would have run a third on no principle at all.
    REVIEW_HEAD=$("$DEV_LEAD/scripts/freeze-target.sh" "$REPO" "$SHA" "$FROZEN_DIR")
    "$DEV_LEAD/scripts/verify-target.sh" "$FROZEN_DIR" "$REVIEW_HEAD"   # before AND after
    ```
+
+   **Triage the immutable target before launching every review round,
+   including fix rounds.** Run
+   `"$DEV_LEAD/scripts/triage.py" scope --base "$BASE" --target "$FROZEN_DIR"`
+   (or `triage.py change <number>` for a Gerrit change), then launch at least
+   its `min_review_legs` from distinct families using the lenses it lists.
+   MEDIUM's minimum of two is unconditional here: take the second reviewer
+   anyway. `leg-cmd.sh … review` reads the reviewed HEAD from `--target`, or
+   from the caller's cwd when the adapter has no `{TARGET}` slot. `--head` is
+   only an assertion and must resolve to that same HEAD. Launch cursor-type
+   adapters from inside the frozen worktree, because they review their caller
+   cwd. When a record has `base`, a launch's `--base` must match it; otherwise
+   rerun `triage.py scope --base <this base> --target <frozen dir>` first.
+   Going below the minimum is `--no-triage '<reason>'` only with the owner's
+   word, and records that exception. After the legs return, run `triage.py
+   round-check --head "$REVIEW_HEAD" --target "$FROZEN_DIR" --leg
+   <adapter>[:<family>]=<log> [--expect <verdict-regex>]` for every leg before
+   treating the round as complete.
 
    A repo that committed CRLF files and later added `eol=lf` shows them as
    ` M` on every fresh checkout. Both scripts excuse exactly those files --

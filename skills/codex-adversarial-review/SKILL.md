@@ -87,6 +87,9 @@ Compose it with `leg-cmd.sh`, which emits both steps chained with `&&`: the
 builder wraps the brief (the LENS, in `$RUN_DIR/prompt.md`) in the framing,
 then `codex exec` reads the framed prompt from stdin:
 
+Before this recipe, complete the frozen-target triage step in dev-lead Phase 2;
+the review launcher requires its record for this exact commit.
+
 ```bash
 DEV_LEAD=${DEV_LEAD_ROOT:-$(ls -d "$HOME"/.claude/plugins/cache/dev-lead/dev-lead/* 2>/dev/null | sort -V | tail -1)}
 eval "$("$DEV_LEAD/scripts/leg-cmd.sh" codex review --model <model> --effort <tier> \

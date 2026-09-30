@@ -260,6 +260,49 @@ keep tags and submodules out. The only thing it adds to a clone is objects:
 no refs, no `FETCH_HEAD`, no index or working tree. A person's own working
 clone can therefore serve as the triage clone.
 
+For a frozen local review, use the committed range rather than a planned path:
+
+```bash
+python3 scripts/triage.py scope --base "$BASE" --target "$FROZEN_DIR"
+```
+
+It resolves both commits, refuses modified or staged tracked files, evaluates
+added-line triggers, and writes `triage-records/<HEAD>.json` beside the local
+`triage.json`. The JSON names the exact `head`, `base`, files, lenses,
+`review_legs`, `unmatched_files`, and `min_review_legs`; an `unmatched_files`
+entry means no lens or trigger covers it, so fix the local rules. The older
+`scope --files …` form remains useful for planning but writes no record.
+`change` also writes a record for its current patch-set revision.
+
+Every `leg-cmd.sh <adapter> review` launch checks the HEAD it will actually
+review: `--target`'s HEAD, or the caller's cwd when that adapter has no
+`{TARGET}` slot. `--head <rev>` is an assertion resolved in that same
+directory and must equal its HEAD; cursor-type adapters therefore launch from
+inside the frozen worktree. When a record carries a `base`, a launch carrying
+`--base` must resolve to that same commit too. It refuses missing rules, an
+absent record, or a mismatched base with the command to make a new record.
+MEDIUM's minimum is unconditionally two legs (take the second reviewer
+anyway); going below it requires the owner's word through
+`--no-triage '<reason>'`, which is appended to `triage-records/skips.jsonl`,
+never silently ignored. Once all logs return, check the recorded requirement
+with:
+
+```bash
+python3 scripts/triage.py round-check --head "$REVIEW_HEAD" --target "$FROZEN_DIR" \
+  --leg codex="$RUN_DIR/codex.log" --leg cursor:Grok="$RUN_DIR/cursor.json" \
+  --expect 'APPROVE|REQUEST CHANGES'
+```
+
+`adapter:family=log` declares the family of the model that actually ran (one
+the adapter serves in `data/families.json`; families are declared, never
+guessed from a model name). Without it the record's roster family is used, and
+a leg whose family is still unknown does not count.
+`--expect` supplies the verdict regex required by that round's brief. It
+accepts only delivered logs, counts distinct known families that can satisfy the
+cross-family rule (not `unknown` or `Composer`), refuses one log given twice
+(same file or same bytes), and reports
+recorded skips.
+
 An optional `effort` table sets a minimum review effort per risk floor and
 lens class (`{"MEDIUM": {"mechanical": "medium", "judgment": {"default":
 "high", "codex": "xhigh"}}, ...}`; `check` requires every cell). A cell

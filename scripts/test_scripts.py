@@ -2730,8 +2730,29 @@ def test_leg_cmd():
     2026-09-08 session, and each is contradicted by data/launch.json.
     """
     script = SCRIPTS / "leg-cmd.sh"
+    # Review renders must never fall through to the developer's real plugin
+    # data now that leg-cmd gates them on a triage record. Accepted target
+    # renders use this committed worktree; rejection fixtures may still name
+    # a deliberately invalid target because their earlier validation wins.
+    import hashlib
+    prior_env = dict(os.environ)
+    gate_home = Path(tempfile.mkdtemp(prefix="leg-cmd-triage-"))
+    gate_roster = gate_home / "roster.json"
+    gate_rules = gate_home / "triage.json"
+    _write_doc(gate_roster, _live_roster())
+    gate_rules.write_bytes((SCRIPTS.parent / "templates" / "triage.example.json").read_bytes())
+    gate_head = git(SCRIPTS.parent, "rev-parse", "HEAD").stdout.strip()
+    gate_record = gate_rules.parent / "triage-records" / (gate_head + ".json")
+    gate_record.parent.mkdir()
+    _write_doc(gate_record, {"head": gate_head, "risk_floor": "LOW", "min_review_legs": 1,
+                             "lenses": [], "review_legs": [], "recorded_at": "test",
+                             "rules": {"sha256": hashlib.sha256(gate_rules.read_bytes()).hexdigest()}})
+    gate_env = _roster_env(gate_home, DEV_LEAD_ROSTER=gate_roster, DEV_LEAD_TRIAGE=gate_rules)
+    os.environ.clear()
+    os.environ.update(gate_env)
     # opencode review is framed since 0.6.30: every render names base and target.
-    OC = ["--base", "abc", "--target", "/tmp/leg-cmd-frozen"]
+    gate_target = str(SCRIPTS.parent)
+    OC = ["--base", "abc", "--target", gate_target, "--no-triage", "test fixture", "--head", "HEAD"]
     check("leg-cmd: script exists", script.is_file())
     if not script.is_file():
         return
@@ -2797,7 +2818,8 @@ def test_leg_cmd():
               f"rc={r.returncode} stderr={r.stderr!r}")
 
     r = subprocess.run([str(script), "agy", "review", "--model",
-                        "gemini-3.8-flash-medium", "--base", "abc", "--target", "/tmp/x"],
+                        "gemini-3.8-flash-medium", "--base", "abc", "--target", gate_target,
+                        "--no-triage", "test fixture", "--head", "HEAD"],
                        capture_output=True, text=True)
     check("leg-cmd: renders the correct agy spelling", r.returncode == 0, r.stderr)
     check("leg-cmd: model reaches the command",
@@ -2809,10 +2831,14 @@ def test_leg_cmd():
     # value carrying shell metacharacters must come back quoted. Measured
     # 2026-09-08: quoting only tokens containing a SPACE let a backticked
     # model name through raw, which eval would have executed.
+    hostile_parent = gate_home / 'a";touch ' / "tmp"
+    hostile_parent.mkdir(parents=True)
+    hostile_target = hostile_parent / 'PWNED;"b'
+    hostile_target.symlink_to(SCRIPTS.parent, target_is_directory=True)
     for argv, needle in (
         (["cursor", "review", "--model", "x`id`y"], "'x`id`y'"),
         (["agy", "review", "--model", "gemini-3.8-flash-medium", "--base", "abc",
-          "--target", '/tmp/a";touch /tmp/PWNED;"b'], "touch /tmp/PWNED"),
+          "--target", str(hostile_target), "--no-triage", "test fixture", "--head", "HEAD"], "touch /tmp/PWNED"),
     ):
         r = subprocess.run([str(script), *argv], capture_output=True, text=True)
         check(f"leg-cmd: quotes a hostile {argv[2]} value", r.returncode == 0, r.stderr)
@@ -2826,8 +2852,10 @@ def test_leg_cmd():
     # 0.6.28: codex review is `codex exec` with the suite's framing. The brief is
     # a lens; the builder wraps it and the framed prompt goes in on stdin.
     with tempfile.TemporaryDirectory() as td, tempfile.TemporaryDirectory() as rd:
+        make_repo(Path(td))
         r = subprocess.run([str(script), "codex", "review", "--model", "gpt-6-luna", "--effort", "xhigh",
-                            "--base", "abc123", "--target", td, "--run-dir", rd],
+                            "--base", "abc123", "--target", td, "--run-dir", rd,
+                            "--no-triage", "test fixture", "--head", "HEAD"],
                            capture_output=True, text=True)
     out = r.stdout
     check("leg-cmd: codex review runs codex exec, read-only, with the effort per call",
@@ -2844,7 +2872,8 @@ def test_leg_cmd():
     with tempfile.TemporaryDirectory() as td:
         inside = Path(td) / "run"
         r = subprocess.run([str(script), "codex", "review", "--model", "gpt-6-luna", "--effort", "high",
-                            "--base", "abc", "--target", td, "--run-dir", str(inside)],
+                            "--base", "abc", "--target", td, "--run-dir", str(inside),
+                            "--no-triage", "test fixture", "--head", "HEAD"],
                            capture_output=True, text=True)
     check("leg-cmd: a run directory inside the frozen target is refused",
           r.returncode != 0 and "inside --target" in r.stderr and not r.stdout, r.stderr)
@@ -3132,15 +3161,18 @@ def test_leg_cmd():
 
     # The framed launches leg-cmd emits for opencode and agy (0.6.30).
     with tempfile.TemporaryDirectory() as td, tempfile.TemporaryDirectory() as rd:
+        make_repo(Path(td))
         r = subprocess.run([str(script), "opencode", "review", "--model", "opencode/x", "--effort", "high",
-                            "--base", "abc", "--target", td, "--run-dir", rd], capture_output=True, text=True)
+                            "--base", "abc", "--target", td, "--run-dir", rd,
+                            "--no-triage", "test fixture", "--head", "HEAD"], capture_output=True, text=True)
         cmd = r.stdout.strip().splitlines()[-1] if r.stdout.strip() else ""
         check("leg-cmd: opencode review frames the brief, then runs the leg INSIDE --target in a subshell",
               r.returncode == 0 and "review-prompt.py --adapter opencode --base abc --target " in cmd
               and ("&& ( cd %s && opencode run " % td) in cmd
               and cmd.endswith('< "$RUN_DIR/framed-prompt.md" )'), cmd)
         r = subprocess.run([str(script), "agy", "review", "--model", "gemini-3.8-flash-high",
-                            "--base", "abc", "--target", td, "--run-dir", rd], capture_output=True, text=True)
+                            "--base", "abc", "--target", td, "--run-dir", rd,
+                            "--no-triage", "test fixture", "--head", "HEAD"], capture_output=True, text=True)
         cmd = r.stdout.strip().splitlines()[-1] if r.stdout.strip() else ""
         check("leg-cmd: agy review materializes evidence and grants it with a second --add-dir",
               r.returncode == 0 and '--adapter agy' in cmd and '--evidence "$RUN_DIR/evidence"' in cmd
@@ -3154,12 +3186,13 @@ def test_leg_cmd():
         check("leg-cmd: agy review has room for the frame's 15-minute budget",
               "--print-timeout 20m0s" in cmd, cmd)
     r = subprocess.run([str(script), "opencode", "review", "--model", "opencode/x", "--effort", "high",
-                        "--target", "/tmp/x"], capture_output=True, text=True)
+                        "--target", "/tmp/x", "--no-triage", "test fixture", "--head", "HEAD"], capture_output=True, text=True)
     check("leg-cmd: opencode review without --base is refused",
           r.returncode != 0 and "--base" in r.stderr and not r.stdout, r.stderr)
     with tempfile.TemporaryDirectory() as td:
         r = subprocess.run([str(script), "opencode", "review", "--model", "opencode/x", "--effort", "high",
-                            "--base", "abc", "--target", "/tmp/x", "--run-dir", "rel-run"],
+                            "--base", "abc", "--target", gate_target, "--run-dir", "rel-run",
+                            "--no-triage", "test fixture", "--head", gate_head],
                            capture_output=True, text=True, cwd=td)
         check("leg-cmd: a relative --run-dir is exported absolute (the framed leg reads it after cd)",
               ("export RUN_DIR=%s" % os.path.join(os.path.realpath(td), "rel-run")) in r.stdout
@@ -3178,7 +3211,8 @@ def test_leg_cmd():
         (fake / "opencode").write_text('#!/bin/sh\necho "CWD=$(pwd)"\ngrep -c "THE LENS" && true\n')
         (fake / "opencode").chmod(0o755)
         emitted = subprocess.run([str(script), "opencode", "review", "--model", "opencode/x", "--effort", "high",
-                                  "--base", shas[0], "--target", str(tgt), "--run-dir", str(rdir)],
+                                  "--base", shas[0], "--target", str(tgt), "--run-dir", str(rdir),
+                                  "--no-triage", "test fixture", "--head", "HEAD"],
                                  capture_output=True, text=True).stdout
         out = subprocess.run(["bash", "-c", 'cd "%s" && eval "$(cat)"; echo "AFTER=$(pwd)"' % td],
                              input=emitted, capture_output=True, text=True,
@@ -3381,8 +3415,9 @@ def test_leg_cmd():
         # wrong half: no errexit -> the shell survives; errexit -> it stops,
         # which is what a script should do when its brief is missing.
         brief.unlink(missing_ok=True)
-        emit = ("bash %s opencode review --model opencode/x --effort high --base abc --target %s --run-dir %s 2>/dev/null"
-                % (script, OC[-1], td))
+        emit = ("bash %s opencode review --model opencode/x --effort high --base abc --target %s --run-dir %s "
+                "--no-triage 'test fixture' --head %s 2>/dev/null"
+                % (script, gate_target, td, gate_head))
         for flags, label, sentinel_expected in ((["-c"], "no errexit", True),
                                                 (["-c"], "errexit", False)):
             pre = "set -e; " if label == "errexit" else ""
@@ -3468,6 +3503,195 @@ def test_leg_cmd():
     r = subprocess.run([str(script)], capture_output=True, text=True)
     check("leg-cmd: the usage line says options are per adapter",
           "only where the adapter takes it" in r.stderr, r.stderr)
+    os.environ.clear()
+    os.environ.update(prior_env)
+
+
+def test_triage_launch_gate(tmp):
+    """The review launcher refuses missing triage, unless the skip is auditable."""
+    import hashlib
+
+    script = SCRIPTS / "leg-cmd.sh"
+    repo = tmp / "launch-gate-repo"
+    base, head = make_repo(repo, commits=2)
+    caller = tmp / "launch-gate-caller"
+    caller_head = make_repo(caller)[0]
+    git(repo, "branch", "asserted", head)
+    git(caller, "branch", "asserted", caller_head)
+    home = tmp / "launch-gate-home"
+    home.mkdir()
+    roster_file, rules_file = home / "roster.json", home / "triage.json"
+    _write_doc(roster_file, _live_roster())
+    rules = {
+        "version": 1, "me": ["alice"], "lens_classes": {"mechanical": "mechanical"},
+        "lenses": [{"glob": "*.txt", "lenses": ["mechanical"], "why": "test"}],
+        "delta_triggers": [], "risk_default": "LOW", "move_check": {"naming": []},
+        "small_delta_lines": 3, "order": [],
+    }
+    missing_env = _roster_env(home, DEV_LEAD_ROSTER=roster_file, DEV_LEAD_TRIAGE=home / "missing.json")
+    launch = [script, "agy", "review", "--model", "gemini-3.8-flash-medium", "--base", base, "--target", repo]
+    got = run(*launch, env=missing_env)
+    check("leg-cmd triage: missing rules name init and the committed-range command",
+          got.returncode != 0 and not got.stdout.strip() and "triage.py init" in got.stderr
+          and "triage.py scope" in got.stderr, got.stderr)
+
+    _write_doc(rules_file, rules)
+    env = _roster_env(home, DEV_LEAD_ROSTER=roster_file, DEV_LEAD_TRIAGE=rules_file)
+    got = run(*launch, env=env)
+    check("leg-cmd triage: a missing record names the SHA and scope command",
+          got.returncode != 0 and not got.stdout.strip() and head in got.stderr
+          and "triage.py scope" in got.stderr, got.stderr)
+    record = home / "triage-records" / (head + ".json")
+    record.parent.mkdir()
+    _write_doc(record, {"head": head, "base": base, "risk_floor": "MEDIUM", "min_review_legs": 2,
+                        "lenses": [{"name": "mechanical"}], "review_legs": [], "recorded_at": "test-time",
+                        "rules": {"sha256": hashlib.sha256(rules_file.read_bytes()).hexdigest()}})
+    got = run(*launch, env=env)
+    check("leg-cmd triage: an exact-head record permits launch and prints its summary",
+          got.returncode == 0 and "# triage %s risk=MEDIUM min_review_legs=2 lenses=mechanical" % head[:12] in got.stderr
+          and "WARNING" not in got.stderr and got.stdout.strip(),
+          got.stdout + got.stderr)
+    got = run(*launch, "--head", base, env=env)
+    check("leg-cmd triage: an asserted full SHA that differs from --target HEAD is refused",
+          got.returncode != 0 and not got.stdout.strip() and base in got.stderr and head in got.stderr
+          and str(repo) in got.stderr, got.stdout + got.stderr)
+    got = run(*launch, "--head", "asserted", env=env, cwd=caller)
+    check("leg-cmd triage: a symbolic --head is resolved in --target, not the caller cwd",
+          got.returncode == 0 and "# triage checked HEAD %s" % head in got.stderr, got.stdout + got.stderr)
+    got = run(script, "agy", "review", "--model", "gemini-3.8-flash-medium", "--base", head,
+              "--target", repo, env=env)
+    check("leg-cmd triage: a record for another base is refused before launch",
+          got.returncode != 0 and not got.stdout.strip() and base in got.stderr and head in got.stderr
+          and "triage.py scope --base" in got.stderr, got.stdout + got.stderr)
+    record_doc = json.loads(record.read_text())
+    record_doc["lenses"] = None
+    _write_doc(record, record_doc)
+    got = run(*launch, env=env)
+    check("leg-cmd triage: a change skip record with lenses null still launches",
+          got.returncode == 0 and "lenses=(none)" in got.stderr, got.stdout + got.stderr)
+    record_doc["lenses"] = [{"name": "mechanical"}]
+    _write_doc(record, record_doc)
+    no_repo = tmp / "not-a-review-worktree"
+    no_repo.mkdir()
+    got = run(script, "cursor", "review", "--model", "cursor-grok-4.6-medium", env=env, cwd=no_repo)
+    check("leg-cmd triage: a caller-cwd adapter refuses a non-repository cwd",
+          got.returncode != 0 and not got.stdout.strip() and "cd into the frozen worktree" in got.stderr,
+          got.stdout + got.stderr)
+    got = run(script, "cursor", "review", "--model", "cursor-grok-4.6-medium", env=env, cwd=repo)
+    check("leg-cmd triage: a caller-cwd adapter launched inside the recorded worktree is accepted",
+          got.returncode == 0 and "# triage checked HEAD %s" % head in got.stderr and got.stdout.strip(),
+          got.stdout + got.stderr)
+    got = run(script, "agy", "review", "--model", "gemini-3.8-flash-medium", "--base", base,
+              "--target", repo.name, env=env, cwd=repo.parent)
+    check("leg-cmd triage: a relative --target is emitted as the absolute tree the gate checked",
+          got.returncode == 0 and str(repo) in got.stdout and "'%s'" % repo.name not in got.stdout
+          and " %s " % repo.name not in got.stdout, got.stdout + got.stderr)
+    no_base = dict(record_doc)
+    no_base.pop("base")
+    _write_doc(record, no_base)
+    got = run(*launch, env=env)
+    check("leg-cmd triage: a record without a base (change mode) is not compared with --base",
+          got.returncode == 0, got.stdout + got.stderr)
+    _write_doc(record, dict(record_doc, base=""))
+    got = run(*launch, env=env)
+    check("leg-cmd triage: a record with a malformed base is refused",
+          got.returncode != 0 and not got.stdout.strip() and "malformed base" in got.stderr, got.stdout + got.stderr)
+    for bad_rules in (None, "not-an-object"):
+        _write_doc(record, dict(record_doc, rules=bad_rules))
+        got = run(*launch, env=env)
+        check("leg-cmd triage: a record with rules %r warns instead of crashing" % (bad_rules,),
+              got.returncode == 0 and "WARNING: rules changed" in got.stderr and "Traceback" not in got.stderr
+              and got.stdout.strip(), got.stdout + got.stderr)
+    _write_doc(record, record_doc)
+    got = run(*launch, "--no-triage", "owner requested one emergency leg", env=env)
+    skips = [json.loads(line) for line in (home / "triage-records" / "skips.jsonl").read_text().splitlines()]
+    check("leg-cmd triage: --no-triage writes an auditable skip and still emits the command",
+          got.returncode == 0 and skips[-1]["sha"] == head and skips[-1]["reason"] == "owner requested one emergency leg"
+          and "# triage SKIPPED" in got.stderr, got.stdout + got.stderr)
+    got = run(*launch, "--no-triage", "", env=env)
+    check("leg-cmd triage: an empty skip reason is refused",
+          got.returncode != 0 and not got.stdout.strip() and "non-empty" in got.stderr, got.stderr)
+    got = run(*launch, "--no-triage", " ", env=env)
+    check("leg-cmd triage: a whitespace-only skip reason is refused",
+          got.returncode != 0 and not got.stdout.strip() and "non-empty" in got.stderr, got.stderr)
+    skips_file = home / "triage-records" / "skips.jsonl"
+    kept = skips_file.with_suffix(".kept")
+    skips_file.rename(kept)
+    skips_file.mkdir()   # appending to a directory fails: the skip cannot be recorded
+    got = run(*launch, "--no-triage", "owner requested one emergency leg", env=env)
+    skips_file.rmdir()
+    kept.rename(skips_file)
+    check("leg-cmd triage: a skip that cannot be recorded is refused, not launched",
+          got.returncode != 0 and "cannot record --no-triage" in got.stderr and not got.stdout.strip(),
+          got.stdout + got.stderr)
+    implement = [script, "agy", "implement", "--model", "gemini-3.8-flash-medium", "--target", repo]
+    got = run(*implement, "--head", head, env=env)
+    check("leg-cmd triage: --head is refused for implement",
+          got.returncode != 0 and not got.stdout.strip() and "only valid for the review role" in got.stderr, got.stderr)
+    got = run(*implement, "--no-triage", "owner", env=env)
+    check("leg-cmd triage: --no-triage is refused for implement",
+          got.returncode != 0 and not got.stdout.strip() and "only valid for the review role" in got.stderr, got.stderr)
+    rules["risk_default"] = "MEDIUM"
+    _write_doc(rules_file, rules)
+    got = run(*launch, env=env)
+    check("leg-cmd triage: changed rules warn but do not block the recorded commit",
+          got.returncode == 0 and "WARNING: rules changed" in got.stderr, got.stderr)
+    got = run(script, "cursor", "review", "--model", "cursor-grok-4.6-medium", "--prompt-file", "/tmp/brief", env=env)
+    check("leg-cmd triage: a dropped prompt-file says where the adapter reads its brief",
+          got.returncode != 0 and not got.stdout.strip() and "$RUN_DIR/prompt.md" in got.stderr
+          and "--run-dir" in got.stderr, got.stderr)
+    got = run(*launch, "--effort", "medium", "--no-triage", "", env=env)
+    check("leg-cmd triage: existing validation still refuses before the gate",
+          got.returncode != 0 and not got.stdout.strip() and "MODEL NAME" in got.stderr
+          and "non-empty reason" not in got.stderr, got.stderr)
+
+
+def test_review_prompt_input(tmp):
+    """A prompt builder never waits indefinitely for an absent lens."""
+    review_prompt = SCRIPTS / "review-prompt.py"
+    repo = tmp / "review-prompt-input"
+    make_repo(repo)
+    lens_file = tmp / "lens.md"
+    lens_file.write_text("lens from file\n")
+    got = subprocess.run([sys.executable, str(review_prompt), "--adapter", "codex", "--base", "HEAD",
+                          "--target", str(repo), "--lens-file", str(lens_file)], input="ignored stdin",
+                         capture_output=True, text=True)
+    check("review-prompt input: --lens-file is used instead of stdin",
+          got.returncode == 0 and "lens from file" in got.stdout and "ignored stdin" not in got.stdout, got.stderr)
+    lens_file.write_text("\n")
+    got = subprocess.run([sys.executable, str(review_prompt), "--adapter", "codex", "--base", "HEAD",
+                          "--target", str(repo), "--lens-file", str(lens_file)],
+                         capture_output=True, text=True)
+    check("review-prompt input: an empty --lens-file names that file, not stdin",
+          got.returncode != 0 and str(lens_file) in got.stderr and "stdin" not in got.stderr, got.stderr)
+    try:
+        import pty
+    except ImportError as exc:
+        print("  skip review-prompt input: pty unavailable (%s)" % exc)
+    else:
+        master, slave = pty.openpty()
+        try:
+            got = subprocess.run([sys.executable, str(review_prompt), "--adapter", "codex", "--base", "HEAD",
+                                  "--target", str(repo)], stdin=slave, capture_output=True, text=True)
+        finally:
+            os.close(master)
+            os.close(slave)
+        check("review-prompt input: a TTY stdin is refused immediately",
+              got.returncode != 0 and "stdin is a TTY" in got.stderr, got.stderr)
+    read_fd, write_fd = os.pipe()
+    try:
+        # A bounded wait: without the builder's own timeout this call would
+        # block forever, and a hung suite reports nothing.
+        got = subprocess.run([sys.executable, str(review_prompt), "--adapter", "codex", "--base", "HEAD",
+                              "--target", str(repo)], stdin=read_fd, capture_output=True, text=True,
+                             env=dict(os.environ, DEV_LEAD_LENS_WAIT="1"), timeout=30)
+    except subprocess.TimeoutExpired:
+        got = subprocess.CompletedProcess([], 0, "", "still waiting after 30s")
+    finally:
+        os.close(read_fd)
+        os.close(write_fd)
+    check("review-prompt input: an open but silent pipe times out", got.returncode != 0
+          and "no lens arrived on stdin within 1s" in got.stderr, got.stderr)
 
 
 # ---------------------------------------------------------------- roster ----
@@ -3574,7 +3798,7 @@ def test_config_effort(tmp):
     env = _roster_env(home)
 
     out = run(SCRIPTS / "leg-cmd.sh", "codex", "review", "--model", "gpt-5.6-terra",
-              "--base", "abc", "--run-dir", str(tmp), env=env)
+              "--base", "abc", "--run-dir", str(tmp), "--no-triage", "test fixture", env=env)
     check("config effort: leg-cmd prints what is IN FORCE, not what is declared",
           "IN FORCE on this machine: high" in out.stderr, out.stderr)
     check("config effort: ...names the per-call escape hatch, and the machine change only on a yes",
@@ -3635,7 +3859,7 @@ def test_config_effort(tmp):
     ):
         (home / ".codex" / "config.toml").write_text(text)
         out = run(SCRIPTS / "leg-cmd.sh", "codex", "review", "--model", "gpt-5.6-terra",
-                  "--base", "abc", "--run-dir", str(tmp), env=env)
+                  "--base", "abc", "--run-dir", str(tmp), "--no-triage", "test fixture", env=env)
         # the trailing " (" matters: without it "high" also matches a parse that
         # returned 'high"  # temporary', and the mutation stays green
         expect = "IN FORCE on this machine: %s (" % (want if want else "not set")
@@ -3646,7 +3870,7 @@ def test_config_effort(tmp):
     check("config effort: an unreadable config is not a warning (nothing is known)",
           out.returncode == 0 and "declares" not in out.stdout, out.stdout)
     out = run(SCRIPTS / "leg-cmd.sh", "codex", "review", "--model", "gpt-5.6-terra",
-              "--base", "abc", "--run-dir", str(tmp), env=env)
+              "--base", "abc", "--run-dir", str(tmp), "--no-triage", "test fixture", env=env)
     check("config effort: leg-cmd says 'not set' rather than inventing one",
           "IN FORCE on this machine: not set" in out.stderr, out.stderr)
 
@@ -4035,6 +4259,7 @@ def _write_doc(path, doc):
 def _roster_env(home, **extra):
     env = dict(os.environ)
     env.pop("DEV_LEAD_ROSTER", None)
+    env.pop("DEV_LEAD_TRIAGE", None)
     env.pop("CLAUDE_PLUGIN_DATA", None)
     env["HOME"] = str(home)
     env.update({k: str(v) for k, v in extra.items()})
@@ -4638,6 +4863,8 @@ def test_roster(tmp):
     markers = ("MODEL NAME", "no effort control", "needs --effort",
                "leg-cmd: the suite passes no effort", "unknown effort mechanism")
     leg = SCRIPTS / "leg-cmd.sh"
+    effort_env = _roster_env(home, DEV_LEAD_ROSTER=codex_impl,
+                             DEV_LEAD_TRIAGE=tmp / "effort-triage.json")
     for adapter, adapter_spec in launch.items():
         if adapter.startswith("_"):
             continue
@@ -4646,7 +4873,9 @@ def test_roster(tmp):
                 argv = [str(leg), adapter, role, "--model", "opencode/x"]
                 if effort:
                     argv += ["--effort", effort]
-                ran = run(*argv)
+                if role == "review":
+                    argv += ["--no-triage", "test fixture"]
+                ran = run(*argv, env=effort_env)
                 leg_refuses = any(marker in (ran.stderr or "") for marker in markers)
                 roster_refuses = roster_mod.effort_flag_refusal(adapter, role, effort) is not None
                 check("roster effort %s %s effort=%s matches leg-cmd"
@@ -5294,6 +5523,11 @@ def test_triage(tmp):
           and result.get("topic_members", {}).get("atomic") is False, result)
     expected_hash = hashlib.sha256(config_file.read_bytes()).hexdigest()
     check("triage change: rules carry config sha256", result.get("rules", {}).get("sha256") == expected_hash, result)
+    change_record = config_file.parent / "triage-records" / (result.get("head", "") + ".json")
+    check("triage change: records its head, unmatched files, and required review count",
+          result.get("unmatched_files") == [] and result.get("min_review_legs") == 2
+          and result.get("record") == str(change_record) and change_record.is_file()
+          and json.loads(change_record.read_text()).get("mode") == "change", result)
 
     got = run(triage, "scope", "--files", "secure/credentials.py", env=env)
     scoped = json.loads(got.stdout) if got.returncode == 0 else {}
@@ -6458,6 +6692,234 @@ def test_triage(tmp):
           got.returncode == 0 and "excluded on purpose" in got.stdout, got.stdout + got.stderr)
 
 
+# -------------------------------------------------------- triage gate ----
+def test_triage_gate(tmp):
+    """Committed-range records and report-time accounting stay local to HOME."""
+    import hashlib
+
+    triage = SCRIPTS / "triage.py"
+    repo = tmp / "triage-gate-repo"
+    repo.mkdir()
+    git(repo, "init", "-q")
+    git(repo, "config", "user.email", "test@example.invalid")
+    git(repo, "config", "user.name", "Test")
+
+    def write(path, body):
+        target = repo / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(body, encoding="utf-8")
+
+    def commit(message):
+        git(repo, "add", "-A")
+        git(repo, "commit", "-qm", message)
+        return git(repo, "rev-parse", "HEAD").stdout.strip()
+
+    write("docs/spec/deleted.md", "old\n")
+    write("docs/spec/status.md", "ordinary\n")
+    write("src/unmatched.txt", "old\n")
+    base = commit("base")
+    (repo / "docs/spec/deleted.md").unlink()
+    write("docs/spec/status.md", "Status Verified\n")
+    write("src/unmatched.txt", "new\n")
+    head = commit("range")
+
+    home = tmp / "triage-gate-home"
+    home.mkdir()
+    roster_file, rules_file = home / "roster.json", home / "triage.json"
+    _write_doc(roster_file, _live_roster())
+    rules = {
+        "version": 1, "me": ["alice"], "lens_classes": {"mechanical": "mechanical", "judgment": "judgment"},
+        "lenses": [{"glob": "docs/spec/*.md", "lenses": ["mechanical"], "why": "spec"}],
+        "delta_triggers": [{"glob": "docs/spec/*.md", "added_regex": "Status.*Verified", "risk": "HIGH",
+                            "lenses": ["judgment"], "why": "status"}],
+        "risk_default": "MEDIUM", "move_check": {"naming": []}, "small_delta_lines": 3, "order": [],
+    }
+    _write_doc(rules_file, rules)
+    env = _roster_env(home, DEV_LEAD_ROSTER=roster_file, DEV_LEAD_TRIAGE=rules_file)
+
+    low_rules = dict(rules, risk_default="LOW")
+    _write_doc(rules_file, low_rules)
+    got = run(triage, "scope", "--files", "src/no-rule.txt", env=env)
+    low = json.loads(got.stdout) if got.returncode == 0 else {}
+    check("triage scope: LOW has one minimum leg and records no identity",
+          got.returncode == 0 and low.get("min_review_legs") == 1
+          and low.get("unmatched_files") == ["src/no-rule.txt"] and low.get("record") is None, got.stdout + got.stderr)
+    trigger_rules = dict(rules, delta_triggers=rules["delta_triggers"] + [
+        {"glob": "src/trigger-only.txt", "path_only": True, "risk": "MEDIUM", "why": "trigger only"}])
+    _write_doc(rules_file, trigger_rules)
+    got = run(triage, "scope", "--files", "src/trigger-only.txt", env=env)
+    trig = json.loads(got.stdout) if got.returncode == 0 else {}
+    check("triage scope: a file covered only by a delta trigger is not unmatched",
+          got.returncode == 0 and trig.get("unmatched_files") == [], got.stdout + got.stderr)
+    _write_doc(rules_file, rules)
+    got = run(triage, "scope", "--files", "docs/spec/status.md", env=env)
+    medium = json.loads(got.stdout) if got.returncode == 0 else {}
+    check("triage scope: MEDIUM has two minimum legs", got.returncode == 0 and medium.get("min_review_legs") == 2, got.stdout + got.stderr)
+
+    got = run(triage, "scope", "--base", base, "--target", repo, env=env)
+    scoped = json.loads(got.stdout) if got.returncode == 0 else {}
+    record = home / "triage-records" / (head + ".json")
+    check("triage scope: range includes a deletion, fires added_regex, and writes its exact-head record",
+          got.returncode == 0 and scoped.get("head") == head and scoped.get("base") == base
+          and "docs/spec/deleted.md" in scoped.get("files", []) and scoped.get("risk_floor") == "HIGH"
+          and scoped.get("min_review_legs") == 2 and scoped.get("unmatched_files") == ["src/unmatched.txt"]
+          and scoped.get("record") == str(record) and record.is_file()
+          and json.loads(record.read_text()).get("mode") == "scope", got.stdout + got.stderr)
+    check("triage scope: every risk floor has the documented minimum",
+          low.get("min_review_legs") == 1 and medium.get("min_review_legs") == 2
+          and scoped.get("min_review_legs") == 2)
+    got = run(triage, "scope", "--files", "src/no-rule.txt", "--base", base, "--target", repo, env=env)
+    check("triage scope: files and range are mutually exclusive", got.returncode == 2, got.stderr)
+    write("src/unmatched.txt", "dirty\n")
+    got = run(triage, "scope", "--base", base, "--target", repo, env=env)
+    check("triage scope: a dirty tracked target is refused", got.returncode == 2 and "tracked files" in got.stderr, got.stderr)
+    git(repo, "add", "src/unmatched.txt")
+    got = run(triage, "scope", "--base", base, "--target", repo, env=env)
+    check("triage scope: a staged tracked change is refused", got.returncode == 2 and "tracked files" in got.stderr, got.stderr)
+    git(repo, "reset", "-q", "src/unmatched.txt")
+    write("src/unmatched.txt", "new\n")
+
+    good, second, failed = home / "codex.log", home / "agy.log", home / "failed.log"
+    good.write_text("Verdict: approve\n")
+    second.write_text("Status: HOLDS\n")
+    failed.write_text("")
+    record_doc = {"head": head, "risk_floor": "HIGH", "min_review_legs": 2,
+                  "review_legs": [{"adapter": "codex", "family": "GPT"},
+                                  {"adapter": "claude", "family": "GPT"}],
+                  "lenses": [], "recorded_at": "test", "rules": {"sha256": hashlib.sha256(rules_file.read_bytes()).hexdigest()}}
+    _write_doc(record, record_doc)
+    got = run(triage, "round-check", "--head", head, "--target", repo,
+              "--leg", "codex=" + str(good), "--leg", "claude=" + str(second), env=env)
+    same_family = json.loads(got.stdout) if got.stdout else {}
+    check("triage round-check: two delivered legs from one family count once",
+          got.returncode == 1 and same_family.get("distinct_families") == 1 and not same_family.get("ok"), got.stdout + got.stderr)
+    record_doc["review_legs"][1] = {"adapter": "agy", "family": "Gemini"}
+    _write_doc(record, record_doc)
+    (home / "triage-records" / "skips.jsonl").write_text(json.dumps({"sha": head, "reason": "owner request"}) + "\n")
+    got = run(triage, "round-check", "--head", head, "--target", repo,
+              "--leg", "codex=" + str(good), "--leg", "agy=" + str(failed), env=env)
+    short = json.loads(got.stdout) if got.stdout else {}
+    check("triage round-check: failed legs and recorded skips are reported when short",
+          got.returncode == 1 and len(short.get("failed", [])) == 1 and short.get("skips", [{}])[0].get("reason") == "owner request", got.stdout + got.stderr)
+    got = run(triage, "round-check", "--head", head, "--target", repo,
+              "--leg", "codex=" + str(good), "--leg", "agy=" + str(second), env=env)
+    complete = json.loads(got.stdout) if got.stdout else {}
+    check("triage round-check: distinct delivered families satisfy the record", got.returncode == 0 and complete.get("ok"), got.stdout + got.stderr)
+    got = run(triage, "round-check", "--head", base, "--target", repo, "--leg", "codex=" + str(good), env=env)
+    check("triage round-check: a missing record names how to create it", got.returncode == 2 and "triage.py scope" in got.stderr, got.stderr)
+
+    record_doc = {"head": head, "risk_floor": "HIGH", "min_review_legs": 2,
+                  "review_legs": [{"adapter": "codex", "family": "GPT"},
+                                  {"adapter": "agy", "family": "Gemini"}],
+                  "lenses": [], "recorded_at": "test", "rules": {"sha256": hashlib.sha256(rules_file.read_bytes()).hexdigest()}}
+    _write_doc(record, record_doc)
+    got = run(triage, "round-check", "--head", head, "--target", repo,
+              "--leg", "invented=" + str(good), env=env)
+    unknown = json.loads(got.stdout) if got.stdout else {}
+    check("triage round-check: an unrecorded adapter is delivered but cannot satisfy a family minimum",
+          got.returncode == 1 and unknown.get("distinct_families") == 0
+          and unknown.get("delivered", [{}])[0].get("family") is None
+          and "adapter:family=" in got.stdout, got.stdout + got.stderr)
+    got = run(triage, "round-check", "--head", head, "--target", repo,
+              "--leg", "codex=" + str(good), "--leg", "agy=" + str(good), env=env)
+    check("triage round-check: one log under two adapters is an input error",
+          got.returncode == 2 and "same log" in got.stderr, got.stdout + got.stderr)
+    copied, linked = home / "copied.log", home / "linked.log"
+    copied.write_bytes(good.read_bytes())
+    os.link(good, linked)
+    for other, how in ((copied, "a byte-identical copy"), (linked, "a hard link")):
+        got = run(triage, "round-check", "--head", head, "--target", repo,
+                  "--leg", "codex=" + str(good), "--leg", "agy=" + str(other), env=env)
+        check("triage round-check: %s of one log under two adapters is an input error" % how,
+              got.returncode == 2 and "same log" in got.stderr, got.stdout + got.stderr)
+    empty_a, empty_b = home / "silent-a.log", home / "silent-b.log"
+    empty_a.write_text("")
+    empty_b.write_text("")
+    got = run(triage, "round-check", "--head", head, "--target", repo,
+              "--leg", "codex=" + str(empty_a), "--leg", "agy=" + str(empty_b), env=env)
+    silent = json.loads(got.stdout) if got.stdout else {}
+    check("triage round-check: two empty logs are two failed legs, not one log given twice",
+          got.returncode == 1 and len(silent.get("failed", [])) == 2 and silent.get("delivered") == []
+          and all("leg-log-check" in item.get("message", "") for item in silent.get("failed", [])),
+          got.stdout + got.stderr)
+    saved_doc = dict(record_doc)
+    _write_doc(record, dict(record_doc, risk_floor="LOW", min_review_legs=1))
+    got = run(triage, "round-check", "--head", head, "--target", repo,
+              "--leg", "opencode:unknown=" + str(good), env=env)
+    stealth = json.loads(got.stdout) if got.stdout else {}
+    check("triage round-check: a family that can never satisfy the cross-family rule is delivered but not counted",
+          got.returncode == 1 and stealth.get("distinct_families") == 0
+          and "accounting_valid" in stealth.get("accounting_note", ""), got.stdout + got.stderr)
+    _write_doc(record, saved_doc)
+    alternate = home / "alternate.log"
+    alternate.write_text("Verdict: approve -- a second leg's own review\n")
+    got = run(triage, "round-check", "--head", head, "--target", repo,
+              "--leg", "codex:GPT=" + str(good), "--leg", "codex:GPT=" + str(alternate), env=env)
+    inferred = json.loads(got.stdout) if got.stdout else {}
+    check("triage round-check: two declared legs of one family count once",
+          got.returncode == 1 and inferred.get("distinct_families") == 1
+          and [item.get("family") for item in inferred.get("delivered", [])] == ["GPT", "GPT"],
+          got.stdout + got.stderr)
+    # The roster says agy is Gemini; an agy leg that actually ran a Claude model
+    # is declared Claude, so with the claude leg it is ONE family, not two.
+    record_doc["review_legs"] = [{"adapter": "claude", "family": "Claude"}, {"adapter": "agy", "family": "Gemini"}]
+    _write_doc(record, record_doc)
+    got = run(triage, "round-check", "--head", head, "--target", repo,
+              "--leg", "claude=" + str(good), "--leg", "agy:Claude=" + str(alternate), env=env)
+    declared = json.loads(got.stdout) if got.stdout else {}
+    check("triage round-check: a declared family overrides the roster's family for that leg",
+          got.returncode == 1 and declared.get("distinct_families") == 1
+          and [item.get("family") for item in declared.get("delivered", [])] == ["Claude", "Claude"],
+          got.stdout + got.stderr)
+    got = run(triage, "round-check", "--head", head, "--target", repo,
+              "--leg", "codex:Grok=" + str(good), env=env)
+    check("triage round-check: a family the adapter does not serve is an input error",
+          got.returncode == 2 and "does not serve" in got.stderr, got.stdout + got.stderr)
+    record_doc.update({"risk_floor": "LOW", "min_review_legs": 1,
+                       "review_legs": [{"adapter": "codex", "family": "GPT"}]})
+    _write_doc(record, record_doc)
+    requested = home / "request-changes.log"
+    requested.write_text("REQUEST CHANGES\n")
+    got = run(triage, "round-check", "--head", head, "--target", repo,
+              "--leg", "codex=" + str(requested), "--expect", "REQUEST CHANGES", env=env)
+    expected = json.loads(got.stdout) if got.stdout else {}
+    check("triage round-check: --expect reaches leg-log-check for a delivered alternate verdict",
+          got.returncode == 0 and expected.get("ok"), got.stdout + got.stderr)
+    (home / "triage-records" / "skips.jsonl").write_text(
+        json.dumps({"sha": head, "reason": "owner request"}) + "\nnot json\n")
+    got = run(triage, "round-check", "--head", head, "--target", repo,
+              "--leg", "codex=" + str(good), env=env)
+    skips = json.loads(got.stdout) if got.stdout else {}
+    check("triage round-check: unreadable skip lines are reported without hiding delivered legs",
+          got.returncode == 0 and len(skips.get("skips", [])) == 1 and skips.get("skips_unreadable") == 1,
+          got.stdout + got.stderr)
+
+    rename_repo = tmp / "triage-rename-repo"
+    rename_base = make_repo(rename_repo)[0]
+    git(rename_repo, "mv", "f0.txt", "renamed.txt")
+    git(rename_repo, "commit", "-qm", "rename")
+    rename_head = git(rename_repo, "rev-parse", "HEAD").stdout.strip()
+    got = run(triage, "scope", "--base", rename_base, "--target", rename_repo, env=env)
+    renamed = json.loads(got.stdout) if got.stdout else {}
+    check("triage scope: a rename names both its old and new paths",
+          got.returncode == 0 and renamed.get("files") == ["f0.txt", "renamed.txt"]
+          and renamed.get("head") == rename_head, got.stdout + got.stderr)
+
+    renorm_repo = tmp / "triage-renorm-repo"
+    renorm_head = _crlf_repo(renorm_repo)
+    renorm_base = git(renorm_repo, "rev-parse", "HEAD^").stdout.strip()
+    later = time.time() + 5
+    for name in ("crlf.txt", "sp ace.txt", "文檔.txt", "plain.txt", "run.sh"):
+        os.utime(renorm_repo / name, (later, later))
+    got = run(triage, "scope", "--base", renorm_base, "--target", renorm_repo, env=env)
+    check("triage scope: line-ending-only tracked dirt is accepted like freeze-target",
+          got.returncode == 0 and json.loads(got.stdout).get("head") == renorm_head, got.stdout + got.stderr)
+    (renorm_repo / "plain.txt").write_text("real edit\n")
+    got = run(triage, "scope", "--base", renorm_base, "--target", renorm_repo, env=env)
+    check("triage scope: a real tracked modification remains refused",
+          got.returncode == 2 and "tracked files" in got.stderr, got.stdout + got.stderr)
+
+
 # ------------------------------------------------ line-ending renormalization ----
 
 
@@ -6748,6 +7210,10 @@ def main():
     with tempfile.TemporaryDirectory() as td:
         test_common(Path(td))
     test_leg_cmd()
+    print("leg-cmd.sh triage gate and review-prompt input")
+    with tempfile.TemporaryDirectory() as td:
+        test_triage_launch_gate(Path(td))
+        test_review_prompt_input(Path(td))
     print("roster.py write lock")
     with tempfile.TemporaryDirectory() as td:
         test_roster_write_lock(Path(td))
@@ -6770,6 +7236,9 @@ def main():
     print("triage.py")
     with tempfile.TemporaryDirectory() as td:
         test_triage(Path(td))
+    print("triage.py range records and round-check")
+    with tempfile.TemporaryDirectory() as td:
+        test_triage_gate(Path(td))
 
     print("lint.py check_version")
     with tempfile.TemporaryDirectory() as td:

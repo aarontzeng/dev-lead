@@ -251,6 +251,9 @@ three runs per arm, the plain brief found 4 of the known defects and this
 frame 7; the plain brief answered broken claims "HOLDS" ([runtime
 file](references/opencode-runtime.md), calibration table).
 
+Before this recipe, complete the frozen-target triage step in dev-lead Phase 2;
+the review launcher requires its record for this exact commit.
+
 ```bash
 REVIEW_HEAD=$(git -C "$REVIEW_TARGET_DIR" rev-parse HEAD)   # at freeze time
 

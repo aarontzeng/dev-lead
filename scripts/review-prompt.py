@@ -2,7 +2,7 @@
 """Build a review leg's prompt from that adapter's adversarial framing.
 
 Usage: review-prompt.py --adapter <name> --base <rev> --target <frozen worktree>
-                        [--evidence <new dir>] < lens > prompt
+                        [--evidence <new dir>] [--lens-file <path>] < lens > prompt
 
 The lead's brief is the LENS; this wraps it in
 skills/<adapter>-adversarial-review/references/adversarial-framing.md. One pass
@@ -27,6 +27,7 @@ diff, the commit list and base/ describe different ranges.
 import argparse
 import os
 import re
+import select
 import stat
 import sys
 from pathlib import Path
@@ -158,9 +159,37 @@ def main(argv=None, prog="review-prompt"):
     ap.add_argument("--base", required=True)
     ap.add_argument("--target", required=True, help="the frozen worktree; HEAD is read from it")
     ap.add_argument("--evidence", help="new directory to materialize evidence into (no-command legs)")
+    ap.add_argument("--lens-file", help="read the lens from this file instead of stdin")
     args = ap.parse_args(argv)
-    lens = sys.stdin.read()
+    if args.lens_file:
+        try:
+            lens = Path(args.lens_file).read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as exc:
+            sys.exit("%s: cannot read --lens-file %s: %s" % (prog, args.lens_file, exc))
+    else:
+        if sys.stdin.isatty():
+            sys.exit("%s: stdin is a TTY; pipe the lens on stdin or pass --lens-file" % prog)
+        raw_wait = os.environ.get("DEV_LEAD_LENS_WAIT", "10")
+        try:
+            wait = float(raw_wait)
+            if wait < 0:
+                raise ValueError
+        except ValueError:
+            sys.exit("%s: DEV_LEAD_LENS_WAIT must be a non-negative number of seconds" % prog)
+        try:
+            readable, _writeable, _errors = select.select([sys.stdin], [], [], wait)
+        except (OSError, ValueError):
+            # Unit callers sometimes inject an in-memory stdin, which has no
+            # file descriptor to poll but is already readable by definition.
+            lens = sys.stdin.read()
+        else:
+            if not readable:
+                sys.exit("%s: no lens arrived on stdin within %ss" % (prog, raw_wait))
+            lens = sys.stdin.read()
     if not lens.strip():
+        if args.lens_file:
+            sys.exit("%s: empty lens from --lens-file %s -- refusing to build a prompt with no brief"
+                     % (prog, args.lens_file))
         sys.exit("%s: empty lens on stdin -- refusing to build a prompt with no brief" % prog)
     head = run_git(args.target, "rev-parse", "--verify", "HEAD", text=True)
     if head.returncode:

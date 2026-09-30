@@ -11,7 +11,7 @@
 # Usage:
 #   leg-cmd.sh <adapter> <role> --model <model> [--effort <e>] [--target <dir>]
 #              [--base <ref>] [--prompt-file <f>] [--run-dir <dir>]
-#              [--add-dir <dir> ...] [--check]
+#              [--add-dir <dir> ...] [--head <rev>] [--no-triage <reason>] [--check]
 #
 # Not every option applies to every adapter, and one that does not is REFUSED,
 # never dropped: --target/--base/--prompt-file only where the adapter's template
@@ -36,10 +36,10 @@ DATA="${DEV_LEAD_LAUNCH:-$HERE/../data/launch.json}"   # override: test seam onl
 [ -z "${DEV_LEAD_LAUNCH:-}" ] || echo "leg-cmd: launch data overridden by DEV_LEAD_LAUNCH=$DATA" >&2
 [ -f "$DATA" ] || die "cannot find data/launch.json at $DATA"
 
-[ $# -ge 2 ] || die "usage: leg-cmd.sh <adapter> <role> --model <model> [--effort <e>] [--target <dir>] [--base <ref>] [--prompt-file <f>] [--run-dir <dir>] [--add-dir <dir> ...] [--check]  (each option only where the adapter takes it; see the header of this script)"
+[ $# -ge 2 ] || die "usage: leg-cmd.sh <adapter> <role> --model <model> [--effort <e>] [--target <dir>] [--base <ref>] [--prompt-file <f>] [--run-dir <dir>] [--add-dir <dir> ...] [--head <rev>] [--no-triage <reason>] [--check]  (each option only where the adapter takes it; see the header of this script)"
 ADAPTER=$1; ROLE=$2; shift 2
 
-MODEL=""; EFFORT=""; TARGET=""; BASE=""; PROMPT_FILE=""; RUN_DIR_ARG=""; CHECK=0; ADD_DIRS=""
+MODEL=""; EFFORT=""; TARGET=""; BASE=""; PROMPT_FILE=""; RUN_DIR_ARG=""; HEAD=""; NO_TRIAGE=""; HEAD_GIVEN=0; NO_TRIAGE_GIVEN=0; CHECK=0; ADD_DIRS=""
 # Every value option checks its value is there before `shift 2`: under
 # `set -e`, `shift 2` with one argument left exits 1 with NO message, so a
 # trailing `--model` used to end the script silently (found 2026-09-25).
@@ -52,6 +52,8 @@ while [ $# -gt 0 ]; do
     --base)        needs_value "$@"; BASE=$2; shift 2 ;;
     --prompt-file) needs_value "$@"; PROMPT_FILE=$2; shift 2 ;;
     --run-dir)     needs_value "$@"; RUN_DIR_ARG=$2; shift 2 ;;
+    --head)        needs_value "$@"; HEAD=$2; HEAD_GIVEN=1; shift 2 ;;
+    --no-triage)   needs_value "$@"; NO_TRIAGE=$2; NO_TRIAGE_GIVEN=1; shift 2 ;;
     --add-dir)     [ -n "${2:-}" ] || die "--add-dir needs a directory"
                    case "$2" in -*) die "--add-dir: '$2' starts with '-' and would read as a flag; use ./$2" ;; esac
                    case "$2" in *$'\n'*) die "--add-dir: a directory name may not contain a newline" ;; esac
@@ -63,10 +65,17 @@ done
 [ -n "$MODEL" ] || die "--model is required (there is no safe default; the model IS the cross-family accounting decision)"
 
 ADAPTER="$ADAPTER" ROLE="$ROLE" MODEL="$MODEL" EFFORT="$EFFORT" TARGET="$TARGET" \
-BASE="$BASE" PROMPT_FILE="$PROMPT_FILE" RUN_DIR_ARG="$RUN_DIR_ARG" \
+BASE="$BASE" PROMPT_FILE="$PROMPT_FILE" RUN_DIR_ARG="$RUN_DIR_ARG" HEAD="$HEAD" NO_TRIAGE="$NO_TRIAGE" \
+HEAD_GIVEN="$HEAD_GIVEN" NO_TRIAGE_GIVEN="$NO_TRIAGE_GIVEN" \
 CHECK="$CHECK" DATA="$DATA" ADD_DIRS="$ADD_DIRS" HERE="$HERE" python3 - <<'PY'
 import json, os, shlex, sys
 
+# One absolute --target for everything below: the gate reads HEAD with
+# `git -C`, while the emitted command `cd`s (or passes -C) -- a relative path
+# would be re-resolved by the caller's shell (CDPATH, another cwd, `cd -`) and
+# could land in a tree other than the one the triage record was checked for.
+if os.environ.get("TARGET"):
+    os.environ["TARGET"] = os.path.abspath(os.environ["TARGET"])
 d = json.load(open(os.environ["DATA"]))
 a, role = os.environ["ADAPTER"], os.environ["ROLE"]
 if a not in d or a.startswith("_"):
@@ -191,6 +200,12 @@ for flag, ph in (("target", "{TARGET}"), ("base", "{BASE}"),
                  ("prompt-file", "{PROMPT_FILE}")):
     val = os.environ.get(flag.replace("-", "_").upper(), "")
     if val and ph not in template:
+        if flag == "prompt-file":
+            brief = "$RUN_DIR/%s" % ("task.md" if role == "implement" else "prompt.md")
+            sys.exit("leg-cmd: --prompt-file was given but %s/%s has no %s in its template, "
+                     "so it would be silently dropped.\n"
+                     "  this adapter reads its brief from %s; pass --run-dir."
+                     % (a, role, ph, brief))
         sys.exit("leg-cmd: --%s was given but %s/%s has no %s in its template, "
                  "so it would be silently dropped.\n"
                  "  this adapter runs in the CALLER's cwd -- cd into the frozen "
@@ -272,6 +287,122 @@ if frame:
     cmd = '%s < %s > "$RUN_DIR/framed-prompt.md" && %s' % (builder, BRIEF, cmd)
 elif r["prompt_delivery"] == "stdin":
     cmd += ' < %s' % BRIEF
+
+
+# Review launches must be tied to a triage record for the exact commit. The
+# lookup is deliberately here, after every existing argument refusal and just
+# before output: an invalid launch must keep its established diagnostic.
+def _triage_gate():
+    head_given = os.environ.get("HEAD_GIVEN") == "1"
+    skip_given = os.environ.get("NO_TRIAGE_GIVEN") == "1"
+    if role != "review":
+        if head_given or skip_given:
+            bad = "--head" if head_given else "--no-triage"
+            sys.exit("leg-cmd: %s is only valid for the review role" % bad)
+        return
+    if skip_given:
+        reason = os.environ.get("NO_TRIAGE", "")
+        if not reason.strip() or reason.startswith("-"):
+            sys.exit("leg-cmd: --no-triage needs a non-empty reason that does not start with '-'")
+
+    import importlib.util as _ilu_triage
+    from datetime import datetime, timezone
+    from pathlib import Path
+
+    here = os.environ["HERE"]
+    if here not in sys.path:
+        sys.path.insert(0, here)
+    spec = _ilu_triage.spec_from_file_location("dev_lead_triage_gate", os.path.join(here, "triage.py"))
+    triage = _ilu_triage.module_from_spec(spec)
+    spec.loader.exec_module(triage)
+    # A target-owning adapter reviews its target; every other adapter reviews
+    # the caller's cwd. --head is an assertion about that same directory, not
+    # a substitute commit identity that could authorize another worktree.
+    repo = Path(os.environ.get("TARGET") or os.getcwd())
+    try:
+        head = triage._git(repo, "rev-parse", "--verify", "HEAD").strip()
+    except triage.InputError:
+        sys.exit("leg-cmd: cannot read the reviewed HEAD in %s; cd into the frozen worktree "
+                 "(adapters without --target run in the caller's cwd) or pass --target where this adapter takes it"
+                 % repo)
+    if head_given:
+        try:
+            asserted = triage._git(repo, "rev-parse", "--verify",
+                                   os.environ.get("HEAD", "") + "^{commit}").strip()
+        except triage.InputError:
+            sys.exit("leg-cmd: cannot resolve --head %r in %s" % (os.environ.get("HEAD", ""), repo))
+        if asserted != head:
+            sys.exit("leg-cmd: --head assertion %s does not match reviewed HEAD %s in %s"
+                     % (asserted, head, repo))
+    print("# triage checked HEAD %s" % head, file=sys.stderr)
+
+    if skip_given:
+        skip = {"sha": head, "adapter": a, "model": os.environ["MODEL"], "role": role,
+                "reason": os.environ["NO_TRIAGE"],
+                "recorded_at": datetime.now(timezone.utc).isoformat()}
+        destination = triage.records_path() / "skips.jsonl"
+        try:
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            with destination.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(skip, sort_keys=True) + "\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+        except OSError as exc:
+            sys.exit("leg-cmd: cannot record --no-triage at %s: %s" % (destination, exc))
+        print("# triage SKIPPED for %s: %s" % (head, skip["reason"]), file=sys.stderr)
+        return
+
+    rules_path = triage.triage_path()
+    if not rules_path.is_file():
+        sys.exit("leg-cmd: triage rules file is missing: %s\n"
+                 "  run triage.py init (then edit it), then triage.py scope --base <base> --target <frozen dir>, "
+                 "or --no-triage '<reason>'" % rules_path)
+    record_path = triage.records_path() / (head + ".json")
+    try:
+        record = json.loads(record_path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        sys.exit("leg-cmd: no triage record for %s\n"
+                 "  run triage.py scope --base <base> --target <frozen dir> (or triage.py change <number>), "
+                 "or --no-triage '<reason>'; going below the triage suggestion needs the owner's word and the reason is recorded."
+                 % head)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        sys.exit("leg-cmd: cannot read triage record %s: %s" % (record_path, exc))
+    if not isinstance(record, dict):
+        sys.exit("leg-cmd: triage record %s must be a JSON object" % record_path)
+    required = ("risk_floor", "min_review_legs", "lenses", "recorded_at")
+    missing_record = [key for key in required if key not in record]
+    if missing_record:
+        sys.exit("leg-cmd: triage record %s lacks %s" % (record_path, ", ".join(missing_record)))
+    record_base = record.get("base")
+    if "base" in record and not (isinstance(record_base, str) and len(record_base) == 40
+                                 and all(c in "0123456789abcdef" for c in record_base)):
+        sys.exit("leg-cmd: triage record %s has a malformed base %r; re-run triage" % (record_path, record_base))
+    launch_base = os.environ.get("BASE", "")
+    if launch_base and record_base:
+        try:
+            resolved_base = triage._git(repo, "rev-parse", "--verify", launch_base + "^{commit}").strip()
+        except triage.InputError:
+            sys.exit("leg-cmd: cannot resolve --base %r in %s" % (launch_base, repo))
+        if resolved_base != record_base:
+            sys.exit("leg-cmd: triage record base %s does not match launch base %s in %s; run "
+                     "triage.py scope --base %s --target %s"
+                     % (record_base, resolved_base, repo, resolved_base, repo))
+    lens_entries = record["lenses"] if isinstance(record.get("lenses"), list) else []
+    lenses = ", ".join(str(item.get("name")) for item in lens_entries if isinstance(item, dict)) or "(none)"
+    print("# triage %s risk=%s min_review_legs=%s lenses=%s recorded_at=%s"
+          % (head[:12], record["risk_floor"], record["min_review_legs"], lenses, record["recorded_at"]),
+          file=sys.stderr)
+    try:
+        current, raw, path = triage.load_config(rules_path)
+    except triage.InputError as exc:
+        print("# triage WARNING: cannot compare current rules (%s); re-run triage" % exc, file=sys.stderr)
+        return
+    rules = record.get("rules")
+    if (rules.get("sha256") if isinstance(rules, dict) else None) != triage.rules_identity(current, raw, path)["sha256"]:
+        print("# triage WARNING: rules changed since this record; re-run triage", file=sys.stderr)
+
+
+_triage_gate()
 
 w = sys.stderr
 print("# adapter %s / role %s   (data/launch.json, verified %s)" % (a, role, spec["verified"]), file=w)
