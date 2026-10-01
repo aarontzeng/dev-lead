@@ -5187,6 +5187,305 @@ def test_triage(tmp):
     template = SCRIPTS.parent / "templates" / "triage.example.json"
     got = checked(template)
     check("triage check: template passes", got.returncode == 0 and got.stdout == "", got.stdout + got.stderr)
+    # The template is what `init` gives a new user, and since 0.6.54 every review
+    # launch needs it. Pin the three tiers it promises, and that no trigger uses a
+    # bare ** glob: that would count as covering every file and hide unmatched_files.
+    template_doc = json.loads(template.read_text())
+    import importlib.util as _tpl_ilu
+    _tpl_spec = _tpl_ilu.spec_from_file_location("triage_template_probe", triage)
+    _tpl_triage = _tpl_ilu.module_from_spec(_tpl_spec)
+    _tpl_spec.loader.exec_module(_tpl_triage)
+    probe = "zz-probe/unlikely-name.qqq"
+    check("triage template: no delta trigger glob matches every file (unmatched_files would go blind)",
+          not [t["glob"] for t in template_doc["delta_triggers"] if _tpl_triage.glob_matches(t["glob"], probe)],
+          [t["glob"] for t in template_doc["delta_triggers"] if _tpl_triage.glob_matches(t["glob"], probe)])
+    template_env = _roster_env(tmp, DEV_LEAD_ROSTER=roster_file, DEV_LEAD_TRIAGE=template)
+    for files, risk, unmatched in ((["README.md"], "MEDIUM", []),
+                                   (["src/auth/login.py"], "HIGH", []),
+                                   (["db/migrations/001_init.sql"], "HIGH", []),
+                                   (["assets/logo.xyz"], "MEDIUM", ["assets/logo.xyz"])):
+        got = run(triage, "scope", "--files", *files, env=template_env)
+        scoped = json.loads(got.stdout) if got.returncode == 0 else {}
+        check("triage template: %s is %s with unmatched %s" % (files[0], risk, unmatched),
+              scoped.get("risk_floor") == risk and scoped.get("unmatched_files") == unmatched,
+              got.stdout + got.stderr)
+    # Content triggers only fire on a committed range (`scope --files` never reads
+    # added lines), so each one is pinned through --base/--target with a line it
+    # must raise and a look-alike it must not.
+    tpl_home = tmp / "template-range"
+    tpl_home.mkdir()
+    tpl_rules = tpl_home / "triage.json"
+    tpl_rules.write_bytes(template.read_bytes())
+    tpl_repo = tpl_home / "repo"
+    tpl_base = make_repo(tpl_repo)[0]
+    tpl_env = _roster_env(tmp, DEV_LEAD_ROSTER=roster_file, DEV_LEAD_TRIAGE=tpl_rules)
+    samples = (
+        ("settings.py", 'SECRET_KEY = "django-insecure-abc123"', "HIGH"),
+        ("config/app.yaml", "db_password: hunter2xx", "HIGH"),
+        ("config/app.json", '{"api_key": "abcdef123456"}', "HIGH"),
+        (".env.local", "ACCESS_TOKEN=abcdef123456", "HIGH"),
+        ("api/schema.json", '{"password": {"type": "string"}}', "MEDIUM"),
+        ("deploy/k8s-values.yml", "secret: &secret_name", "MEDIUM"),
+        ("app/limits.py", "max_tokens = 4096", "MEDIUM"),
+        ("worker.py", "from concurrent.futures import ThreadPoolExecutor", "HIGH"),
+        ("main.go", "go handle(ctx)", "HIGH"),
+        ("lib.rs", "thread::spawn(|| work());", "HIGH"),
+        ("Pool.java", "ExecutorService pool = make();", "HIGH"),
+        ("scripts/clean.sh", "rm -r -f /tmp/build", "HIGH"),
+        ("Makefile", "clean:\n\trm -rf $(DIST)", "HIGH"),
+        ("scripts/push.sh", "git push --force-with-lease origin topic", "MEDIUM"),
+        (".github/workflows/ci.yml", "permissions:\n  id-token: write", "HIGH"),
+        (".github/workflows/lint.yml", "permissions:\n  contents: read\nenv:\n  T: ${{ secrets.GITHUB_TOKEN }}", "MEDIUM"),
+        ("app.Dockerfile", "RUN wget -qO- https://x.example/i.sh | sudo bash", "HIGH"),
+        ("Dockerfile", "USER 0", "HIGH"),
+        ("security/session.py", "x = 1", "HIGH"),
+        ("crypto/keys.py", "x = 1", "HIGH"),
+        ("billing/charge.py", "x = 1", "HIGH"),
+        ("db/migrate/001_init.rb", "x = 1", "HIGH"),
+    )
+    # Every rule, not just a sample of them: an in-process table drives
+    # _lenses_and_triggers with one added line per case, so each path-only glob,
+    # each credential glob and each alternative of each content regex has a line
+    # that must raise it, and each known look-alike a line that must not.
+    def tpl_risk(path, line):
+        return _tpl_triage._lenses_and_triggers(template_doc, [path], {path: ([line], [])}, [])[1]
+
+    # Fixed sample paths, written here rather than derived from the template:
+    # a sample built from a rule's own glob follows that glob when it is
+    # renamed, and could never fail (a mutant proved it).
+    for sample in ("auth/x.py", "pkg/auth/x.py", "security/x.py", "pkg/security/x.py",
+                   "crypto/x.py", "pkg/crypto/x.py", "migrations/001.sql", "app/migrations/001.sql",
+                   "db/migrate/001_init.rb", "app/db/migrate/001_init.rb", "db/migration/V1__init.sql",
+                   "app/db/migration/V1__init.sql", "alembic/versions/abc.py", "app/alembic/versions/abc.py",
+                   "billing/charge.py", "app/billing/charge.py", "payments/refund.py", "app/payments/refund.py",
+                   "notifications/send.py", "app/notifications/send.py"):
+        check("triage template: path %s is HIGH by path alone" % sample,
+              _tpl_triage._lenses_and_triggers(template_doc, [sample], {sample: ([], [])}, [])[1] == "HIGH")
+    for sample in (".env", ".env.local", "cfg/a.yml", "cfg/a.yaml", "cfg/a.json", "cfg/a.toml", "cfg/a.ini",
+                   "cfg/a.conf", "cfg/a.properties"):
+        check("triage template: a credential value in %s is HIGH" % sample,
+              tpl_risk(sample, "db_password: hunter2xx") == "HIGH")
+    for sample in ("src/a.tf", "src/a.py", "src/a.js", "src/a.ts", "src/a.go", "src/a.java", "src/a.rb",
+                   "src/a.php", "src/a.sh"):
+        check("triage template: a credential literal in %s is HIGH" % sample,
+              tpl_risk(sample, 'api_key = "abcdef123456"') == "HIGH")
+    lens_corpus = (
+        '.circleci/a.txt',
+        '.env',
+        '.env.local',
+        '.github/workflows/a.txt',
+        'Dockerfile',
+        'Jenkinsfile',
+        '__tests__/a.txt',
+        'alembic/versions/a.txt',
+        'app.Dockerfile',
+        'auth/a.txt',
+        'billing/a.txt',
+        'charts/a.txt',
+        'compose.override.yaml',
+        'compose.override.yml',
+        'crypto/a.txt',
+        'db/migrate/a.txt',
+        'db/migration/a.txt',
+        'docker-compose.yaml',
+        'docker-compose.yml',
+        'docs/adr/a.txt',
+        'docs/decisions/a.txt',
+        'docs/spec/a.md',
+        'k8s/a.txt',
+        'migrations/a.txt',
+        'notifications/a.txt',
+        'payments/a.txt',
+        'pkg/__tests__/a.txt',
+        'pkg/a_test.go',
+        'pkg/a_test.py',
+        'pkg/alembic/versions/a.txt',
+        'pkg/auth/a.txt',
+        'pkg/billing/a.txt',
+        'pkg/charts/a.txt',
+        'pkg/crypto/a.txt',
+        'pkg/db/migrate/a.txt',
+        'pkg/db/migration/a.txt',
+        'pkg/k8s/a.txt',
+        'pkg/migrations/a.txt',
+        'pkg/notifications/a.txt',
+        'pkg/payments/a.txt',
+        'pkg/security/a.txt',
+        'pkg/test/a.txt',
+        'pkg/tests/a.txt',
+        'requirements-dev.txt',
+        'requirements/*.txt',
+        'security/a.txt',
+        'src/a.c',
+        'src/a.cc',
+        'src/a.cmake',
+        'src/a.conf',
+        'src/a.cpp',
+        'src/a.cs',
+        'src/a.csproj',
+        'src/a.go',
+        'src/a.gradle',
+        'src/a.gradle.kts',
+        'src/a.graphql',
+        'src/a.h',
+        'src/a.hpp',
+        'src/a.ini',
+        'src/a.java',
+        'src/a.js',
+        'src/a.json',
+        'src/a.jsx',
+        'src/a.kt',
+        'src/a.md',
+        'src/a.mk',
+        'src/a.php',
+        'src/a.properties',
+        'src/a.proto',
+        'src/a.ps1',
+        'src/a.py',
+        'src/a.rb',
+        'src/a.rs',
+        'src/a.service',
+        'src/a.sh',
+        'src/a.sln',
+        'src/a.sql',
+        'src/a.svelte',
+        'src/a.swift',
+        'src/a.tf',
+        'src/a.tfvars',
+        'src/a.toml',
+        'src/a.ts',
+        'src/a.tsx',
+        'src/a.vue',
+        'src/a.xml',
+        'src/a.yaml',
+        'src/a.yml',
+        'sub/.gitlab-ci.yml',
+        'sub/CMakeLists.txt',
+        'sub/Cargo.lock',
+        'sub/Cargo.toml',
+        'sub/Containerfile',
+        'sub/GNUmakefile',
+        'sub/Gemfile',
+        'sub/Gemfile.lock',
+        'sub/Makefile',
+        'sub/Pipfile',
+        'sub/Pipfile.lock',
+        'sub/compose.yaml',
+        'sub/compose.yml',
+        'sub/go.mod',
+        'sub/go.sum',
+        'sub/makefile',
+        'sub/meson.build',
+        'sub/package-lock.json',
+        'sub/package.json',
+        'sub/pnpm-lock.yaml',
+        'sub/poetry.lock',
+        'sub/pom.xml',
+        'sub/pyproject.toml',
+        'sub/uv.lock',
+        'sub/yarn.lock',
+        'test/a.txt',
+        'tests/a.txt',
+        'tests_x/test_a.py',
+        'web/a.spec.js',
+        'web/a.spec.ts',
+        'web/a.test.js',
+        'web/a.test.ts',
+    )
+    # One fixed file per lens rule (written out, not derived from the globs):
+    # renaming or dropping a lens rule leaves its file with no lens, and turns
+    # this check red even where a trigger glob still covers the file.
+    lensless = [path for path in lens_corpus
+                if not any(_tpl_triage.glob_matches(rule["glob"], path) for rule in template_doc["lenses"])]
+    check("triage template: every lens-corpus file gets a lens (%d files)" % len(lens_corpus), not lensless, lensless)
+    table = [
+        # docs/spec status flip (the original example)
+        ("docs/spec/a.md", "Status: Verified", "HIGH"), ("docs/spec/a.md", "Status: Open", "MEDIUM"),
+        # credential names: every alternative, config and code
+        ("cfg/a.yaml", "api_key: abcdef123456", "HIGH"), ("cfg/a.yaml", "apikey: abcdef123456", "HIGH"),
+        ("cfg/a.yaml", "api-key: abcdef123456", "HIGH"), ("cfg/a.yaml", "client_secret: abcdef123456", "HIGH"),
+        ("cfg/a.yaml", "passwd: abcdef123456", "HIGH"), ("cfg/a.yaml", "private_key: abcdef123456", "HIGH"),
+        ("cfg/a.yaml", "auth_token: abcdef123456", "HIGH"), ("cfg/a.yaml", "refresh_token: abcdef123456", "HIGH"),
+        (".env", "GITHUB_TOKEN=ghp_abcdefghijkl", "HIGH"), (".env", "TOKEN=ghp_abcdefghijkl", "HIGH"),
+        (".env", "DB_PASSWORD=$2b$12$N9qo8uLOickgx2ZMRZoMye", "HIGH"),
+        ("src/a.py", 'token = "ghp_abcdef"', "HIGH"), ("src/a.go", "apiKey := `s3cr3tvalue`", "HIGH"),
+        ("src/a.py", 'private_key = "abcdef123456"', "HIGH"), ("src/a.py", 'passwd = "abcdef"', "HIGH"),
+        ("src/a.py", 'client_secret = "abcdef"', "HIGH"),
+        ("src/a.py", 'max_tokens = "4096"', "MEDIUM"),
+
+        ("config/a.yaml", 'db_password: "p@$$w0rd"', "HIGH"),
+        ("cmd/main.go", 'apiKey := "abcdef123456"', "HIGH"),
+        ("app/settings.py", 'api_key = f"abcdef123456"', "HIGH"),
+        ("app/settings.py", 'password = "admin"', "HIGH"),
+        # credentials: look-alikes that must not
+        ("api/schema.json", '{"password": {"type": "string"}}', "MEDIUM"),
+        ("deploy/values.yaml", "secret: &secret_name", "MEDIUM"),
+        ("deploy/values.yaml", "db_password: ${DB_PASSWORD}", "MEDIUM"),
+        ("deploy/oauth.yaml", "token_type: Bearer", "MEDIUM"),
+        ("config/a.yaml", "password_hint: pet", "MEDIUM"),
+        ("app/limits.py", "max_tokens = 4096", "MEDIUM"),
+        (".envrc", "API_KEY=abcdef123456", "MEDIUM"),
+        # concurrency: every alternative
+        ("w.py", "import threading", "HIGH"), ("w.py", "import multiprocessing", "HIGH"),
+        ("w.py", "import asyncio", "HIGH"), ("w.py", "from concurrent.futures import wait", "HIGH"),
+        ("w.py", "pool = ProcessPoolExecutor()", "HIGH"), ("w.py", "async def fetch():", "HIGH"),
+        ("w.py", "lock = Lock()", "HIGH"), ("w.py", "pool = ThreadPoolExecutor()", "HIGH"),
+        ("m.go", "go func() { run() }()", "HIGH"), ("m.go", "go worker.Run(ctx)", "HIGH"),
+        ("m.go", "g.Go(func() error { return fetch() })", "HIGH"), ("m.go", "var mu sync.Mutex", "HIGH"),
+        ("m.go", "done := make(chan bool)", "HIGH"), ("m.go", "var rw sync.RWMutex", "HIGH"),
+        ("m.go", "var wg sync.WaitGroup", "HIGH"), ("m.go", "var once sync.Once", "HIGH"),
+        ("m.go", "g.Go(fetchUser)", "HIGH"),
+        ("P.java", "synchronized (this) {", "HIGH"), ("P.java", "import java.util.concurrent.locks.Lock;", "HIGH"),
+        ("P.java", "ExecutorService pool = make();", "HIGH"), ("P.java", "var p = Executors.newFixedThreadPool(4);", "HIGH"),
+        ("P.java", "CompletableFuture<Void> f = run();", "HIGH"), ("P.java", "new Thread(task).start();", "HIGH"),
+        ("P.java", "import java.util.concurrent.TimeUnit;", "MEDIUM"),
+        ("l.rs", "let m = Mutex::new(0);", "HIGH"), ("l.rs", "let l = RwLock::new(0);", "HIGH"),
+        ("l.rs", "std::thread::scope(|s| s.spawn(|| work()));", "HIGH"), ("l.rs", "tokio::spawn(work());", "HIGH"),
+        ("l.rs", "task::spawn(work());", "HIGH"), ("l.rs", "thread::spawn(|| work());", "HIGH"),
+        ("l.rs", "tokio::task::spawn_blocking(|| work());", "HIGH"), ("l.rs", "task::scope(|s| run(s));", "HIGH"),
+        ("l.rs", "tokio::scope(run);", "HIGH"),
+        # destructive commands: every alternative, and the safe push
+        ("s.sh", "rm -rf build", "HIGH"), ("s.sh", "rm -r -f build", "HIGH"), ("s.sh", "rm -fr build", "HIGH"),
+        ("s.sh", "rm --recursive build", "HIGH"), ("s.sh", "git push --force origin t", "HIGH"),
+        ("s.sh", "git push -f origin t", "HIGH"), ("s.sh", "git push -uf origin HEAD", "HIGH"),
+        ("s.sh", "git push -fu origin main", "HIGH"),
+        ("s.sh", "dd if=/dev/zero of=disk.img", "HIGH"), ("s.sh", "mkfs.ext4 disk.img", "HIGH"),
+        ("s.sh", "git push --force-with-lease origin t", "MEDIUM"), ("s.sh", "rm notes.txt", "MEDIUM"),
+        ("Makefile", "\trm -rf $(DIST)", "HIGH"), ("makefile", "\trm -rf $(DIST)", "HIGH"),
+        ("GNUmakefile", "\trm -rf $(DIST)", "HIGH"), ("rules.mk", "\trm -rf $(DIST)", "HIGH"),
+        # workflow privileges: every alternative, and the ordinary lines
+        (".github/workflows/x.yml", "on: pull_request_target", "HIGH"),
+        (".github/workflows/x.yml", "permissions: write-all", "HIGH"),
+        (".github/workflows/x.yml", "  id-token: write", "HIGH"),
+        (".github/workflows/x.yml", '  contents: "write"', "HIGH"),
+        (".github/workflows/x.yml", "permissions: { contents: write }", "HIGH"),
+        (".github/workflows/x.yml", "  packages: write  # publish", "HIGH"),
+        (".github/workflows/x.yml", "  T: ${{ secrets.MY_TOKEN }}", "HIGH"),
+        (".github/workflows/x.yml", "  T: ${{ secrets.GITHUB_TOKEN }}", "MEDIUM"),
+        (".github/workflows/x.yml", "  contents: read", "MEDIUM"),
+        (".github/workflows/x.yml", "  - name: write release notes", "MEDIUM"),
+        # containers: every alternative and every glob
+        ("Dockerfile", "USER root", "HIGH"), ("Dockerfile", "USER 0", "HIGH"),
+        ("Dockerfile", "RUN curl -fsSL https://x.example/i.sh | sh", "HIGH"),
+        ("Dockerfile", "RUN curl -fsSL https://x.example/i.sh | bash", "HIGH"),
+        ("app.Dockerfile", "RUN wget -qO- https://x.example/i.sh | sudo bash", "HIGH"),
+        ("Containerfile", "USER root", "HIGH"), ("Dockerfile", "USER app", "MEDIUM"),
+    ]
+    for path, line, risk in table:
+        check("triage template: %r in %s is %s" % (line, path, risk), tpl_risk(path, line) == risk,
+              tpl_risk(path, line))
+
+    for index, (path, body, risk) in enumerate(samples):
+        git(tpl_repo, "checkout", "-q", "-B", "sample-%d" % index, tpl_base)
+        target = tpl_repo / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(body.replace("\\n", "\n").replace("\\t", "\t") + "\n")
+        git(tpl_repo, "add", "-A", "-f")
+        git(tpl_repo, "commit", "-qm", "sample %d" % index)
+        got = run(triage, "scope", "--base", tpl_base, "--target", tpl_repo, env=tpl_env)
+        scoped = json.loads(got.stdout) if got.returncode == 0 else {}
+        check("triage template: an added %r in %s is %s" % (body[:40], path, risk),
+              scoped.get("risk_floor") == risk, got.stdout[-400:] + got.stderr)
     got = checked(config_file)
     check("triage check: test config passes", got.returncode == 0 and got.stdout == "", got.stdout + got.stderr)
     expect_bad("unknown-key", lambda doc: doc.update({"typo": 1}), "unknown key")

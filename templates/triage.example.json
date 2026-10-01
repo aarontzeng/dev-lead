@@ -1,11 +1,17 @@
 {
   "_comment": [
-    "Copy this machine-local file beside roster.json, then replace every example value.",
-    "Glob semantics: ** matches any characters including /; * and ? do not cross /; a pattern without / matches the basename only.",
+    "Copy this machine-local file beside roster.json (`triage.py init` does it), then adapt it: drop the ecosystems you do not use, add your own paths. Every name and path under me / gerrit / clones / gateways / order is an example value.",
+    "Glob semantics: ** matches any characters including /; * and ? do not cross /; a pattern without / matches the basename only. `**/tests/**` needs a directory before tests/, so top-level paths get their own `tests/**` rule.",
+    "risk_default MEDIUM: any change gets two review legs unless you lower it. delta_triggers only RAISE, here to HIGH, for part of dev-lead SKILL.md's HIGH list: auth/security/crypto, migration, billing/payments and notifications paths (path alone), and added lines that look like a credential, a concurrency primitive, a destructive command, a CI write permission or secret, or a root/piped-installer container. They are examples for the file kinds named in each rule: extend them to your languages, and add your own partial-failure paths (retries, queues, offline sync). Lower risk_default to LOW only once your triggers raise every behaviour-changing path.",
+    "Each trigger takes one glob, so a rule for several file kinds is repeated per glob. Never give a trigger a glob that matches every file (** or *): unmatched_files counts trigger globs as coverage, so it would hide every gap.",
+    "lenses map file kinds to review lenses (the brief each leg gets); a file no lens or trigger covers is listed in unmatched_files -- a gap worth a rule.",
     "gerrit, clones and gateways are read only by `change`; a file used for `scope` alone may leave them out."
   ],
   "version": 1,
-  "me": ["alice", "alice@example.com"],
+  "me": [
+    "alice",
+    "alice@example.com"
+  ],
   "gerrit": {
     "ssh": "alice@gerrit.example.com",
     "port": 29418
@@ -19,13 +25,866 @@
   },
   "lens_classes": {
     "consistency": "mechanical",
-    "falsifiability": "judgment"
+    "build-config": "mechanical",
+    "falsifiability": "judgment",
+    "correctness": "judgment",
+    "test-falsifiability": "judgment",
+    "ops-safety": "judgment",
+    "supply-chain": "judgment",
+    "infra-safety": "judgment",
+    "migration-safety": "judgment",
+    "security": "judgment",
+    "concurrency": "judgment",
+    "money": "judgment",
+    "delivery": "judgment"
   },
   "lenses": [
     {
       "glob": "docs/spec/*.md",
-      "lenses": ["consistency"],
+      "lenses": [
+        "consistency"
+      ],
       "why": "Specifications need consistency checks."
+    },
+    {
+      "glob": "*.md",
+      "lenses": [
+        "consistency"
+      ],
+      "why": "Prose must agree with the code and with its other copies."
+    },
+    {
+      "glob": "docs/adr/**",
+      "lenses": [
+        "consistency"
+      ],
+      "why": "A decision record must agree with the code it governs."
+    },
+    {
+      "glob": "docs/decisions/**",
+      "lenses": [
+        "consistency"
+      ],
+      "why": "A decision record must agree with the code it governs."
+    },
+    {
+      "glob": "*.py",
+      "lenses": [
+        "correctness"
+      ],
+      "why": "Source code: does it do what the change claims, on every path?"
+    },
+    {
+      "glob": "*.js",
+      "lenses": [
+        "correctness"
+      ],
+      "why": "Source code: does it do what the change claims, on every path?"
+    },
+    {
+      "glob": "*.jsx",
+      "lenses": [
+        "correctness"
+      ],
+      "why": "Source code: does it do what the change claims, on every path?"
+    },
+    {
+      "glob": "*.ts",
+      "lenses": [
+        "correctness"
+      ],
+      "why": "Source code: does it do what the change claims, on every path?"
+    },
+    {
+      "glob": "*.tsx",
+      "lenses": [
+        "correctness"
+      ],
+      "why": "Source code: does it do what the change claims, on every path?"
+    },
+    {
+      "glob": "*.vue",
+      "lenses": [
+        "correctness"
+      ],
+      "why": "Source code: does it do what the change claims, on every path?"
+    },
+    {
+      "glob": "*.svelte",
+      "lenses": [
+        "correctness"
+      ],
+      "why": "Source code: does it do what the change claims, on every path?"
+    },
+    {
+      "glob": "*.go",
+      "lenses": [
+        "correctness"
+      ],
+      "why": "Source code: does it do what the change claims, on every path?"
+    },
+    {
+      "glob": "*.rs",
+      "lenses": [
+        "correctness"
+      ],
+      "why": "Source code: does it do what the change claims, on every path?"
+    },
+    {
+      "glob": "*.java",
+      "lenses": [
+        "correctness"
+      ],
+      "why": "Source code: does it do what the change claims, on every path?"
+    },
+    {
+      "glob": "*.kt",
+      "lenses": [
+        "correctness"
+      ],
+      "why": "Source code: does it do what the change claims, on every path?"
+    },
+    {
+      "glob": "*.c",
+      "lenses": [
+        "correctness"
+      ],
+      "why": "Source code: does it do what the change claims, on every path?"
+    },
+    {
+      "glob": "*.h",
+      "lenses": [
+        "correctness"
+      ],
+      "why": "Source code: does it do what the change claims, on every path?"
+    },
+    {
+      "glob": "*.cc",
+      "lenses": [
+        "correctness"
+      ],
+      "why": "Source code: does it do what the change claims, on every path?"
+    },
+    {
+      "glob": "*.cpp",
+      "lenses": [
+        "correctness"
+      ],
+      "why": "Source code: does it do what the change claims, on every path?"
+    },
+    {
+      "glob": "*.hpp",
+      "lenses": [
+        "correctness"
+      ],
+      "why": "Source code: does it do what the change claims, on every path?"
+    },
+    {
+      "glob": "*.cs",
+      "lenses": [
+        "correctness"
+      ],
+      "why": "Source code: does it do what the change claims, on every path?"
+    },
+    {
+      "glob": "*.rb",
+      "lenses": [
+        "correctness"
+      ],
+      "why": "Source code: does it do what the change claims, on every path?"
+    },
+    {
+      "glob": "*.php",
+      "lenses": [
+        "correctness"
+      ],
+      "why": "Source code: does it do what the change claims, on every path?"
+    },
+    {
+      "glob": "*.swift",
+      "lenses": [
+        "correctness"
+      ],
+      "why": "Source code: does it do what the change claims, on every path?"
+    },
+    {
+      "glob": "*.sh",
+      "lenses": [
+        "correctness"
+      ],
+      "why": "Source code: does it do what the change claims, on every path?"
+    },
+    {
+      "glob": "*.ps1",
+      "lenses": [
+        "correctness"
+      ],
+      "why": "Source code: does it do what the change claims, on every path?"
+    },
+    {
+      "glob": "*.sql",
+      "lenses": [
+        "correctness"
+      ],
+      "why": "Source code: does it do what the change claims, on every path?"
+    },
+    {
+      "glob": "tests/**",
+      "lenses": [
+        "test-falsifiability"
+      ],
+      "why": "A test must be able to fail: name the change that would still pass it."
+    },
+    {
+      "glob": "**/tests/**",
+      "lenses": [
+        "test-falsifiability"
+      ],
+      "why": "A test must be able to fail: name the change that would still pass it."
+    },
+    {
+      "glob": "test/**",
+      "lenses": [
+        "test-falsifiability"
+      ],
+      "why": "A test must be able to fail: name the change that would still pass it."
+    },
+    {
+      "glob": "**/test/**",
+      "lenses": [
+        "test-falsifiability"
+      ],
+      "why": "A test must be able to fail: name the change that would still pass it."
+    },
+    {
+      "glob": "__tests__/**",
+      "lenses": [
+        "test-falsifiability"
+      ],
+      "why": "A test must be able to fail: name the change that would still pass it."
+    },
+    {
+      "glob": "**/__tests__/**",
+      "lenses": [
+        "test-falsifiability"
+      ],
+      "why": "A test must be able to fail: name the change that would still pass it."
+    },
+    {
+      "glob": "test_*.py",
+      "lenses": [
+        "test-falsifiability"
+      ],
+      "why": "A test must be able to fail: name the change that would still pass it."
+    },
+    {
+      "glob": "*_test.py",
+      "lenses": [
+        "test-falsifiability"
+      ],
+      "why": "A test must be able to fail: name the change that would still pass it."
+    },
+    {
+      "glob": "*_test.go",
+      "lenses": [
+        "test-falsifiability"
+      ],
+      "why": "A test must be able to fail: name the change that would still pass it."
+    },
+    {
+      "glob": "*.test.js",
+      "lenses": [
+        "test-falsifiability"
+      ],
+      "why": "A test must be able to fail: name the change that would still pass it."
+    },
+    {
+      "glob": "*.test.ts",
+      "lenses": [
+        "test-falsifiability"
+      ],
+      "why": "A test must be able to fail: name the change that would still pass it."
+    },
+    {
+      "glob": "*.spec.js",
+      "lenses": [
+        "test-falsifiability"
+      ],
+      "why": "A test must be able to fail: name the change that would still pass it."
+    },
+    {
+      "glob": "*.spec.ts",
+      "lenses": [
+        "test-falsifiability"
+      ],
+      "why": "A test must be able to fail: name the change that would still pass it."
+    },
+    {
+      "glob": ".github/workflows/**",
+      "lenses": [
+        "ops-safety"
+      ],
+      "why": "CI and container files run with credentials and write to shared systems."
+    },
+    {
+      "glob": ".gitlab-ci.yml",
+      "lenses": [
+        "ops-safety"
+      ],
+      "why": "CI and container files run with credentials and write to shared systems."
+    },
+    {
+      "glob": "Jenkinsfile*",
+      "lenses": [
+        "ops-safety"
+      ],
+      "why": "CI and container files run with credentials and write to shared systems."
+    },
+    {
+      "glob": ".circleci/**",
+      "lenses": [
+        "ops-safety"
+      ],
+      "why": "CI and container files run with credentials and write to shared systems."
+    },
+    {
+      "glob": "Dockerfile*",
+      "lenses": [
+        "ops-safety"
+      ],
+      "why": "CI and container files run with credentials and write to shared systems."
+    },
+    {
+      "glob": "*.Dockerfile",
+      "lenses": [
+        "ops-safety"
+      ],
+      "why": "CI and container files run with credentials and write to shared systems."
+    },
+    {
+      "glob": "Containerfile",
+      "lenses": [
+        "ops-safety"
+      ],
+      "why": "CI and container files run with credentials and write to shared systems."
+    },
+    {
+      "glob": "docker-compose*.yml",
+      "lenses": [
+        "ops-safety"
+      ],
+      "why": "CI and container files run with credentials and write to shared systems."
+    },
+    {
+      "glob": "docker-compose*.yaml",
+      "lenses": [
+        "ops-safety"
+      ],
+      "why": "CI and container files run with credentials and write to shared systems."
+    },
+    {
+      "glob": "compose.yml",
+      "lenses": [
+        "ops-safety"
+      ],
+      "why": "CI and container files run with credentials and write to shared systems."
+    },
+    {
+      "glob": "compose.yaml",
+      "lenses": [
+        "ops-safety"
+      ],
+      "why": "CI and container files run with credentials and write to shared systems."
+    },
+    {
+      "glob": "compose.*.yml",
+      "lenses": [
+        "ops-safety"
+      ],
+      "why": "CI and container files run with credentials and write to shared systems."
+    },
+    {
+      "glob": "compose.*.yaml",
+      "lenses": [
+        "ops-safety"
+      ],
+      "why": "CI and container files run with credentials and write to shared systems."
+    },
+    {
+      "glob": "Makefile",
+      "lenses": [
+        "build-config"
+      ],
+      "why": "Build files decide what is compiled, tested and shipped."
+    },
+    {
+      "glob": "makefile",
+      "lenses": [
+        "build-config"
+      ],
+      "why": "Build files decide what is compiled, tested and shipped."
+    },
+    {
+      "glob": "GNUmakefile",
+      "lenses": [
+        "build-config"
+      ],
+      "why": "Build files decide what is compiled, tested and shipped."
+    },
+    {
+      "glob": "*.mk",
+      "lenses": [
+        "build-config"
+      ],
+      "why": "Build files decide what is compiled, tested and shipped."
+    },
+    {
+      "glob": "CMakeLists.txt",
+      "lenses": [
+        "build-config"
+      ],
+      "why": "Build files decide what is compiled, tested and shipped."
+    },
+    {
+      "glob": "*.cmake",
+      "lenses": [
+        "build-config"
+      ],
+      "why": "Build files decide what is compiled, tested and shipped."
+    },
+    {
+      "glob": "*.gradle",
+      "lenses": [
+        "build-config"
+      ],
+      "why": "Build files decide what is compiled, tested and shipped."
+    },
+    {
+      "glob": "*.gradle.kts",
+      "lenses": [
+        "build-config"
+      ],
+      "why": "Build files decide what is compiled, tested and shipped."
+    },
+    {
+      "glob": "meson.build",
+      "lenses": [
+        "build-config"
+      ],
+      "why": "Build files decide what is compiled, tested and shipped."
+    },
+    {
+      "glob": "*.csproj",
+      "lenses": [
+        "build-config"
+      ],
+      "why": "Build files decide what is compiled, tested and shipped."
+    },
+    {
+      "glob": "*.sln",
+      "lenses": [
+        "build-config"
+      ],
+      "why": "Build files decide what is compiled, tested and shipped."
+    },
+    {
+      "glob": "package.json",
+      "lenses": [
+        "supply-chain"
+      ],
+      "why": "A dependency change ships someone else's code: what was added, pinned, or loosened?"
+    },
+    {
+      "glob": "package-lock.json",
+      "lenses": [
+        "supply-chain"
+      ],
+      "why": "A dependency change ships someone else's code: what was added, pinned, or loosened?"
+    },
+    {
+      "glob": "yarn.lock",
+      "lenses": [
+        "supply-chain"
+      ],
+      "why": "A dependency change ships someone else's code: what was added, pinned, or loosened?"
+    },
+    {
+      "glob": "pnpm-lock.yaml",
+      "lenses": [
+        "supply-chain"
+      ],
+      "why": "A dependency change ships someone else's code: what was added, pinned, or loosened?"
+    },
+    {
+      "glob": "requirements*.txt",
+      "lenses": [
+        "supply-chain"
+      ],
+      "why": "A dependency change ships someone else's code: what was added, pinned, or loosened?"
+    },
+    {
+      "glob": "requirements/*.txt",
+      "lenses": [
+        "supply-chain"
+      ],
+      "why": "A dependency change ships someone else's code: what was added, pinned, or loosened?"
+    },
+    {
+      "glob": "pyproject.toml",
+      "lenses": [
+        "supply-chain"
+      ],
+      "why": "A dependency change ships someone else's code: what was added, pinned, or loosened?"
+    },
+    {
+      "glob": "Pipfile",
+      "lenses": [
+        "supply-chain"
+      ],
+      "why": "A dependency change ships someone else's code: what was added, pinned, or loosened?"
+    },
+    {
+      "glob": "Pipfile.lock",
+      "lenses": [
+        "supply-chain"
+      ],
+      "why": "A dependency change ships someone else's code: what was added, pinned, or loosened?"
+    },
+    {
+      "glob": "poetry.lock",
+      "lenses": [
+        "supply-chain"
+      ],
+      "why": "A dependency change ships someone else's code: what was added, pinned, or loosened?"
+    },
+    {
+      "glob": "uv.lock",
+      "lenses": [
+        "supply-chain"
+      ],
+      "why": "A dependency change ships someone else's code: what was added, pinned, or loosened?"
+    },
+    {
+      "glob": "go.mod",
+      "lenses": [
+        "supply-chain"
+      ],
+      "why": "A dependency change ships someone else's code: what was added, pinned, or loosened?"
+    },
+    {
+      "glob": "go.sum",
+      "lenses": [
+        "supply-chain"
+      ],
+      "why": "A dependency change ships someone else's code: what was added, pinned, or loosened?"
+    },
+    {
+      "glob": "Cargo.toml",
+      "lenses": [
+        "supply-chain"
+      ],
+      "why": "A dependency change ships someone else's code: what was added, pinned, or loosened?"
+    },
+    {
+      "glob": "Cargo.lock",
+      "lenses": [
+        "supply-chain"
+      ],
+      "why": "A dependency change ships someone else's code: what was added, pinned, or loosened?"
+    },
+    {
+      "glob": "Gemfile",
+      "lenses": [
+        "supply-chain"
+      ],
+      "why": "A dependency change ships someone else's code: what was added, pinned, or loosened?"
+    },
+    {
+      "glob": "Gemfile.lock",
+      "lenses": [
+        "supply-chain"
+      ],
+      "why": "A dependency change ships someone else's code: what was added, pinned, or loosened?"
+    },
+    {
+      "glob": "pom.xml",
+      "lenses": [
+        "supply-chain"
+      ],
+      "why": "A dependency change ships someone else's code: what was added, pinned, or loosened?"
+    },
+    {
+      "glob": "*.tf",
+      "lenses": [
+        "infra-safety"
+      ],
+      "why": "Infrastructure changes act on live systems."
+    },
+    {
+      "glob": "*.tfvars",
+      "lenses": [
+        "infra-safety"
+      ],
+      "why": "Infrastructure changes act on live systems."
+    },
+    {
+      "glob": "k8s/**",
+      "lenses": [
+        "infra-safety"
+      ],
+      "why": "Infrastructure changes act on live systems."
+    },
+    {
+      "glob": "**/k8s/**",
+      "lenses": [
+        "infra-safety"
+      ],
+      "why": "Infrastructure changes act on live systems."
+    },
+    {
+      "glob": "charts/**",
+      "lenses": [
+        "infra-safety"
+      ],
+      "why": "Infrastructure changes act on live systems."
+    },
+    {
+      "glob": "**/charts/**",
+      "lenses": [
+        "infra-safety"
+      ],
+      "why": "Infrastructure changes act on live systems."
+    },
+    {
+      "glob": "migrations/**",
+      "lenses": [
+        "migration-safety"
+      ],
+      "why": "A schema or data migration can lose data and is hard to undo."
+    },
+    {
+      "glob": "**/migrations/**",
+      "lenses": [
+        "migration-safety"
+      ],
+      "why": "A schema or data migration can lose data and is hard to undo."
+    },
+    {
+      "glob": "db/migrate/**",
+      "lenses": [
+        "migration-safety"
+      ],
+      "why": "A schema or data migration can lose data and is hard to undo."
+    },
+    {
+      "glob": "**/db/migrate/**",
+      "lenses": [
+        "migration-safety"
+      ],
+      "why": "A schema or data migration can lose data and is hard to undo."
+    },
+    {
+      "glob": "db/migration/**",
+      "lenses": [
+        "migration-safety"
+      ],
+      "why": "A schema or data migration can lose data and is hard to undo."
+    },
+    {
+      "glob": "**/db/migration/**",
+      "lenses": [
+        "migration-safety"
+      ],
+      "why": "A schema or data migration can lose data and is hard to undo."
+    },
+    {
+      "glob": "alembic/versions/**",
+      "lenses": [
+        "migration-safety"
+      ],
+      "why": "A schema or data migration can lose data and is hard to undo."
+    },
+    {
+      "glob": "**/alembic/versions/**",
+      "lenses": [
+        "migration-safety"
+      ],
+      "why": "A schema or data migration can lose data and is hard to undo."
+    },
+    {
+      "glob": "auth/**",
+      "lenses": [
+        "security"
+      ],
+      "why": "Authentication, authorization and crypto code."
+    },
+    {
+      "glob": "**/auth/**",
+      "lenses": [
+        "security"
+      ],
+      "why": "Authentication, authorization and crypto code."
+    },
+    {
+      "glob": "security/**",
+      "lenses": [
+        "security"
+      ],
+      "why": "Authentication, authorization and crypto code."
+    },
+    {
+      "glob": "**/security/**",
+      "lenses": [
+        "security"
+      ],
+      "why": "Authentication, authorization and crypto code."
+    },
+    {
+      "glob": "crypto/**",
+      "lenses": [
+        "security"
+      ],
+      "why": "Authentication, authorization and crypto code."
+    },
+    {
+      "glob": "**/crypto/**",
+      "lenses": [
+        "security"
+      ],
+      "why": "Authentication, authorization and crypto code."
+    },
+    {
+      "glob": "billing/**",
+      "lenses": [
+        "money"
+      ],
+      "why": "Money moves: rounding, idempotency and double charges."
+    },
+    {
+      "glob": "**/billing/**",
+      "lenses": [
+        "money"
+      ],
+      "why": "Money moves: rounding, idempotency and double charges."
+    },
+    {
+      "glob": "payments/**",
+      "lenses": [
+        "money"
+      ],
+      "why": "Money moves: rounding, idempotency and double charges."
+    },
+    {
+      "glob": "**/payments/**",
+      "lenses": [
+        "money"
+      ],
+      "why": "Money moves: rounding, idempotency and double charges."
+    },
+    {
+      "glob": "notifications/**",
+      "lenses": [
+        "delivery"
+      ],
+      "why": "Notification delivery: lost, duplicated or misrouted messages."
+    },
+    {
+      "glob": "**/notifications/**",
+      "lenses": [
+        "delivery"
+      ],
+      "why": "Notification delivery: lost, duplicated or misrouted messages."
+    },
+    {
+      "glob": "*.json",
+      "lenses": [
+        "consistency"
+      ],
+      "why": "Configuration and schemas must agree with the code that reads them."
+    },
+    {
+      "glob": "*.yml",
+      "lenses": [
+        "consistency"
+      ],
+      "why": "Configuration and schemas must agree with the code that reads them."
+    },
+    {
+      "glob": "*.yaml",
+      "lenses": [
+        "consistency"
+      ],
+      "why": "Configuration and schemas must agree with the code that reads them."
+    },
+    {
+      "glob": "*.toml",
+      "lenses": [
+        "consistency"
+      ],
+      "why": "Configuration and schemas must agree with the code that reads them."
+    },
+    {
+      "glob": "*.ini",
+      "lenses": [
+        "consistency"
+      ],
+      "why": "Configuration and schemas must agree with the code that reads them."
+    },
+    {
+      "glob": "*.conf",
+      "lenses": [
+        "consistency"
+      ],
+      "why": "Configuration and schemas must agree with the code that reads them."
+    },
+    {
+      "glob": "*.xml",
+      "lenses": [
+        "consistency"
+      ],
+      "why": "Configuration and schemas must agree with the code that reads them."
+    },
+    {
+      "glob": "*.service",
+      "lenses": [
+        "consistency"
+      ],
+      "why": "Configuration and schemas must agree with the code that reads them."
+    },
+    {
+      "glob": ".env",
+      "lenses": [
+        "consistency"
+      ],
+      "why": "Configuration and schemas must agree with the code that reads them."
+    },
+    {
+      "glob": ".env.*",
+      "lenses": [
+        "consistency"
+      ],
+      "why": "Configuration and schemas must agree with the code that reads them."
+    },
+    {
+      "glob": "*.properties",
+      "lenses": [
+        "consistency"
+      ],
+      "why": "Configuration and schemas must agree with the code that reads them."
+    },
+    {
+      "glob": "*.proto",
+      "lenses": [
+        "consistency"
+      ],
+      "why": "Configuration and schemas must agree with the code that reads them."
+    },
+    {
+      "glob": "*.graphql",
+      "lenses": [
+        "consistency"
+      ],
+      "why": "Configuration and schemas must agree with the code that reads them."
     }
   ],
   "delta_triggers": [
@@ -33,9 +892,505 @@
       "glob": "docs/spec/*.md",
       "added_regex": "Status.*Verified",
       "risk": "HIGH",
-      "lenses": ["falsifiability"],
+      "lenses": [
+        "falsifiability"
+      ],
       "flag": "status flip",
       "why": "A verified-status assertion needs evidence."
+    },
+    {
+      "glob": ".env",
+      "added_regex": "(?i)\\b(?:\\w*(?:api[_-]?key|secret|passw(?:or)?d|private[_-]?key)\\w*|\\w*token)\\b[\\\"']?\\s*[:=]\\s*[\\\"']?(?![\\s&*{}\\[\\]()<>#]|\\$[{(A-Za-z_])[^\\s\\\"']{6,}",
+      "risk": "HIGH",
+      "lenses": [
+        "security"
+      ],
+      "flag": "credential-looking value",
+      "why": "A secret written into configuration: a key holding a literal value."
+    },
+    {
+      "glob": ".env.*",
+      "added_regex": "(?i)\\b(?:\\w*(?:api[_-]?key|secret|passw(?:or)?d|private[_-]?key)\\w*|\\w*token)\\b[\\\"']?\\s*[:=]\\s*[\\\"']?(?![\\s&*{}\\[\\]()<>#]|\\$[{(A-Za-z_])[^\\s\\\"']{6,}",
+      "risk": "HIGH",
+      "lenses": [
+        "security"
+      ],
+      "flag": "credential-looking value",
+      "why": "A secret written into configuration: a key holding a literal value."
+    },
+    {
+      "glob": "*.yml",
+      "added_regex": "(?i)\\b(?:\\w*(?:api[_-]?key|secret|passw(?:or)?d|private[_-]?key)\\w*|\\w*token)\\b[\\\"']?\\s*[:=]\\s*[\\\"']?(?![\\s&*{}\\[\\]()<>#]|\\$[{(A-Za-z_])[^\\s\\\"']{6,}",
+      "risk": "HIGH",
+      "lenses": [
+        "security"
+      ],
+      "flag": "credential-looking value",
+      "why": "A secret written into configuration: a key holding a literal value."
+    },
+    {
+      "glob": "*.yaml",
+      "added_regex": "(?i)\\b(?:\\w*(?:api[_-]?key|secret|passw(?:or)?d|private[_-]?key)\\w*|\\w*token)\\b[\\\"']?\\s*[:=]\\s*[\\\"']?(?![\\s&*{}\\[\\]()<>#]|\\$[{(A-Za-z_])[^\\s\\\"']{6,}",
+      "risk": "HIGH",
+      "lenses": [
+        "security"
+      ],
+      "flag": "credential-looking value",
+      "why": "A secret written into configuration: a key holding a literal value."
+    },
+    {
+      "glob": "*.json",
+      "added_regex": "(?i)\\b(?:\\w*(?:api[_-]?key|secret|passw(?:or)?d|private[_-]?key)\\w*|\\w*token)\\b[\\\"']?\\s*[:=]\\s*[\\\"']?(?![\\s&*{}\\[\\]()<>#]|\\$[{(A-Za-z_])[^\\s\\\"']{6,}",
+      "risk": "HIGH",
+      "lenses": [
+        "security"
+      ],
+      "flag": "credential-looking value",
+      "why": "A secret written into configuration: a key holding a literal value."
+    },
+    {
+      "glob": "*.toml",
+      "added_regex": "(?i)\\b(?:\\w*(?:api[_-]?key|secret|passw(?:or)?d|private[_-]?key)\\w*|\\w*token)\\b[\\\"']?\\s*[:=]\\s*[\\\"']?(?![\\s&*{}\\[\\]()<>#]|\\$[{(A-Za-z_])[^\\s\\\"']{6,}",
+      "risk": "HIGH",
+      "lenses": [
+        "security"
+      ],
+      "flag": "credential-looking value",
+      "why": "A secret written into configuration: a key holding a literal value."
+    },
+    {
+      "glob": "*.ini",
+      "added_regex": "(?i)\\b(?:\\w*(?:api[_-]?key|secret|passw(?:or)?d|private[_-]?key)\\w*|\\w*token)\\b[\\\"']?\\s*[:=]\\s*[\\\"']?(?![\\s&*{}\\[\\]()<>#]|\\$[{(A-Za-z_])[^\\s\\\"']{6,}",
+      "risk": "HIGH",
+      "lenses": [
+        "security"
+      ],
+      "flag": "credential-looking value",
+      "why": "A secret written into configuration: a key holding a literal value."
+    },
+    {
+      "glob": "*.conf",
+      "added_regex": "(?i)\\b(?:\\w*(?:api[_-]?key|secret|passw(?:or)?d|private[_-]?key)\\w*|\\w*token)\\b[\\\"']?\\s*[:=]\\s*[\\\"']?(?![\\s&*{}\\[\\]()<>#]|\\$[{(A-Za-z_])[^\\s\\\"']{6,}",
+      "risk": "HIGH",
+      "lenses": [
+        "security"
+      ],
+      "flag": "credential-looking value",
+      "why": "A secret written into configuration: a key holding a literal value."
+    },
+    {
+      "glob": "*.properties",
+      "added_regex": "(?i)\\b(?:\\w*(?:api[_-]?key|secret|passw(?:or)?d|private[_-]?key)\\w*|\\w*token)\\b[\\\"']?\\s*[:=]\\s*[\\\"']?(?![\\s&*{}\\[\\]()<>#]|\\$[{(A-Za-z_])[^\\s\\\"']{6,}",
+      "risk": "HIGH",
+      "lenses": [
+        "security"
+      ],
+      "flag": "credential-looking value",
+      "why": "A secret written into configuration: a key holding a literal value."
+    },
+    {
+      "glob": "*.tf",
+      "added_regex": "(?i)\\b(?:\\w*(?:api[_-]?key|secret|passw(?:or)?d|private[_-]?key)\\w*|\\w*token)\\b[\\\"']?\\s*(?::=|[:=])\\s*[fFrRbBuU]{0,2}[\\\"'`][^\\s\\\"'`]{4,}[\\\"'`]",
+      "risk": "HIGH",
+      "lenses": [
+        "security"
+      ],
+      "flag": "credential-looking literal",
+      "why": "A secret written into code: a quoted literal assigned to a key-like name."
+    },
+    {
+      "glob": "*.py",
+      "added_regex": "(?i)\\b(?:\\w*(?:api[_-]?key|secret|passw(?:or)?d|private[_-]?key)\\w*|\\w*token)\\b[\\\"']?\\s*(?::=|[:=])\\s*[fFrRbBuU]{0,2}[\\\"'`][^\\s\\\"'`]{4,}[\\\"'`]",
+      "risk": "HIGH",
+      "lenses": [
+        "security"
+      ],
+      "flag": "credential-looking literal",
+      "why": "A secret written into code: a quoted literal assigned to a key-like name."
+    },
+    {
+      "glob": "*.js",
+      "added_regex": "(?i)\\b(?:\\w*(?:api[_-]?key|secret|passw(?:or)?d|private[_-]?key)\\w*|\\w*token)\\b[\\\"']?\\s*(?::=|[:=])\\s*[fFrRbBuU]{0,2}[\\\"'`][^\\s\\\"'`]{4,}[\\\"'`]",
+      "risk": "HIGH",
+      "lenses": [
+        "security"
+      ],
+      "flag": "credential-looking literal",
+      "why": "A secret written into code: a quoted literal assigned to a key-like name."
+    },
+    {
+      "glob": "*.ts",
+      "added_regex": "(?i)\\b(?:\\w*(?:api[_-]?key|secret|passw(?:or)?d|private[_-]?key)\\w*|\\w*token)\\b[\\\"']?\\s*(?::=|[:=])\\s*[fFrRbBuU]{0,2}[\\\"'`][^\\s\\\"'`]{4,}[\\\"'`]",
+      "risk": "HIGH",
+      "lenses": [
+        "security"
+      ],
+      "flag": "credential-looking literal",
+      "why": "A secret written into code: a quoted literal assigned to a key-like name."
+    },
+    {
+      "glob": "*.go",
+      "added_regex": "(?i)\\b(?:\\w*(?:api[_-]?key|secret|passw(?:or)?d|private[_-]?key)\\w*|\\w*token)\\b[\\\"']?\\s*(?::=|[:=])\\s*[fFrRbBuU]{0,2}[\\\"'`][^\\s\\\"'`]{4,}[\\\"'`]",
+      "risk": "HIGH",
+      "lenses": [
+        "security"
+      ],
+      "flag": "credential-looking literal",
+      "why": "A secret written into code: a quoted literal assigned to a key-like name."
+    },
+    {
+      "glob": "*.java",
+      "added_regex": "(?i)\\b(?:\\w*(?:api[_-]?key|secret|passw(?:or)?d|private[_-]?key)\\w*|\\w*token)\\b[\\\"']?\\s*(?::=|[:=])\\s*[fFrRbBuU]{0,2}[\\\"'`][^\\s\\\"'`]{4,}[\\\"'`]",
+      "risk": "HIGH",
+      "lenses": [
+        "security"
+      ],
+      "flag": "credential-looking literal",
+      "why": "A secret written into code: a quoted literal assigned to a key-like name."
+    },
+    {
+      "glob": "*.rb",
+      "added_regex": "(?i)\\b(?:\\w*(?:api[_-]?key|secret|passw(?:or)?d|private[_-]?key)\\w*|\\w*token)\\b[\\\"']?\\s*(?::=|[:=])\\s*[fFrRbBuU]{0,2}[\\\"'`][^\\s\\\"'`]{4,}[\\\"'`]",
+      "risk": "HIGH",
+      "lenses": [
+        "security"
+      ],
+      "flag": "credential-looking literal",
+      "why": "A secret written into code: a quoted literal assigned to a key-like name."
+    },
+    {
+      "glob": "*.php",
+      "added_regex": "(?i)\\b(?:\\w*(?:api[_-]?key|secret|passw(?:or)?d|private[_-]?key)\\w*|\\w*token)\\b[\\\"']?\\s*(?::=|[:=])\\s*[fFrRbBuU]{0,2}[\\\"'`][^\\s\\\"'`]{4,}[\\\"'`]",
+      "risk": "HIGH",
+      "lenses": [
+        "security"
+      ],
+      "flag": "credential-looking literal",
+      "why": "A secret written into code: a quoted literal assigned to a key-like name."
+    },
+    {
+      "glob": "*.sh",
+      "added_regex": "(?i)\\b(?:\\w*(?:api[_-]?key|secret|passw(?:or)?d|private[_-]?key)\\w*|\\w*token)\\b[\\\"']?\\s*(?::=|[:=])\\s*[fFrRbBuU]{0,2}[\\\"'`][^\\s\\\"'`]{4,}[\\\"'`]",
+      "risk": "HIGH",
+      "lenses": [
+        "security"
+      ],
+      "flag": "credential-looking literal",
+      "why": "A secret written into code: a quoted literal assigned to a key-like name."
+    },
+    {
+      "glob": "auth/**",
+      "path_only": true,
+      "risk": "HIGH",
+      "lenses": [
+        "security"
+      ],
+      "why": "Any change to authentication, authorization or crypto is HIGH."
+    },
+    {
+      "glob": "**/auth/**",
+      "path_only": true,
+      "risk": "HIGH",
+      "lenses": [
+        "security"
+      ],
+      "why": "Any change to authentication, authorization or crypto is HIGH."
+    },
+    {
+      "glob": "security/**",
+      "path_only": true,
+      "risk": "HIGH",
+      "lenses": [
+        "security"
+      ],
+      "why": "Any change to authentication, authorization or crypto is HIGH."
+    },
+    {
+      "glob": "**/security/**",
+      "path_only": true,
+      "risk": "HIGH",
+      "lenses": [
+        "security"
+      ],
+      "why": "Any change to authentication, authorization or crypto is HIGH."
+    },
+    {
+      "glob": "crypto/**",
+      "path_only": true,
+      "risk": "HIGH",
+      "lenses": [
+        "security"
+      ],
+      "why": "Any change to authentication, authorization or crypto is HIGH."
+    },
+    {
+      "glob": "**/crypto/**",
+      "path_only": true,
+      "risk": "HIGH",
+      "lenses": [
+        "security"
+      ],
+      "why": "Any change to authentication, authorization or crypto is HIGH."
+    },
+    {
+      "glob": "migrations/**",
+      "path_only": true,
+      "risk": "HIGH",
+      "lenses": [
+        "migration-safety"
+      ],
+      "why": "Data loss is HIGH whatever the size of the diff."
+    },
+    {
+      "glob": "**/migrations/**",
+      "path_only": true,
+      "risk": "HIGH",
+      "lenses": [
+        "migration-safety"
+      ],
+      "why": "Data loss is HIGH whatever the size of the diff."
+    },
+    {
+      "glob": "db/migrate/**",
+      "path_only": true,
+      "risk": "HIGH",
+      "lenses": [
+        "migration-safety"
+      ],
+      "why": "Data loss is HIGH whatever the size of the diff."
+    },
+    {
+      "glob": "**/db/migrate/**",
+      "path_only": true,
+      "risk": "HIGH",
+      "lenses": [
+        "migration-safety"
+      ],
+      "why": "Data loss is HIGH whatever the size of the diff."
+    },
+    {
+      "glob": "db/migration/**",
+      "path_only": true,
+      "risk": "HIGH",
+      "lenses": [
+        "migration-safety"
+      ],
+      "why": "Data loss is HIGH whatever the size of the diff."
+    },
+    {
+      "glob": "**/db/migration/**",
+      "path_only": true,
+      "risk": "HIGH",
+      "lenses": [
+        "migration-safety"
+      ],
+      "why": "Data loss is HIGH whatever the size of the diff."
+    },
+    {
+      "glob": "alembic/versions/**",
+      "path_only": true,
+      "risk": "HIGH",
+      "lenses": [
+        "migration-safety"
+      ],
+      "why": "Data loss is HIGH whatever the size of the diff."
+    },
+    {
+      "glob": "**/alembic/versions/**",
+      "path_only": true,
+      "risk": "HIGH",
+      "lenses": [
+        "migration-safety"
+      ],
+      "why": "Data loss is HIGH whatever the size of the diff."
+    },
+    {
+      "glob": "billing/**",
+      "path_only": true,
+      "risk": "HIGH",
+      "lenses": [
+        "money"
+      ],
+      "why": "Money is HIGH (SKILL.md's risk table)."
+    },
+    {
+      "glob": "**/billing/**",
+      "path_only": true,
+      "risk": "HIGH",
+      "lenses": [
+        "money"
+      ],
+      "why": "Money is HIGH (SKILL.md's risk table)."
+    },
+    {
+      "glob": "payments/**",
+      "path_only": true,
+      "risk": "HIGH",
+      "lenses": [
+        "money"
+      ],
+      "why": "Money is HIGH (SKILL.md's risk table)."
+    },
+    {
+      "glob": "**/payments/**",
+      "path_only": true,
+      "risk": "HIGH",
+      "lenses": [
+        "money"
+      ],
+      "why": "Money is HIGH (SKILL.md's risk table)."
+    },
+    {
+      "glob": "notifications/**",
+      "path_only": true,
+      "risk": "HIGH",
+      "lenses": [
+        "delivery"
+      ],
+      "why": "Notification delivery is HIGH (SKILL.md's risk table)."
+    },
+    {
+      "glob": "**/notifications/**",
+      "path_only": true,
+      "risk": "HIGH",
+      "lenses": [
+        "delivery"
+      ],
+      "why": "Notification delivery is HIGH (SKILL.md's risk table)."
+    },
+    {
+      "glob": "*.py",
+      "added_regex": "\\b(?:threading|multiprocessing|asyncio)\\b|concurrent\\.futures|\\b(?:Thread|Process)PoolExecutor\\b|\\basync\\s+def\\b|\\bLock\\(",
+      "risk": "HIGH",
+      "lenses": [
+        "concurrency"
+      ],
+      "flag": "concurrency",
+      "why": "Concurrency is HIGH: interleavings the tests do not enumerate."
+    },
+    {
+      "glob": "*.go",
+      "added_regex": "\\bgo\\s+(?:func\\b|[\\w.]+\\()|\\.Go\\(|\\bsync\\.(?:Mutex|RWMutex|WaitGroup|Once)\\b|\\bchan\\b",
+      "risk": "HIGH",
+      "lenses": [
+        "concurrency"
+      ],
+      "flag": "concurrency",
+      "why": "Concurrency is HIGH: interleavings the tests do not enumerate."
+    },
+    {
+      "glob": "*.java",
+      "added_regex": "\\bsynchronized\\b|java\\.util\\.concurrent(?!\\.TimeUnit\\b)|\\bExecutorService\\b|\\bExecutors\\.|\\bCompletableFuture\\b|\\bnew\\s+Thread\\(",
+      "risk": "HIGH",
+      "lenses": [
+        "concurrency"
+      ],
+      "flag": "concurrency",
+      "why": "Concurrency is HIGH: interleavings the tests do not enumerate."
+    },
+    {
+      "glob": "*.rs",
+      "added_regex": "\\b(?:Mutex|RwLock)\\b|\\b(?:thread|task|tokio)::(?:spawn\\w*|scope)\\b",
+      "risk": "HIGH",
+      "lenses": [
+        "concurrency"
+      ],
+      "flag": "concurrency",
+      "why": "Concurrency is HIGH: interleavings the tests do not enumerate."
+    },
+    {
+      "glob": "*.sh",
+      "added_regex": "\\brm\\b[^#\\n]*\\s(?:-[a-zA-Z]*[rR][a-zA-Z]*\\b|--recursive\\b)|\\bgit\\s+push\\b[^#\\n]*(?:--force(?!-with-lease)\\b|\\s-[a-zA-Z]*f[a-zA-Z]*\\b)|\\bdd\\s+if=|\\bmkfs",
+      "risk": "HIGH",
+      "lenses": [
+        "ops-safety"
+      ],
+      "flag": "destructive command",
+      "why": "A destructive command in a script runs without asking."
+    },
+    {
+      "glob": "Makefile",
+      "added_regex": "\\brm\\b[^#\\n]*\\s(?:-[a-zA-Z]*[rR][a-zA-Z]*\\b|--recursive\\b)|\\bgit\\s+push\\b[^#\\n]*(?:--force(?!-with-lease)\\b|\\s-[a-zA-Z]*f[a-zA-Z]*\\b)|\\bdd\\s+if=|\\bmkfs",
+      "risk": "HIGH",
+      "lenses": [
+        "ops-safety"
+      ],
+      "flag": "destructive command",
+      "why": "A destructive command in a script runs without asking."
+    },
+    {
+      "glob": "makefile",
+      "added_regex": "\\brm\\b[^#\\n]*\\s(?:-[a-zA-Z]*[rR][a-zA-Z]*\\b|--recursive\\b)|\\bgit\\s+push\\b[^#\\n]*(?:--force(?!-with-lease)\\b|\\s-[a-zA-Z]*f[a-zA-Z]*\\b)|\\bdd\\s+if=|\\bmkfs",
+      "risk": "HIGH",
+      "lenses": [
+        "ops-safety"
+      ],
+      "flag": "destructive command",
+      "why": "A destructive command in a script runs without asking."
+    },
+    {
+      "glob": "GNUmakefile",
+      "added_regex": "\\brm\\b[^#\\n]*\\s(?:-[a-zA-Z]*[rR][a-zA-Z]*\\b|--recursive\\b)|\\bgit\\s+push\\b[^#\\n]*(?:--force(?!-with-lease)\\b|\\s-[a-zA-Z]*f[a-zA-Z]*\\b)|\\bdd\\s+if=|\\bmkfs",
+      "risk": "HIGH",
+      "lenses": [
+        "ops-safety"
+      ],
+      "flag": "destructive command",
+      "why": "A destructive command in a script runs without asking."
+    },
+    {
+      "glob": "*.mk",
+      "added_regex": "\\brm\\b[^#\\n]*\\s(?:-[a-zA-Z]*[rR][a-zA-Z]*\\b|--recursive\\b)|\\bgit\\s+push\\b[^#\\n]*(?:--force(?!-with-lease)\\b|\\s-[a-zA-Z]*f[a-zA-Z]*\\b)|\\bdd\\s+if=|\\bmkfs",
+      "risk": "HIGH",
+      "lenses": [
+        "ops-safety"
+      ],
+      "flag": "destructive command",
+      "why": "A destructive command in a script runs without asking."
+    },
+    {
+      "glob": ".github/workflows/**",
+      "added_regex": "\\bpull_request_target\\b|\\bwrite-all\\b|:\\s*[\\\"']?write[\\\"']?\\s*(?:[,}#].*)?$|\\bsecrets\\.(?!GITHUB_TOKEN\\b)\\w+",
+      "risk": "HIGH",
+      "lenses": [
+        "ops-safety",
+        "security"
+      ],
+      "flag": "workflow privileges",
+      "why": "Write permissions and secrets decide what untrusted code can reach."
+    },
+    {
+      "glob": "Dockerfile*",
+      "added_regex": "(?i)^\\s*USER\\s+(?:root|0)\\b|\\b(?:curl|wget)\\b[^|#\\n]*\\|\\s*(?:sudo\\s+)?(?:sh|bash)\\b",
+      "risk": "HIGH",
+      "lenses": [
+        "ops-safety",
+        "supply-chain"
+      ],
+      "flag": "container privilege or piped installer",
+      "why": "Root in a container or a piped installer widens what one compromise reaches."
+    },
+    {
+      "glob": "*.Dockerfile",
+      "added_regex": "(?i)^\\s*USER\\s+(?:root|0)\\b|\\b(?:curl|wget)\\b[^|#\\n]*\\|\\s*(?:sudo\\s+)?(?:sh|bash)\\b",
+      "risk": "HIGH",
+      "lenses": [
+        "ops-safety",
+        "supply-chain"
+      ],
+      "flag": "container privilege or piped installer",
+      "why": "Root in a container or a piped installer widens what one compromise reaches."
+    },
+    {
+      "glob": "Containerfile",
+      "added_regex": "(?i)^\\s*USER\\s+(?:root|0)\\b|\\b(?:curl|wget)\\b[^|#\\n]*\\|\\s*(?:sudo\\s+)?(?:sh|bash)\\b",
+      "risk": "HIGH",
+      "lenses": [
+        "ops-safety",
+        "supply-chain"
+      ],
+      "flag": "container privilege or piped installer",
+      "why": "Root in a container or a piped installer widens what one compromise reaches."
     }
   ],
   "risk_default": "MEDIUM",
@@ -49,14 +1404,41 @@
   },
   "small_delta_lines": 60,
   "effort": {
-    "LOW": {"mechanical": "medium", "judgment": "medium"},
-    "MEDIUM": {"mechanical": "medium", "judgment": {"default": "high", "codex": "xhigh"}},
-    "HIGH": {"mechanical": {"default": "high", "codex": "xhigh"},
-             "judgment": {"default": "high", "codex": "xhigh"}}
+    "LOW": {
+      "mechanical": "medium",
+      "judgment": "medium"
+    },
+    "MEDIUM": {
+      "mechanical": "medium",
+      "judgment": {
+        "default": "high",
+        "codex": "xhigh"
+      }
+    },
+    "HIGH": {
+      "mechanical": {
+        "default": "high",
+        "codex": "xhigh"
+      },
+      "judgment": {
+        "default": "high",
+        "codex": "xhigh"
+      }
+    }
   },
   "order": [
-    {"owner": "bob", "gateway": "alpha", "rank": 0},
-    {"gateway": "alpha", "rank": 1},
-    {"gateway": "beta", "rank": 2}
+    {
+      "owner": "bob",
+      "gateway": "alpha",
+      "rank": 0
+    },
+    {
+      "gateway": "alpha",
+      "rank": 1
+    },
+    {
+      "gateway": "beta",
+      "rank": 2
+    }
   ]
 }

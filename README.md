@@ -238,6 +238,17 @@ no GitHub or GitLab reader. `gerrit`, `clones` and `gateways` are read only by
 to rank changes. Its path globs treat `**` as
 crossing `/`, while `*` and `?` do not; a pattern with no `/` matches only the
 basename.
+`triage.py init` writes `templates/triage.example.json` as a starting point:
+lenses for common source, test, CI/container, build, dependency, infrastructure,
+migration, auth/security/crypto, billing, notification, documentation and configuration
+files, and example triggers that raise a change to HIGH for part of SKILL.md's
+HIGH list -- auth/security/crypto, migration, billing/payments and notification
+paths, and added lines that look like a credential, a concurrency primitive, a
+destructive command, a CI write permission or secret, or a root/piped-installer
+container, each for the file kinds its rule names. `risk_default` stays MEDIUM,
+so any change gets two review legs until you lower it. Trim it to the
+ecosystems you use, extend the triggers to your languages, and add your own
+partial-failure paths; `unmatched_files` names what it does not cover.
 For a merge-commit patch set, its content delta is compared with the first
 parent, matching Gerrit's displayed diff.
 `change --as-of-ps N` deliberately excludes your own vote and messages on
