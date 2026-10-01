@@ -21,7 +21,8 @@
     "  flag         -- a dedicated flag (grok --effort, opencode --variant, codex: task --effort / exec -c model_reasoning_effort=)",
     "  config_only  -- no per-call control at all (codex review until 0.6.28; no shipped adapter since)",
     "  none         -- the suite passes no effort for this role; its CLI default applies",
-    "  applies_to_role scopes any mechanism to ONE role (0.6.35); the adapter's other roles follow their own argv: {EFFORT} there means a flag, none otherwise (claude: review takes --effort, implement does not)",
+    "  applies_to_role scopes any mechanism to ONE role (0.6.35); the adapter's other roles follow their own argv: {EFFORT} there means a flag, none otherwise (claude used it 0.6.35-0.6.55, while its implement took no effort)",
+    "  closed: true means `examples` is the CLI's WHOLE vocabulary and any other value is refused (claude, 0.6.56): a CLI that ignores an unknown value and runs at its default leaves the suite as the only place a typo can be caught",
     "2026-09-08 second pass: a four-leg review found this file disagreed with the repo's own skills in almost every role its author had NOT personally probed -- an invented agy timeout, an agy implement launch with no write mode, an invented cursor --force with --trust dropped, grok missing the three flags that ARE its read-only boundary, claude missing the MCP trim and with the wrong prompt delivery. Every one was transcription from recall, which is the exact failure this file exists to stop, one level up. Hence per-ROLE verified strings: believe the review rows, re-check an implement row against its skill before trusting it.",
     "",
     "NOT IN THIS FILE, deliberately: a per-adapter `sandbox`/`shell` field saying",
@@ -387,16 +388,29 @@
           "--permission-mode",
           "acceptEdits",
           "--model",
-          "{MODEL}"
+          "{MODEL}",
+          "--effort",
+          "{EFFORT}",
+          "--settings",
+          "{\"disableAllHooks\": true}"
         ],
         "prompt_delivery": "argv",
-        "verified": "transcribed from the matching skill; not probed"
+        "allow_bash": {
+          "flag": "--allowedTools",
+          "default": [
+            "git status",
+            "git diff",
+            "git log"
+          ],
+          "verified": "2026-10-01 probed (claude 2.1.286): with acceptEdits alone a -p run answered that the command needed approval and ran nothing; adding --allowedTools \"Bash(python3:*)\" ran it. The default git entries use the same Bash(<prefix>:*) form and were not probed one by one."
+        },
+        "verified": "2026-10-01 probed (claude 2.1.286): -p <task> --permission-mode acceptEdits --model claude-opus-5-5 --effort xhigh ran and edited files. --settings {\"disableAllHooks\": true} from a lead probe the same day: with hooks on, the user's rtk PreToolUse hook rewrote `git status --short` to `rtk git status --short`, and --output-format json listed it under permission_denials despite --allowedTools 'Bash(git status:*)'; with hooks disabled the same rule ran `git status --short`. Repeated --allowedTools flags accumulate: with 'Bash(git status:*)' and 'Bash(python3:*)' both given, python3 ran."
       }
     },
     "effort": {
       "mechanism": "flag",
       "flag": "--effort",
-      "applies_to_role": "review",
+      "closed": true,
       "examples": [
         "low",
         "medium",
@@ -404,16 +418,19 @@
         "xhigh",
         "max"
       ],
-      "note": "The review role takes `claude --effort <low|medium|high|xhigh|max>` (claude 2.1.281; 19 headless plan-mode review runs at --effort high, 2026-09-24). Scoped to review by applies_to_role (0.6.35): before, a flag here would have bound implement too.",
-      "implement_note": "The implement role passes no effort: the CLI's own default applies, and `roster.py plan --implement claude=<model>` has no effort syntax to carry one. The CLI does take --effort; add it by hand if a run needs it.",
+      "note": "Both roles take `claude --effort <low|medium|high|xhigh|max>` and nothing else -- the vocabulary is closed, and any other value is refused here because the CLI would ignore it and run at its default. Closed since 0.6.56. Review since 0.6.35 (claude 2.1.281; 19 headless plan-mode review runs at --effort high, 2026-09-24); implement since 0.6.56 (claude 2.1.286, probed 2026-10-01 at xhigh). The CLI does NOT refuse an unknown value: `--effort bogus` prints `Warning: Unknown --effort value 'bogus' — ignoring it and using the default effort. Valid values: low, medium, high, xhigh, max.` on stderr and exits 0 (probed 2026-10-01, claude 2.1.286), so a mistyped effort would run silently at the default. roster.py and leg-cmd.sh refuse it instead -- for claude review too, which accepted any word until 0.6.56.",
       "migration_hint": {
-        "review": "claude review takes --effort since 0.6.35; rosters written earlier have none -- set the level the leg should run at (the framing test ran high)"
+        "review": "claude review takes --effort since 0.6.35; rosters written earlier have none -- set the level the leg should run at (the framing test ran high)",
+        "implement": "claude implement takes --effort since 0.6.56; rosters written earlier have none -- set the level the delegate should run at (the 2026-10-01 probe ran xhigh)"
       }
     },
     "gotchas": [
       "Never the cross-family reviewer for Claude-written work.",
-      "Without --strict-mcp-config --mcp-config '{\"mcpServers\":{}}' the delegate loads the full MCP stack and the startup silence reads as a hang."
+      "Without --strict-mcp-config --mcp-config '{\"mcpServers\":{}}' the delegate loads the full MCP stack and the startup silence reads as a hang.",
+      "An unknown --effort value is NOT refused by the CLI: it warns on stderr, runs at the default effort and exits 0 (claude 2.1.286, 2026-10-01). leg-cmd.sh and roster.py refuse any value outside effort.examples instead.",
+      "Implement: --permission-mode acceptEdits covers file edits only. In -p mode a shell command (a test run, py_compile, git status) needs approval and nothing can give it, so the delegate runs NONE (claude 2.1.286, 2026-10-01; a real dispatch that day made 68 turns without running a single test). Pass the repo's test command with `leg-cmd.sh claude implement --allow-bash <prefix>`: each becomes --allowedTools \"Bash(<prefix>:*)\", beside git status, git diff and git log by default. The entries go after every other token, because --allowedTools takes several values and would swallow a prompt placed after it. The list is not a sandbox: git diff and git log can write a file with --output, and the test command the lead allows runs code the delegate wrote, and that code can do anything the account can (a push included; the post-run refs tripwire detects a branch push, not a Gerrit refs/for push) -- so the boundary is the task prompt plus the lead's own verification, not the worktree.",
+      "Implement runs with hooks off (--settings '{\"disableAllHooks\": true}'): a PreToolUse hook that rewrites commands changes what an allow rule must match. Probed 2026-10-01 (claude 2.1.286): the user's rtk hook rewrote `git status --short` to `rtk git status --short` (and `python3 -m pytest ...` to `rtk pytest ...`, `git diff` to `rtk git diff`), and --output-format json listed it under permission_denials although 'Bash(git status:*)' was allowed -- so --allow-bash 'python3 -m pytest' would still run no test. With hooks disabled the same rule ran it; repeated --allowedTools flags accumulate (python3 ran beside a git status entry). The delegate run therefore also fires none of the lead's own hooks (memory, notification, language) and none that BLOCKS something -- a push or path guard would not apply; on a host that relies on one, leg-cmd.sh cannot keep the hooks on: edit the printed command, deleting the --settings pair and replacing each --allowedTools 'Bash(<prefix>:*)' entry with one for the spelling the hook rewrites it to (skills/claude-implement). claude review keeps its hooks."
     ],
-    "verified": "review probed 2026-09-24 (plan mode, --effort, no MCP); implement transcribed from the matching skill"
+    "verified": "review probed 2026-09-24 (plan mode, --effort, no MCP); implement probed 2026-10-01 (acceptEdits, --effort, --allowedTools, hooks off)"
   }
 }

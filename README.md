@@ -283,14 +283,20 @@ added-line triggers, and writes `triage-records/<HEAD>.json` beside the local
 `review_legs`, `unmatched_files`, and `min_review_legs`; an `unmatched_files`
 entry means no lens or trigger covers it, so fix the local rules. The older
 `scope --files …` form remains useful for planning but writes no record.
-`change` also writes a record for its current patch-set revision.
+`change` also writes a record for its current patch-set revision, and since
+0.6.56 that record names its `base` too: the full sha of the commit the patch
+set's diff is taken against (the first parent of a merge), or null for a root
+patch set and for a change triage skipped.
 
 Every `leg-cmd.sh <adapter> review` launch checks the HEAD it will actually
 review: `--target`'s HEAD, or the caller's cwd when that adapter has no
 `{TARGET}` slot. `--head <rev>` is an assertion resolved in that same
 directory and must equal its HEAD; cursor-type adapters therefore launch from
-inside the frozen worktree. When a record carries a `base`, a launch carrying
-`--base` must resolve to that same commit too. It refuses missing rules, an
+inside the frozen worktree. When a record carries a `base` (a `scope` record
+always, a `change` record since 0.6.56), a launch carrying `--base` must
+resolve to that same commit too (only the adapters whose template has a
+`{BASE}` slot take `--base`: agy, codex and opencode review; the others
+assert `--head` and refuse `--base`). It refuses missing rules, an
 absent record, or a mismatched base with the command to make a new record.
 MEDIUM's minimum is unconditionally two legs (take the second reviewer
 anyway); going below it requires the owner's word through
@@ -331,7 +337,12 @@ at or above the floor keeps it. A tier is spelled per adapter from `data/launch.
 flag word or a model variant (codex review takes it per call since 0.6.28, claude review since 0.6.35). A word or variant is
 emitted only when it is known to exist -- the roster's own or one of
 launch.json's `effort.examples`, taking the next higher known tier across a
-gap -- otherwise the leg keeps its launch and carries `effort_unmet`. An
+gap -- otherwise the leg keeps its launch and carries `effort_unmet`.
+claude's vocabulary is closed (`closed: true`, 0.6.56): its CLI only warns
+about an unknown `--effort` and runs at its default, so `roster.py` and
+`leg-cmd.sh` refuse any word outside `low`, `medium`, `high`, `xhigh`, `max`
+-- on review, which accepted any word before, and on implement, which takes
+`--effort` since 0.6.56. An
 adapter whose effort lives in a config file (none ships since 0.6.28) would
 carry `config_mismatch` instead; nothing edits a config. Without the table,
 legs carry no effort fields.

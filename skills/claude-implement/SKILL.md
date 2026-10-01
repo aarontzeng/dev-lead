@@ -39,23 +39,85 @@ DEV_LEAD=${DEV_LEAD_ROOT:-$(ls -d "$HOME"/.claude/plugins/cache/dev-lead/dev-lea
 [ -x "$DEV_LEAD/scripts/snapshot-refs.sh" ] || { echo "dev-lead root unresolved — set DEV_LEAD_ROOT"; exit 1; }
 "$DEV_LEAD/scripts/snapshot-refs.sh" save "$WORKTREE" "$RUN_DIR/remote-refs.before"   # push-detection baseline
 
-cd "$WORKTREE" && claude -p "$(cat "$RUN_DIR/task.md")" \
-  --permission-mode acceptEdits --model <tier> \
-  > "$RUN_DIR/impl.out" 2>&1
+cd "$WORKTREE" && eval "$("$DEV_LEAD/scripts/leg-cmd.sh" claude implement --model <tier> \
+  --effort <level> --run-dir "$RUN_DIR" --allow-bash '<test command>')" > "$RUN_DIR/impl.out" 2>&1
 ```
 
+`leg-cmd.sh` composes the `claude` invocation only (one `--allow-bash` per
+command prefix the task needs). The `cd` and the redirect are the lead's:
+claude runs in the caller's cwd, and `leg-cmd.sh` refuses `--target` for this
+role. What it emits, spelled out (for a lead without the script): an `export
+RUN_DIR=…`, a guard that the brief exists and is not empty, then
+
+```bash
+claude -p "$(cat "$RUN_DIR/task.md")" \
+  --permission-mode acceptEdits --model <tier> --effort <level> \
+  --settings '{"disableAllHooks": true}' \
+  --allowedTools 'Bash(git status:*)' --allowedTools 'Bash(git diff:*)' \
+  --allowedTools 'Bash(git log:*)' --allowedTools 'Bash(<test command>:*)'
+```
+
+`git status`, `git diff` and `git log` are its default entries. The
+`--allowedTools` entries stay after every other token: the flag takes several
+values and would swallow a prompt placed after it.
+
+`--effort` is required since 0.6.56 and comes from the roster's implement
+entry (`roster.py plan --implement claude=<model>` carries it, and reports
+`missing effort` when the entry has none). Its vocabulary is closed --
+`low`, `medium`, `high`, `xhigh`, `max` -- and anything else is refused by
+`leg-cmd.sh` and `roster.py check`, because the CLI itself only warns about
+an unknown value and runs at its default (runtime file).
+
 The snapshot is the no-push evidence on this adapter. workflow.md rates its
-boundary **instruction level** — there is no machine allow-list, so the rule
-is stated in the task prompt and the fail-closed ref check at handoff is what
-proves either way. The two adapters rated weakest were the two shipping
-without it.
+no-push boundary **instruction level**: the rule is stated in the task
+prompt, and the fail-closed ref check at handoff is what proves either way.
+The two adapters rated weakest were the two shipping without it. Shell
+commands are a separate layer, gated per run: only the `--allowedTools`
+prefixes run, with hooks off (below). That list is not a sandbox either --
+`git diff` and `git log` can write a file with `--output`, and the test
+command the lead allows runs code the delegate wrote, and that code can do
+anything the account can (including a push, which only the tripwire after the
+run detects) -- so the boundary is the task prompt plus the lead's own
+verification, not the worktree.
 
 Measured properties of this exact shape (runtime file has the detail):
-`acceptEdits` covers file writes and shell/git in one flag — it can `git
-add`, `git commit`, and **run the repo's test suite natively** (no pinned
-spellings, contrast agy); the working directory is the shell's cwd; commit
+`acceptEdits` covers **file edits only**. In `-p` mode a shell command needs
+an approval nobody can give, so without `--allowedTools` the delegate runs
+no test, no `py_compile`, not even `git status` (probed 2026-10-01, claude
+2.1.286; a real dispatch that day made 68 turns without running one test).
+Pass the repo's test command with `--allow-bash`; the same goes for `git
+add`/`git commit` if the delegate is to commit -- otherwise the lead makes
+the checkpoint commit. The working directory is the shell's cwd; commit
 messages come out clean when the instruction layer forbids trailers. Do
-**not** pass `--dangerously-skip-permissions`.
+**not** pass `--dangerously-skip-permissions`, and do not widen the list to
+every command: name the prefixes the task needs (`leg-cmd.sh` refuses one
+containing `*`, `(` or `)`).
+
+Hooks are off for the run (`--settings '{"disableAllHooks": true}'`),
+because a PreToolUse hook that rewrites commands changes what an allow rule
+has to match. Probed 2026-10-01 (claude 2.1.286): the user's rtk hook
+rewrote `git status --short` to `rtk git status --short`, and
+`--output-format json` listed it under `permission_denials` although
+`Bash(git status:*)` was allowed; it rewrites `python3 -m pytest …` to `rtk
+pytest …` too, so `--allow-bash 'python3 -m pytest'` would still run no
+test. With hooks disabled the same rule ran `git status --short`, and
+repeated `--allowedTools` flags accumulate. The delegate therefore also runs
+without the lead's own hooks (memory, notification, language) -- **and
+without any hook that BLOCKS something**: if the host has a PreToolUse hook
+that enforces a safety rule (a push guard, a path guard), the delegate is not
+under it. The no-push rule stays instruction level here either way: the lead's own
+verification (the remote-refs tripwire below) detects a stray branch push after
+the fact -- a Gerrit `refs/for/*` push moves no remote-tracking ref and is not
+seen -- and prevents none; on a host
+that relies on such a hook for delegates, `leg-cmd.sh` has no option that keeps
+the hooks on, so edit the command it prints before you run it: delete the
+`--settings '{"disableAllHooks": true}'` pair, and replace every
+`--allowedTools 'Bash(<prefix>:*)'` entry with one for the spelling the hook
+rewrites that command to (for a hook that turns `git status` into `rtk git
+status`: `--allowedTools 'Bash(rtk git status:*)'`, likewise `git diff`, `git
+log` and the test command) -- the printed entries match only the spelling the
+hook never lets through. (This host's
+hooks only rewrite or log; none blocks.)
 
 Launch under the host's background mechanism, generous timeout (20m+ — and
 long silences are normal, not hangs).
@@ -73,11 +135,15 @@ Identical discipline to every implement skill:
   every new test to a position** ("class `TestX`, immediately after
   `test_y`").
 - **Ask it to run the test suite itself** and report honest counts — this
-  delegate can, and self-testing is its feedback loop. The lead re-runs
+  delegate can once its launch allows the test command (`--allow-bash`; it
+  cannot run a single one otherwise), and self-testing is its feedback loop.
+  Name the exact command in the prompt, spelled as allowed. The lead re-runs
   everything afterward regardless.
-- Git rules verbatim: MAY `git add`/`git commit` on the worktree branch;
-  NEVER push, reset, checkout/clean, or touch another branch; plain-English
-  commit messages, no AI-authorship trailers. (This delegate inherits the
+- Git rules verbatim: leave the work UNCOMMITTED (the lead commits after
+  verifying) unless the launch passed `--allow-bash 'git add'` and
+  `--allow-bash 'git commit'`, in which case MAY commit on the worktree
+  branch; NEVER push, reset, checkout/clean, or touch another branch;
+  plain-English commit messages, no AI-authorship trailers. (This delegate inherits the
   user's global instruction layer — measured refusing a push it was
   explicitly asked to make — but state the rules anyway: belt and braces.)
 - Point it at the repo's own `CLAUDE.md`/`AGENTS.md` sections that govern

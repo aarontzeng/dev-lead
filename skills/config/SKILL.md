@@ -57,8 +57,11 @@ DEV_LEAD=${DEV_LEAD_ROOT:-$(ls -d "$HOME"/.claude/plugins/cache/dev-lead/dev-lea
    If the user did not name assignments, ask per slot. Use the host's
    multiple-choice question tool when it has one. Offer the current value,
    that adapter's `effort.examples` spellings from
-   [`data/launch.json`](../../data/launch.json), and free text. Ask whether
-   the fix round inherits r1 or differs.
+   [`data/launch.json`](../../data/launch.json), and free text -- except
+   where the effort block says `closed: true` (claude, both roles, since
+   0.6.56): there the examples are the whole vocabulary and `set` refuses any
+   other word, because that CLI ignores an unknown effort and runs at its
+   default. Ask whether the fix round inherits r1 or differs.
 
    **No config file to align (since 0.6.28).** codex review runs `codex
    exec -c model_reasoning_effort=<e>`, so the roster's effort is the effort

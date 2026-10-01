@@ -11,13 +11,15 @@
 # Usage:
 #   leg-cmd.sh <adapter> <role> --model <model> [--effort <e>] [--target <dir>]
 #              [--base <ref>] [--prompt-file <f>] [--run-dir <dir>]
-#              [--add-dir <dir> ...] [--head <rev>] [--no-triage <reason>] [--check]
+#              [--add-dir <dir> ...] [--allow-bash <prefix> ...]
+#              [--head <rev>] [--no-triage <reason>] [--check]
 #
 # Not every option applies to every adapter, and one that does not is REFUSED,
 # never dropped: --target/--base/--prompt-file only where the adapter's template
 # has that slot (--prompt-file: grok; the others read the brief under $RUN_DIR,
 # so give them --run-dir), --add-dir only where data/launch.json names the
-# adapter's add_dir_flag (cursor).
+# adapter's add_dir_flag (cursor), --allow-bash only where the role names
+# allow_bash (claude implement).
 #
 # The brief's name follows the role, matching what the skills write: a review
 # leg reads "$RUN_DIR/prompt.md" (the lens), an implement leg "$RUN_DIR/task.md".
@@ -36,10 +38,10 @@ DATA="${DEV_LEAD_LAUNCH:-$HERE/../data/launch.json}"   # override: test seam onl
 [ -z "${DEV_LEAD_LAUNCH:-}" ] || echo "leg-cmd: launch data overridden by DEV_LEAD_LAUNCH=$DATA" >&2
 [ -f "$DATA" ] || die "cannot find data/launch.json at $DATA"
 
-[ $# -ge 2 ] || die "usage: leg-cmd.sh <adapter> <role> --model <model> [--effort <e>] [--target <dir>] [--base <ref>] [--prompt-file <f>] [--run-dir <dir>] [--add-dir <dir> ...] [--head <rev>] [--no-triage <reason>] [--check]  (each option only where the adapter takes it; see the header of this script)"
+[ $# -ge 2 ] || die "usage: leg-cmd.sh <adapter> <role> --model <model> [--effort <e>] [--target <dir>] [--base <ref>] [--prompt-file <f>] [--run-dir <dir>] [--add-dir <dir> ...] [--allow-bash <prefix> ...] [--head <rev>] [--no-triage <reason>] [--check]  (each option only where the adapter takes it; see the header of this script)"
 ADAPTER=$1; ROLE=$2; shift 2
 
-MODEL=""; EFFORT=""; TARGET=""; BASE=""; PROMPT_FILE=""; RUN_DIR_ARG=""; HEAD=""; NO_TRIAGE=""; HEAD_GIVEN=0; NO_TRIAGE_GIVEN=0; CHECK=0; ADD_DIRS=""
+MODEL=""; EFFORT=""; TARGET=""; BASE=""; PROMPT_FILE=""; RUN_DIR_ARG=""; HEAD=""; NO_TRIAGE=""; HEAD_GIVEN=0; NO_TRIAGE_GIVEN=0; CHECK=0; ADD_DIRS=""; ALLOW_BASH=""
 # Every value option checks its value is there before `shift 2`: under
 # `set -e`, `shift 2` with one argument left exits 1 with NO message, so a
 # trailing `--model` used to end the script silently (found 2026-09-25).
@@ -58,6 +60,16 @@ while [ $# -gt 0 ]; do
                    case "$2" in -*) die "--add-dir: '$2' starts with '-' and would read as a flag; use ./$2" ;; esac
                    case "$2" in *$'\n'*) die "--add-dir: a directory name may not contain a newline" ;; esac
                    ADD_DIRS="$ADD_DIRS$2"$'\n'; shift 2 ;;
+    --allow-bash)  needs_value "$@"
+                   case "$2" in *[![:space:]]*) ;; *) die "--allow-bash needs a non-empty command prefix" ;; esac
+                   case "$2" in *$'\n'*) die "--allow-bash: a command prefix may not contain a newline" ;; esac
+                   # Permission-rule syntax, not command text: inside Bash(<prefix>:*)
+                   # a '*' widens the rule (`--allow-bash '*'` matched every command,
+                   # found by a review leg 2026-10-01) and a parenthesis ends it.
+                   for c in '*' '(' ')'; do
+                     case "$2" in *"$c"*) die "--allow-bash: a command prefix may not contain '$c' (permission-rule syntax in Bash(<prefix>:*)); name the literal command" ;; esac
+                   done
+                   ALLOW_BASH="$ALLOW_BASH$2"$'\n'; shift 2 ;;
     --check)       CHECK=1; shift ;;
     *) die "unknown option: $1" ;;
   esac
@@ -67,7 +79,7 @@ done
 ADAPTER="$ADAPTER" ROLE="$ROLE" MODEL="$MODEL" EFFORT="$EFFORT" TARGET="$TARGET" \
 BASE="$BASE" PROMPT_FILE="$PROMPT_FILE" RUN_DIR_ARG="$RUN_DIR_ARG" HEAD="$HEAD" NO_TRIAGE="$NO_TRIAGE" \
 HEAD_GIVEN="$HEAD_GIVEN" NO_TRIAGE_GIVEN="$NO_TRIAGE_GIVEN" \
-CHECK="$CHECK" DATA="$DATA" ADD_DIRS="$ADD_DIRS" HERE="$HERE" python3 - <<'PY'
+CHECK="$CHECK" DATA="$DATA" ADD_DIRS="$ADD_DIRS" ALLOW_BASH="$ALLOW_BASH" HERE="$HERE" python3 - <<'PY'
 import json, os, shlex, sys
 
 # One absolute --target for everything below: the gate reads HEAD with
@@ -113,6 +125,10 @@ if reason:
                    ", ".join(eff.get("examples", []))),
         "none": " (its CLI default applies; see data/launch.json); --model selects the tier",
     }
+    if mech == "flag" and effort:
+        # A word outside a closed vocabulary (0.6.56): the refusal already
+        # names every word the CLI accepts.
+        sys.exit("leg-cmd: %s" % reason)
     sys.exit("leg-cmd: %s%s" % (reason, hints.get(mech, " -- refusing to emit an unvalidated command")))
 
 # A model id whose provider prefix is missing is accepted by the CLI and then
@@ -246,6 +262,26 @@ if add_dirs:
         extra += [flag, d_]
     argv[at:at] = extra
 
+# Shell commands a write delegate's permission mode does not cover. claude
+# implement, measured 2026-10-01 (2.1.286): acceptEdits in -p mode ran no shell
+# at all -- not a test, not py_compile, not git status -- because nothing can
+# answer its approval prompt. Each --allow-bash prefix becomes one
+# `--allowedTools "Bash(<prefix>:*)"` entry after the role's defaults (git
+# status/diff/log -- not a sandbox: diff and log write a file with --output).
+# A role without allow_bash REFUSES the option rather than dropping it, and
+# there is deliberately no "allow every command" spelling (a prefix with '*',
+# '(' or ')' is refused above). Appended after every other token:
+# --allowedTools takes several values, so a prompt placed after it would be
+# read as one more tool.
+allow_bash = [x for x in os.environ.get("ALLOW_BASH", "").split("\n") if x]
+bash_spec = r.get("allow_bash")
+if allow_bash and not bash_spec:
+    sys.exit("leg-cmd: --allow-bash was given but %s/%s has no allow_bash in data/launch.json, "
+             "so it would be silently dropped" % (a, role))
+if bash_spec:
+    for prefix in dict.fromkeys(list(bash_spec.get("default") or []) + allow_bash):
+        argv += [bash_spec["flag"], "Bash(%s:*)" % prefix]
+
 # Quote EVERYTHING the caller supplied. The output is documented for
 # `eval "$(leg-cmd.sh ...)"`, so a token carrying a backtick, $(), ; or |
 # is executed by the caller -- and quoting only tokens that contain a SPACE
@@ -374,7 +410,10 @@ def _triage_gate():
     if missing_record:
         sys.exit("leg-cmd: triage record %s lacks %s" % (record_path, ", ".join(missing_record)))
     record_base = record.get("base")
-    if "base" in record and not (isinstance(record_base, str) and len(record_base) == 40
+    # null: a change record with no parent commit to compare against (a root
+    # patch set, or a skip that never computed one) -- like a record without
+    # the key, which is what change records were until 0.6.56.
+    if record_base is not None and not (isinstance(record_base, str) and len(record_base) == 40
                                  and all(c in "0123456789abcdef" for c in record_base)):
         sys.exit("leg-cmd: triage record %s has a malformed base %r; re-run triage" % (record_path, record_base))
     launch_base = os.environ.get("BASE", "")
@@ -406,12 +445,13 @@ _triage_gate()
 
 w = sys.stderr
 print("# adapter %s / role %s   (data/launch.json, verified %s)" % (a, role, spec["verified"]), file=w)
-# The effort block is ADAPTER-scoped but often describes ONE role: claude
-# declares applies_to_role "review" and carries an implement_note saying the
-# implement role passes none (pre-0.6.28 codex was the first such adapter, the
-# other way round). Printing the review note under implement told the caller
-# the opposite of the command beneath it. This `applies` test is display-only;
-# the launch decision above goes through roster.mechanism_for_role.
+# The effort block is ADAPTER-scoped but may describe ONE role: an adapter
+# that declares applies_to_role carries an implement_note for its other role
+# (pre-0.6.28 codex was the first; claude did the same from 0.6.35 to 0.6.55,
+# while its implement took no effort). Printing the review note under implement
+# told the caller the opposite of the command beneath it. This `applies` test
+# is display-only; the launch decision above goes through
+# roster.mechanism_for_role.
 applies = role == eff.get("applies_to_role", role)
 # A config_only adapter's effort comes from a file on THIS machine, so the
 # roster can only declare it. Print what is actually in force, or the lead
@@ -435,6 +475,10 @@ if eff["mechanism"] == "config_only" and applies:
           % (_in_force or "not set", os.path.expanduser(_cfg), _key, _key), file=w)
 note = eff.get("note", "") if applies else eff.get("implement_note", eff.get("note", ""))
 print("# effort: %s -- %s" % (mech, note.split(".")[0]), file=w)
+if bash_spec and not allow_bash:
+    print("# no --allow-bash: the delegate may run only %s -- pass the repo's test command "
+          "(e.g. --allow-bash 'python3 -m pytest') or it cannot run a single test"
+          % ", ".join(bash_spec.get("default") or []), file=w)
 # ADAPTER-wide, and said so: gotchas carry no role field in launch.json, so
 # some are review-path facts printed under an implement launch. Labelling
 # the scope costs a word; giving them a role costs a data-model change.

@@ -30,8 +30,15 @@ Implementation worker (inside a git worktree the lead created):
 
 ```bash
 cd "$WORKTREE" && claude -p "$(cat "$RUN_DIR/task.md")" \
-  --permission-mode acceptEdits --model <tier>
+  --permission-mode acceptEdits --model <tier> --effort <level> \
+  --settings '{"disableAllHooks": true}' \
+  --allowedTools 'Bash(git status:*)' --allowedTools 'Bash(git diff:*)' \
+  --allowedTools 'Bash(git log:*)' --allowedTools 'Bash(<test command>:*)'
 ```
+
+`leg-cmd.sh claude implement ... --allow-bash '<test command>'` emits the
+`claude` part of this shape (the `cd` is the lead's): one `--allowedTools`
+entry per allowed command prefix, after every other token.
 
 ## Measured behavior
 
@@ -42,18 +49,51 @@ cd "$WORKTREE" && claude -p "$(cat "$RUN_DIR/task.md")" \
   stdin or as a prompt argument when using --print` (measured 2026-08-19,
   claude 2.1.235) — which reads like a missing-prompt bug rather than an
   argument-order one. The positional form elsewhere in this file and in
-  `claude-implement` is fine as written, because neither passes a variadic
-  option; the review invocation redirects from stdin because that shape has
+  `claude-implement` is fine as written, because the prompt comes before the
+  one variadic option they pass (`--allowedTools`, last since 0.6.56); the
+  review invocation redirects from stdin because that shape has
   no ordering hazard at all and the reviewer is the leg most likely to grow
   an `--add-dir`. Do not generalise this to other families: opencode's rule is
   stricter and for a different reason — argv there cannot carry a real prompt
   at all (it hangs above ~2 KB), so its prompt must come from a file. Take the
   shape from the family's own runtime note, never from the leg you ran last.
 - **Headless auth just works** — no silent-auth dance (contrast agy).
-- **`acceptEdits` covers both file writes and shell/git in one flag.** It
-  wrote files, ran `git add`, and committed without a single prompt or hang.
-  There is no allow-list to maintain (contrast agy's per-machine
-  `unsandboxed(…)` rules).
+- **`acceptEdits` covers file edits, not the shell, in `-p` mode.** Probed
+  2026-10-01 (claude 2.1.286): `claude -p "<run python3 -c ...>"
+  --permission-mode acceptEdits` answered that the command needed approval
+  and ran nothing; adding `--allowedTools "Bash(python3:*)"` ran it. A real
+  gateway dispatch the same day made 68 turns and could not run a single
+  test, `py_compile` or `git status`. So the lead passes, per run, the
+  command prefixes the task needs -- the repo's test command first --
+  through `leg-cmd.sh claude implement --allow-bash <prefix>` (`git
+  status`/`git diff`/`git log` are its default; `git add`/`git commit` only
+  if the delegate is to commit). The list travels with the launch, not with
+  the machine (contrast agy's per-machine `unsandboxed(…)` rules), and it is
+  not a sandbox: `git diff` and `git log` can write a file with `--output`,
+  and the test command the lead allows runs code the delegate wrote, which
+  can do anything the account can (a push included; only the post-run refs
+  tripwire detects a branch push, not a Gerrit refs/for push) -- so the boundary is the task prompt plus the lead's
+  own verification, not the worktree. A prefix containing
+  `*`, `(` or `)` is refused (permission-rule syntax: `'*'` would match every
+  command). An earlier
+  version of this note, from a CLI version it did not record, said
+  `acceptEdits` alone wrote files, ran `git add` and committed without a
+  prompt; that does not hold on 2.1.286.
+- **The implement run has hooks off** (`--settings '{"disableAllHooks":
+  true}'`), because a PreToolUse hook that rewrites commands changes what an
+  allow rule has to match. Probed 2026-10-01 (claude 2.1.286): the user's rtk
+  hook rewrote `git status --short` to `rtk git status --short`, and
+  `--output-format json` listed it under `permission_denials` although
+  `--allowedTools 'Bash(git status:*)'` was given; it rewrites `python3 -m
+  pytest …` to `rtk pytest …` and `git diff` to `rtk git diff` too, so a
+  delegate given `--allow-bash 'python3 -m pytest'` still could not run a
+  test. With hooks disabled the same rule ran `git status --short`. The same
+  probe showed repeated `--allowedTools` flags accumulate (`Bash(git
+  status:*)` and `Bash(python3:*)` given separately, python3 ran). So the
+  delegate also runs without the lead's own hooks (memory, notification,
+  language) and without any hook that blocks something -- a push or path
+  guard would not apply to it (see claude-implement for what to do on such a
+  host). The review role is not changed: it keeps the hooks.
 - **Working directory is the shell's cwd** — plain and predictable; no
   workspace-root trap (contrast agy's scratch-dir default).
 - **Commit messages come out clean** — no AI-authorship trailers, when the
@@ -63,12 +103,21 @@ cd "$WORKTREE" && claude -p "$(cat "$RUN_DIR/task.md")" \
   will check it.
 - `--effort <low|medium|high|xhigh|max>` sets the depth (claude 2.1.281; 19
   headless plan-mode review runs at `high` completed normally, 2026-09-24).
-  Since 0.6.35 the REVIEW role requires it -- the roster or triage says which
-  level -- while the implement role passes none, so `roster.py plan
-  --implement claude=<model>` stays launchable ([`data/launch.json`](../../../data/launch.json), `applies_to_role`).
-- Do **not** pass `--dangerously-skip-permissions`. `acceptEdits` was
-  sufficient for real write work in testing; the bypass flag would also
-  auto-approve things the standing rules forbid.
+  The REVIEW role requires it since 0.6.35 and the IMPLEMENT role since
+  0.6.56 (claude 2.1.286 ran `-p ... --permission-mode acceptEdits --effort
+  xhigh` and edited files, 2026-10-01); the roster or triage says which level,
+  and `roster.py plan --implement claude=<model>` carries the roster entry's.
+- **An unknown `--effort` is not refused by the CLI.** `--effort bogus` prints
+  `Warning: Unknown --effort value 'bogus' — ignoring it and using the default
+  effort. Valid values: low, medium, high, xhigh, max.` on stderr and exits 0
+  (claude 2.1.286, 2026-10-01), so a typo would run silently at the default.
+  Since 0.6.56 [`data/launch.json`](../../../data/launch.json) declares the
+  vocabulary closed (`closed: true`), and `leg-cmd.sh`, `roster.py check` and
+  `plan` refuse any other word -- on review too, which accepted one until
+  then.
+- Do **not** pass `--dangerously-skip-permissions`. `acceptEdits` plus the
+  `--allowedTools` entries the task needs is the write posture; the bypass
+  flag would also auto-approve things the standing rules forbid.
 
 ## Cut the MCP stack for a read-only reviewer
 
@@ -125,8 +174,13 @@ printed the command for the human instead — quoting the user's standing
 no-push instruction verbatim. So the instruction layer travels with the
 delegate for free.
 
-That is a **different kind of guarantee** from a machine-enforced allow-list
-(the agy/opencode approach). Neither is strictly stronger: instruction-level
+That no-push rule is instruction level -- a **different kind of guarantee**
+from a machine-enforced allow-list (the agy/opencode approach). Since 0.6.56
+the implement role's shell commands are also gated per run, by its
+`--allowedTools` list with hooks off (see Measured behavior); that list does
+not replace the instruction layer, because nothing in this suite records it
+refusing `git push` and the allowed test command runs code the delegate
+wrote. Neither is strictly stronger: instruction-level
 survives commands nobody anticipated (any phrasing of "publish this");
 permission-level survives a model that misreads its instructions. When a
 lead delegates something destructive-adjacent, state the rule in the task

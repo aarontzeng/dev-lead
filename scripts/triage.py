@@ -1571,7 +1571,7 @@ def triage_change(config, raw, path, number, query_json, include_wip, as_of=None
         _fired(fired, "legs", "no legs for skip")
         common.update({"ps_kind": None, "delta_files": None, "lenses": None, "risk_floor": None,
                        "legs": "none", "review_legs": [], "unmatched_files": [], "min_review_legs": 0,
-                       "flags": None, "fired_rules": fired, "head": current["revision"]})
+                       "flags": None, "fired_rules": fired, "head": current["revision"], "base": None})
         return common
     clone = config["clones"].get(project)
     if not clone:
@@ -1581,8 +1581,14 @@ def triage_change(config, raw, path, number, query_json, include_wip, as_of=None
         raise InputError("triage: clone for %s does not exist: %s" % (project, repo))
     _ensure_revision(repo, number, current["number"], current["revision"])
     current_parent = _parent(repo, current)
+    # The record's base (0.6.56): the commit this patch set's diff is taken
+    # against -- the first parent of a merge -- as a full sha, so leg-cmd.sh
+    # holds a review launch's --base to it as it does for a scope record. A
+    # root patch set has no parent commit, and its base is null.
+    base = None
     if current_parent != EMPTY_TREE:
         _ensure_revision(repo, number, current["number"], current_parent)
+        base = _git(repo, "rev-parse", "--verify", current_parent + "^{commit}").strip()
     current_entries = _diff_entries(repo, current_parent, current["revision"])
     prior = voted_set if voted_set and str(voted_set["number"]) != str(current["number"]) else None
     if prior:
@@ -1681,7 +1687,7 @@ def triage_change(config, raw, path, number, query_json, include_wip, as_of=None
         "legs": legs, "review_legs": review_legs,
         "unmatched_files": _unmatched_files(config, files),
         "min_review_legs": MIN_REVIEW_LEGS.get(risk_floor, 0) if legs == "roster" else 0,
-        "flags": flags, "fired_rules": fired, "head": current["revision"],
+        "flags": flags, "fired_rules": fired, "head": current["revision"], "base": base,
     })
     return common
 

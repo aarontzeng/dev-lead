@@ -198,7 +198,11 @@ adapter's gotchas on stderr, and **refuses the spellings that are actually
 got wrong** — an `--effort` flag for a family that puts effort in the model
 name, a missing `--effort` on codex's review (which takes it per call since
 0.6.28), a missing `--variant` for opencode. Every one of those refusals is a
-mistake measured in a single session (2026-09-08).
+mistake measured in a single session (2026-09-08). Since 0.6.56 it also
+refuses a claude effort outside `low`/`medium`/`high`/`xhigh`/`max`, on review
+and implement alike: that CLI only warns about an unknown value and runs at
+its default. A claude implement leg also needs `--allow-bash '<the repo's test
+command>'`, or its delegate cannot run a single test (claude-implement).
 
 Run it once per leg at dispatch and paste what it prints.
 

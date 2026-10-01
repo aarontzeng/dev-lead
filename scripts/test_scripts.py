@@ -8,6 +8,7 @@ directory still exits 0, and reads as a passing safety check).
 """
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -50,6 +51,17 @@ def check(name, cond, detail=""):
     else:
         print(f"  FAIL {name} {detail}")
         FAILURES.append(name)
+
+
+def flag_value(command, flag):
+    """The token after `flag` in one shell command line, or None -- and None
+    when the flag appears more than once, so a dangling or contradictory second
+    `--effort` cannot hide behind a correct first one. A substring test passes an
+    emitted `--effort xhighx` for xhigh; a token test does not."""
+    tokens = shlex.split(command)
+    if tokens.count(flag) != 1:
+        return None
+    return tokens[tokens.index(flag) + 1] if flag in tokens[:-1] else None
 
 
 # ---------------------------------------------------------------- freeze ----
@@ -2798,7 +2810,7 @@ def test_leg_cmd():
                  ["agy", "--model", "gemini-3.8-flash-high", "--target", "/tmp/x"],
                  ["cursor", "--model", "cursor-grok-4.6-medium"],
                  ["opencode", "--model", "opencode/x", "--effort", "high"],
-                 ["claude", "--model", "opus"]):
+                 ["claude", "--model", "opus", "--effort", "high"]):
         adapter = argv[0]
         r = subprocess.run([str(script), adapter, "implement", *argv[1:]],
                            capture_output=True, text=True)
@@ -2810,7 +2822,7 @@ def test_leg_cmd():
     # A value option given LAST with no value. `MODEL=${2:-}; shift 2` under
     # `set -e` exited 1 with nothing on stderr (measured 2026-09-25), so an
     # `eval "$(leg-cmd.sh ... --model)"` composed nothing and said nothing.
-    for opt in ("--model", "--effort", "--target", "--base", "--prompt-file", "--run-dir"):
+    for opt in ("--model", "--effort", "--target", "--base", "--prompt-file", "--run-dir", "--allow-bash"):
         r = subprocess.run([str(script), "codex", "review", opt],
                            capture_output=True, text=True)
         check(f"leg-cmd: a trailing {opt} is a usage error, not a silent exit",
@@ -3278,21 +3290,129 @@ def test_leg_cmd():
         check(f"leg-cmd: {argv[0]}/{argv[1]} renders", r.returncode == 0, r.stderr)
         check(f"leg-cmd: {argv[0]}/{argv[1]} keeps {needle}",
               needle in r.stdout, r.stdout)
-    # 0.6.35: claude's --effort is scoped to review (applies_to_role).
-    r = subprocess.run([str(script), "claude", "review", "--model", "opus"], capture_output=True, text=True)
-    check("leg-cmd: claude review without --effort is refused",
-          r.returncode != 0 and "needs --effort" in r.stderr and not r.stdout, r.stderr)
-    r = subprocess.run([str(script), "claude", "review", "--model", "opus", "--effort", "xhigh"],
-                       capture_output=True, text=True)
-    check("leg-cmd: claude review passes the effort to the CLI",
-          r.returncode == 0 and "--model opus --effort xhigh" in r.stdout, r.stdout + r.stderr)
+    # claude takes --effort on review since 0.6.35 and on implement since
+    # 0.6.56, from a CLOSED vocabulary: the CLI only warns about an unknown
+    # value and runs at its default (2.1.286, 2026-10-01), so the suite refuses
+    # it -- on review too, which accepted any word until 0.6.56.
+    for role in ("review", "implement"):
+        r = subprocess.run([str(script), "claude", role, "--model", "opus"], capture_output=True, text=True)
+        check("leg-cmd: claude %s without --effort is refused" % role,
+              r.returncode != 0 and "needs --effort" in r.stderr and not r.stdout, r.stderr)
+        # Three words, so an emitted constant (a hard-coded xhigh) cannot meet all.
+        for word in ("low", "xhigh", "max"):
+            r = subprocess.run([str(script), "claude", role, "--model", "opus", "--effort", word],
+                               capture_output=True, text=True)
+            launch_line = r.stdout.strip().splitlines()[-1] if r.stdout.strip() else ""
+            check("leg-cmd: claude %s passes the effort %r to the CLI" % (role, word),
+                  r.returncode == 0 and flag_value(launch_line, "--model") == "opus"
+                  and flag_value(launch_line, "--effort") == word, r.stdout + r.stderr)
+        # xhighx / maximum / "high " contain a vocabulary word: membership is exact.
+        for bad in ("bogus", "XHIGH", "ultra", "xhighx", "maximum", "high "):
+            r = subprocess.run([str(script), "claude", role, "--model", "opus", "--effort", bad],
+                               capture_output=True, text=True)
+            check("leg-cmd: claude %s refuses the effort %r (closed vocabulary)" % (role, bad),
+                  r.returncode != 0 and not r.stdout
+                  and "only as one of: low, medium, high, xhigh, max -- not %r" % bad in r.stderr, r.stderr)
+    # ...and only claude's vocabulary is closed: the others pass a word on.
+    r = subprocess.run([str(script), "grok", "implement", "--model", "grok-4.6", "--effort", "turbo",
+                        "--prompt-file", "/tmp/p.md"], capture_output=True, text=True)
+    check("leg-cmd: an open vocabulary (grok) still passes an unlisted word",
+          r.returncode == 0 and "--effort turbo" in r.stdout, r.stdout + r.stderr)
+
+    # claude implement runs no shell under acceptEdits alone (2.1.286,
+    # 2026-10-01), so the git status/diff/log defaults and every --allow-bash
+    # prefix become --allowedTools entries, last on the line (the flag is
+    # variadic). Hooks are off before them: a hook that rewrote `git status`
+    # to `rtk git status` left the allowed command denied (the same day).
     r = subprocess.run([str(script), "claude", "implement", "--model", "opus", "--effort", "high"],
                        capture_output=True, text=True)
-    check("leg-cmd: claude implement refuses --effort (the scope is review only)",
-          r.returncode != 0 and "passes no effort" in r.stderr and not r.stdout, r.stderr)
-    r = subprocess.run([str(script), "claude", "implement", "--model", "opus"], capture_output=True, text=True)
-    check("leg-cmd: claude implement without --effort renders, with no --effort in it",
-          r.returncode == 0 and "--effort" not in r.stdout, r.stdout + r.stderr)
+    git_reads = ("--allowedTools 'Bash(git status:*)' --allowedTools 'Bash(git diff:*)' "
+                 "--allowedTools 'Bash(git log:*)'")
+    hooks_off = "--settings '{\"disableAllHooks\": true}'"
+    check("leg-cmd: claude implement allows the git status/diff/log defaults, after every other token",
+          r.returncode == 0 and r.stdout.rstrip().endswith("--effort high %s %s" % (hooks_off, git_reads)),
+          r.stdout + r.stderr)
+    launch_line = r.stdout.strip().splitlines()[-1] if r.stdout.strip() else ""
+    tokens = shlex.split(launch_line)
+    check("leg-cmd: claude implement turns hooks off before the first --allowedTools",
+          flag_value(launch_line, "--settings") == '{"disableAllHooks": true}'
+          and "--allowedTools" in tokens and tokens.index("--settings") < tokens.index("--allowedTools"), tokens)
+    check("leg-cmd: ...and says the delegate cannot run a test without --allow-bash",
+          "no --allow-bash" in r.stderr, r.stderr)
+    r = subprocess.run([str(script), "claude", "review", "--model", "opus", "--effort", "high"],
+                       capture_output=True, text=True)
+    check("leg-cmd: claude review keeps its hooks (no --settings)",
+          r.returncode == 0 and r.stdout.strip() and "--settings" not in r.stdout
+          and "disableAllHooks" not in r.stdout, r.stdout + r.stderr)
+    r = subprocess.run([str(script), "claude", "implement", "--model", "opus", "--effort", "high",
+                        "--allow-bash", "python3 scripts/test_scripts.py", "--allow-bash", "make check"],
+                       capture_output=True, text=True)
+    check("leg-cmd: each --allow-bash prefix is one allowedTools entry after the defaults",
+          r.returncode == 0 and r.stdout.rstrip().endswith(
+              git_reads + " --allowedTools 'Bash(python3 scripts/test_scripts.py:*)'"
+              " --allowedTools 'Bash(make check:*)'"), r.stdout + r.stderr)
+    check("leg-cmd: ...and the no-test warning is gone", "no --allow-bash" not in r.stderr, r.stderr)
+    # Every adapter/role in launch.json without allow_bash, each given the
+    # options its template needs to reach the check: three hand-picked pairs
+    # would pass a refusal that skipped one adapter by name.
+    launch_doc = json.loads((SCRIPTS.parent / "data" / "launch.json").read_text(encoding="utf-8"))
+    no_bash = []
+    for adapter, spec in launch_doc.items():
+        if adapter.startswith("_"):
+            continue
+        for role, role_spec in spec["role"].items():
+            if role_spec.get("allow_bash"):
+                continue
+            template = " ".join(role_spec["argv"])
+            argv = [adapter, role, "--model", (spec.get("model_prefix") or "") + "m"]
+            if "{EFFORT}" in template:
+                argv += ["--effort", "high"]
+            if "{TARGET}" in template or role_spec.get("prompt_frame"):
+                argv += ["--target", gate_target]
+            if "{BASE}" in template or role_spec.get("prompt_frame"):
+                argv += ["--base", "abc"]
+            if "{PROMPT_FILE}" in template:
+                argv += ["--prompt-file", "/tmp/p.md"]
+            no_bash.append(argv)
+    check("leg-cmd: every adapter/role but claude implement lacks allow_bash (11)", len(no_bash) == 11,
+          [argv[:2] for argv in no_bash])
+    for argv in no_bash:
+        r = subprocess.run([str(script), *argv, "--allow-bash", "pytest"], capture_output=True, text=True)
+        check("leg-cmd: %s %s refuses --allow-bash instead of dropping it" % (argv[0], argv[1]),
+              r.returncode != 0 and not r.stdout and "--allow-bash was given" in r.stderr
+              and "silently dropped" in r.stderr, r.stdout + r.stderr)
+    for bad, needle in (("", "non-empty"), ("   ", "non-empty"), ("pytest\nrm -rf /", "newline"),
+                        ("*", "contain '*'"), ("git *", "contain '*'"),
+                        ("a(b", "contain '('"), ("c)d", "contain ')'")):
+        r = subprocess.run([str(script), "claude", "implement", "--model", "opus", "--effort", "high",
+                            "--allow-bash", bad], capture_output=True, text=True)
+        check("leg-cmd: --allow-bash refuses the prefix %r" % bad,
+              r.returncode != 0 and not r.stdout and needle in r.stderr, r.stdout + r.stderr)
+    # Quoting, executed: the output is meant for eval, so a hostile prefix must
+    # reach the CLI as one literal argument and run nothing. (`$(...)` is
+    # refused before this point for its parentheses, so backticks and a pipe
+    # carry the command substitution here.)
+    with tempfile.TemporaryDirectory() as td:
+        hostile = "x'; touch PWNED1; echo '`touch PWNED2` | touch PWNED3"
+        rdir = Path(td) / "run"
+        rdir.mkdir()
+        (rdir / "task.md").write_text("the task\n")
+        fake = Path(td) / "bin"
+        fake.mkdir()
+        (fake / "claude").write_text("#!/bin/sh\nfor a in \"$@\"; do printf '%s\\n' \"$a\"; done\n")
+        (fake / "claude").chmod(0o755)
+        emitted = subprocess.run([str(script), "claude", "implement", "--model", "opus", "--effort", "high",
+                                  "--run-dir", str(rdir), "--allow-bash", hostile],
+                                 capture_output=True, text=True).stdout
+        out = subprocess.run(["bash", "-c", 'eval "$(cat)"'], input=emitted, capture_output=True, text=True,
+                             cwd=td, env=dict(os.environ, PATH="%s:%s" % (fake, os.environ["PATH"])))
+        args = out.stdout.splitlines()
+        check("leg-cmd: a hostile --allow-bash prefix reaches the CLI as one literal entry",
+              args[-2:] == ["--allowedTools", "Bash(%s:*)" % hostile] and "the task" in args,
+              out.stdout + out.stderr)
+        check("leg-cmd: ...and eval runs nothing it carried",
+              not any((Path(td) / name).exists() for name in ("PWNED1", "PWNED2", "PWNED3")),
+              sorted(os.listdir(td)))
     check("leg-cmd: cursor implement carries no forbidden --force",
           "--force" not in subprocess.run(
               [str(script), "cursor", "implement", "--model", "m"],
@@ -3590,7 +3710,7 @@ def test_triage_launch_gate(tmp):
     no_base.pop("base")
     _write_doc(record, no_base)
     got = run(*launch, env=env)
-    check("leg-cmd triage: a record without a base (change mode) is not compared with --base",
+    check("leg-cmd triage: a record without a base (a change record before 0.6.56) is not compared with --base",
           got.returncode == 0, got.stdout + got.stderr)
     _write_doc(record, dict(record_doc, base=""))
     got = run(*launch, env=env)
@@ -4581,41 +4701,128 @@ def test_roster(tmp):
     _write_doc(path, unlabelled)
     got = _checked(path)
     text = got.stdout + got.stderr
-    # 0.6.35: claude's effort is scoped to review. A review entry must carry
-    # one; an implement entry must not; and plan's implement override, which
-    # has no effort syntax, keeps working.
+    # claude takes --effort on review since 0.6.35 and on implement since
+    # 0.6.56, and only from its closed vocabulary (low..max): the CLI warns
+    # about an unknown value and runs at its default, so check refuses it --
+    # on review too, which accepted any word until 0.6.56. plan carries the
+    # implement entry's effort the way it does codex implement's.
     scoped = _roster_doc({"claude": {"model": "claude-opus-5-5", "family": "Claude"}},
-                         implement={"claude": {"model": "claude-opus-5-5", "family": "Claude", "effort": "high"}})
+                         implement={"claude": {"model": "claude-opus-5-5", "family": "Claude"}})
     path_scoped = tmp / "claude-scoped.json"
     _write_doc(path_scoped, scoped)
     g35 = _checked(path_scoped)
     text_scoped = g35.stdout + g35.stderr
     check("roster check: a claude REVIEW leg without an effort is refused",
           g35.returncode == 1 and "rounds.r1.review.claude.effort: missing effort" in text_scoped, text_scoped)
-    check("roster check: a claude IMPLEMENT leg with an effort is refused, naming the role",
-          "rounds.r1.implement.claude.effort: effort key is not allowed; the suite passes no effort for claude implement"
-          in text_scoped, text_scoped)
     check("roster check: ...and the missing review effort points at the 0.6.35 migration",
           "claude review takes --effort since 0.6.35" in text_scoped, text_scoped)
+    check("roster check: a claude IMPLEMENT leg without an effort is refused, with its 0.6.56 migration",
+          "rounds.r1.implement.claude.effort: missing effort; claude implement takes --effort since 0.6.56"
+          in text_scoped, text_scoped)
+    misspelt = _roster_doc({"claude": {"model": "claude-opus-5-5", "family": "Claude", "effort": "hgih"},
+                            "codex": _codex_leg()},
+                           implement={"claude": {"model": "claude-opus-5-5", "family": "Claude", "effort": "bogus"}})
+    path_misspelt = tmp / "claude-misspelt.json"
+    _write_doc(path_misspelt, misspelt)
+    g56 = _checked(path_misspelt)
+    text56 = g56.stdout + g56.stderr
+    check("roster check: a claude REVIEW effort outside low..max is refused (accepted until 0.6.56)",
+          g56.returncode == 1 and "rounds.r1.review.claude.effort: claude takes --effort only as one of: "
+          "low, medium, high, xhigh, max -- not 'hgih'" in text56, text56)
+    check("roster check: ...and a claude IMPLEMENT one",
+          "rounds.r1.implement.claude.effort: claude takes --effort only as one of: "
+          "low, medium, high, xhigh, max -- not 'bogus'" in text56, text56)
+    # Words that CONTAIN a listed one: only an exact match is in the vocabulary.
+    contains = _roster_doc({"claude": {"model": "claude-opus-5-5", "family": "Claude", "effort": "xhighx"},
+                            "codex": _codex_leg()},
+                           implement={"claude": {"model": "claude-opus-5-5", "family": "Claude", "effort": "maximum"}})
+    padded = _roster_doc({"claude": {"model": "claude-opus-5-5", "family": "Claude", "effort": "high "},
+                          "codex": _codex_leg()},
+                         implement={"claude": {"model": "claude-opus-5-5", "family": "Claude", "effort": " max"}})
+    path_padded = tmp / "claude-padded.json"
+    _write_doc(path_padded, padded)
+    g56 = _checked(path_padded)
+    text56 = g56.stdout + g56.stderr
+    check("roster check: a padded review effort ('high ') is refused, not trimmed",
+          g56.returncode == 1 and "not 'high '" in text56, text56)
+    check("roster check: ...and a padded implement one (' max')", "not ' max'" in text56, text56)
+    g56 = run(roster, "plan", "--round", "r1", "--implement", "claude=claude-opus-5-5", "--review", "codex",
+              env=_roster_env(tmp, DEV_LEAD_ROSTER=path_padded))
+    check("roster plan: a padded effort plans nothing, and says why",
+          g56.returncode == 1 and "args=" not in g56.stdout and "not ' max'" in g56.stdout,
+          g56.stdout + g56.stderr)
+    path_contains = tmp / "claude-contains.json"
+    _write_doc(path_contains, contains)
+    g56 = _checked(path_contains)
+    text56 = g56.stdout + g56.stderr
+    check("roster check: a review effort that merely contains a listed word ('xhighx') is refused",
+          g56.returncode == 1 and "not 'xhighx'" in text56, text56)
+    check("roster check: ...and an implement one ('maximum')", "not 'maximum'" in text56, text56)
+    open_vocab = tmp / "open-vocabulary.json"
+    _write_doc(open_vocab, _roster_doc({"opencode": {"model": "opencode/m", "effort": "turbo",
+                                                     "effort_in": "flag", "family": "Meta"}}))
+    g56 = _checked(open_vocab)
+    check("roster check: an open vocabulary (opencode) still takes an unlisted word",
+          g56.returncode == 0, g56.stdout + g56.stderr)
     ok_doc = _roster_doc({"claude": {"model": "claude-opus-5-5", "family": "Claude", "effort": "xhigh"},
                           "codex": _codex_leg()},
-                         implement={"claude": {"model": "claude-opus-5-5", "family": "Claude"}})
+                         implement={"claude": {"model": "claude-opus-5-5", "family": "Claude", "effort": "high"}})
     path_ok = tmp / "claude-scoped-ok.json"
     _write_doc(path_ok, ok_doc)
     g35 = run(roster, "plan", "--round", "r1", "--implement", "agy=gemini-3.8-flash-high:Gemini", "--review", "claude",
               env=_roster_env(tmp, DEV_LEAD_ROSTER=path_ok))
+    plan_line = next((line for line in g35.stdout.splitlines() if line.startswith("review claude ")), "")
     check("roster plan: a claude review leg passes --effort",
-          g35.returncode == 0 and "--model claude-opus-5-5 --effort xhigh" in g35.stdout, g35.stdout + g35.stderr)
+          g35.returncode == 0 and flag_value(plan_line, "args=--model") == "claude-opus-5-5"
+          and flag_value(plan_line, "--effort") == "xhigh", g35.stdout + g35.stderr)
+    # A second level, so a constant xhigh in the plan line cannot meet both.
+    path_lo = tmp / "claude-scoped-low.json"
+    _write_doc(path_lo, _roster_doc({"claude": {"model": "claude-opus-5-5", "family": "Claude", "effort": "low"},
+                                     "codex": _codex_leg()},
+                                    implement={"claude": {"model": "claude-opus-5-5", "family": "Claude",
+                                                          "effort": "max"}}))
+    g35 = run(roster, "plan", "--round", "r1", "--implement", "agy=gemini-3.8-flash-high:Gemini", "--review", "claude",
+              env=_roster_env(tmp, DEV_LEAD_ROSTER=path_lo))
+    plan_line = next((line for line in g35.stdout.splitlines() if line.startswith("review claude ")), "")
+    check("roster plan: a claude review leg carries the roster's own level (low)",
+          g35.returncode == 0 and flag_value(plan_line, "--effort") == "low", g35.stdout + g35.stderr)
+    g35 = run(roster, "plan", "--round", "r1", "--implement", "claude=claude-opus-5-5", "--review", "codex",
+              env=_roster_env(tmp, DEV_LEAD_ROSTER=path_lo))
+    impl_line = next((line for line in g35.stdout.splitlines() if line.startswith("implement claude ")), "")
+    check("roster plan: a claude implement leg carries the roster's own level (max), not another one",
+          g35.returncode == 0 and flag_value(impl_line, "--effort") == "max"
+          and "effort=flag max" in impl_line, g35.stdout + g35.stderr)
     g35 = run(roster, "plan", "--round", "r1", "--implement", "claude=claude-opus-5-5", "--review", "codex",
               env=_roster_env(tmp, DEV_LEAD_ROSTER=path_ok))
     shown = run(roster, "show", env=_roster_env(tmp, DEV_LEAD_ROSTER=path_ok))
     check("roster show: a claude review leg reads as a flag with its level",
           "effort=flag xhigh" in shown.stdout, shown.stdout + shown.stderr)
-    impl_line = [l for l in shown.stdout.splitlines() if "claude" in l and "effort=" in l and "flag xhigh" not in l]
-    check("roster show: ...and the claude implement leg as none (its role's mechanism, not the adapter's)",
-          impl_line and all("effort=none" in l for l in impl_line), shown.stdout)
-    check("roster plan: the claude implement override still resolves without an effort",
-          g35.returncode == 0 and "missing effort" not in (g35.stdout + g35.stderr), g35.stdout + g35.stderr)
+    check("roster show: ...and the claude implement leg as a flag with its own level",
+          "claude: model=claude-opus-5-5 family=Claude effort=flag high" in shown.stdout, shown.stdout)
+    check("roster plan: the claude implement override carries the roster entry's effort",
+          g35.returncode == 0 and "implement claude model=claude-opus-5-5 family=Claude effort=flag high override "
+          "args=--model claude-opus-5-5 --effort high" in g35.stdout.splitlines(), g35.stdout + g35.stderr)
+    no_impl = tmp / "claude-implement-unset.json"
+    _write_doc(no_impl, _roster_doc({"codex": _codex_leg()}))
+    g56 = run(roster, "plan", "--round", "r1", "--implement", "claude=claude-opus-5-5", "--review", "codex",
+              env=_roster_env(tmp, DEV_LEAD_ROSTER=no_impl))
+    check("roster plan: a claude implement leg with no roster effort reports missing effort, as codex's does",
+          g56.returncode == 1 and "rounds.r1.implement.claude: missing effort" in g56.stdout
+          and "args=" not in g56.stdout, g56.stdout + g56.stderr)
+    set_file = tmp / "claude-set.json"
+    _write_doc(set_file, _roster_doc({"codex": _codex_leg()}))
+    set_env = _roster_env(tmp, DEV_LEAD_ROSTER=set_file)
+    g56 = run(roster, "set", "r1", "implement", "claude", "--model", "claude-opus-5-5", "--effort", "xhigh",
+              "--why", "owner, 2026-10-01", env=set_env)
+    stored = json.loads(set_file.read_text(encoding="utf-8"))["rounds"]["r1"]["implement"].get("claude") or {}
+    check("roster set: claude implement accepts --effort xhigh (refused before 0.6.56)",
+          g56.returncode == 0 and stored.get("effort") == "xhigh", g56.stdout + g56.stderr)
+    before = set_file.read_bytes()
+    g56 = run(roster, "set", "r1", "implement", "claude", "--model", "claude-opus-5-5", "--effort", "xhihg",
+              "--why", "a typo", env=set_env)
+    check("roster set: ...and refuses a misspelt one, leaving the file byte-identical",
+          g56.returncode == 1 and "not 'xhihg'" in g56.stdout and set_file.read_bytes() == before,
+          g56.stdout + g56.stderr)
 
     check("roster check: a multi-family fallback without a family is refused",
           got.returncode == 1 and "rounds.r1.review.cursor.fallback.family" in text, text)
@@ -4666,7 +4873,9 @@ def test_roster(tmp):
     home = tmp / "home"
     home.mkdir()
     env = _roster_env(home, DEV_LEAD_ROSTER=live)
-    plan = run(roster, "plan", "--round", "r1", "--implement", "claude=claude-sonnet",
+    # An agy implementer: the live roster's claude implement slot is unset, and
+    # claude implement needs the roster's effort since 0.6.56.
+    plan = run(roster, "plan", "--round", "r1", "--implement", "agy=gemini-3.8-flash-high:Gemini",
                "--review", "codex,opencode", env=env)
     out = plan.stdout + plan.stderr
     check("roster plan: codex + opencode exits 0", plan.returncode == 0, out)
@@ -4734,7 +4943,7 @@ def test_roster(tmp):
     gated = tmp / "gated-plan.json"
     _write_doc(gated, _live_roster())
     env = _roster_env(home, DEV_LEAD_ROSTER=gated)
-    got = run(roster, "plan", "--round", "r1", "--implement", "claude=claude-sonnet", "--review", "opencode",
+    got = run(roster, "plan", "--round", "r1", "--implement", "agy=gemini-3.8-flash-high:Gemini", "--review", "opencode",
               "--lens", "judgment", env=env)
     text = got.stdout + got.stderr
     by_lens = _live_roster()["rounds"]["r1"]["review"]["opencode"]["by_lens"]
@@ -4752,7 +4961,7 @@ def test_roster(tmp):
                             if line.strip().startswith("mechanical:") and "(inherited" not in line), "")
     check("roster show: a gated fallback is marked GATED too",
           "fallback GATED: a fallback probe" in mechanical_line, shown.stdout)
-    fb_plan = run(roster, "plan", "--round", "r1", "--implement", "claude=claude-sonnet", "--review", "opencode",
+    fb_plan = run(roster, "plan", "--round", "r1", "--implement", "agy=gemini-3.8-flash-high:Gemini", "--review", "opencode",
                   env=_roster_env(home, DEV_LEAD_ROSTER=gated_fb_file))
     check("roster plan: a gated fallback is marked GATED on the plan line",
           fb_plan.returncode == 0 and "(fallback GATED: a fallback probe)" in fb_plan.stdout, fb_plan.stdout + fb_plan.stderr)
@@ -4861,7 +5070,8 @@ def test_roster(tmp):
     spec.loader.exec_module(roster_mod)
     launch = json.loads((SCRIPTS.parent / "data" / "launch.json").read_text(encoding="utf-8"))
     markers = ("MODEL NAME", "no effort control", "needs --effort",
-               "leg-cmd: the suite passes no effort", "unknown effort mechanism")
+               "leg-cmd: the suite passes no effort", "unknown effort mechanism",
+               "takes --effort only as one of")
     leg = SCRIPTS / "leg-cmd.sh"
     effort_env = _roster_env(home, DEV_LEAD_ROSTER=codex_impl,
                              DEV_LEAD_TRIAGE=tmp / "effort-triage.json")
@@ -4869,7 +5079,8 @@ def test_roster(tmp):
         if adapter.startswith("_"):
             continue
         for role in adapter_spec["role"]:
-            for effort in ("", "medium"):
+            # "bogus": off claude's closed vocabulary, unremarkable to the open ones
+            for effort in ("", "medium", "bogus"):
                 argv = [str(leg), adapter, role, "--model", "opencode/x"]
                 if effort:
                     argv += ["--effort", effort]
@@ -4879,7 +5090,7 @@ def test_roster(tmp):
                 leg_refuses = any(marker in (ran.stderr or "") for marker in markers)
                 roster_refuses = roster_mod.effort_flag_refusal(adapter, role, effort) is not None
                 check("roster effort %s %s effort=%s matches leg-cmd"
-                      % (adapter, role, "set" if effort else "absent"),
+                      % (adapter, role, effort or "absent"),
                       leg_refuses == roster_refuses,
                       "leg=%s stderr=%r roster=%s"
                       % (leg_refuses, ran.stderr, roster_refuses))
@@ -5269,135 +5480,116 @@ def test_triage(tmp):
                    "src/a.php", "src/a.sh"):
         check("triage template: a credential literal in %s is HIGH" % sample,
               tpl_risk(sample, 'api_key = "abcdef123456"') == "HIGH")
-    lens_corpus = (
-        '.circleci/a.txt',
-        '.env',
-        '.env.local',
-        '.github/workflows/a.txt',
-        'Dockerfile',
-        'Jenkinsfile',
-        '__tests__/a.txt',
-        'alembic/versions/a.txt',
-        'app.Dockerfile',
-        'auth/a.txt',
-        'billing/a.txt',
-        'charts/a.txt',
-        'compose.override.yaml',
-        'compose.override.yml',
-        'crypto/a.txt',
-        'db/migrate/a.txt',
-        'db/migration/a.txt',
-        'docker-compose.yaml',
-        'docker-compose.yml',
-        'docs/adr/a.txt',
-        'docs/decisions/a.txt',
-        'docs/spec/a.md',
-        'k8s/a.txt',
-        'migrations/a.txt',
-        'notifications/a.txt',
-        'payments/a.txt',
-        'pkg/__tests__/a.txt',
-        'pkg/a_test.go',
-        'pkg/a_test.py',
-        'pkg/alembic/versions/a.txt',
-        'pkg/auth/a.txt',
-        'pkg/billing/a.txt',
-        'pkg/charts/a.txt',
-        'pkg/crypto/a.txt',
-        'pkg/db/migrate/a.txt',
-        'pkg/db/migration/a.txt',
-        'pkg/k8s/a.txt',
-        'pkg/migrations/a.txt',
-        'pkg/notifications/a.txt',
-        'pkg/payments/a.txt',
-        'pkg/security/a.txt',
-        'pkg/test/a.txt',
-        'pkg/tests/a.txt',
-        'requirements-dev.txt',
-        'requirements/*.txt',
-        'security/a.txt',
-        'src/a.c',
-        'src/a.cc',
-        'src/a.cmake',
-        'src/a.conf',
-        'src/a.cpp',
-        'src/a.cs',
-        'src/a.csproj',
-        'src/a.go',
-        'src/a.gradle',
-        'src/a.gradle.kts',
-        'src/a.graphql',
-        'src/a.h',
-        'src/a.hpp',
-        'src/a.ini',
-        'src/a.java',
-        'src/a.js',
-        'src/a.json',
-        'src/a.jsx',
-        'src/a.kt',
-        'src/a.md',
-        'src/a.mk',
-        'src/a.php',
-        'src/a.properties',
-        'src/a.proto',
-        'src/a.ps1',
-        'src/a.py',
-        'src/a.rb',
-        'src/a.rs',
-        'src/a.service',
-        'src/a.sh',
-        'src/a.sln',
-        'src/a.sql',
-        'src/a.svelte',
-        'src/a.swift',
-        'src/a.tf',
-        'src/a.tfvars',
-        'src/a.toml',
-        'src/a.ts',
-        'src/a.tsx',
-        'src/a.vue',
-        'src/a.xml',
-        'src/a.yaml',
-        'src/a.yml',
-        'sub/.gitlab-ci.yml',
-        'sub/CMakeLists.txt',
-        'sub/Cargo.lock',
-        'sub/Cargo.toml',
-        'sub/Containerfile',
-        'sub/GNUmakefile',
-        'sub/Gemfile',
-        'sub/Gemfile.lock',
-        'sub/Makefile',
-        'sub/Pipfile',
-        'sub/Pipfile.lock',
-        'sub/compose.yaml',
-        'sub/compose.yml',
-        'sub/go.mod',
-        'sub/go.sum',
-        'sub/makefile',
-        'sub/meson.build',
-        'sub/package-lock.json',
-        'sub/package.json',
-        'sub/pnpm-lock.yaml',
-        'sub/poetry.lock',
-        'sub/pom.xml',
-        'sub/pyproject.toml',
-        'sub/uv.lock',
-        'sub/yarn.lock',
-        'test/a.txt',
-        'tests/a.txt',
-        'tests_x/test_a.py',
-        'web/a.spec.js',
-        'web/a.spec.ts',
-        'web/a.test.js',
-        'web/a.test.ts',
-    )
-    # One fixed file per lens rule (written out, not derived from the globs):
-    # renaming or dropping a lens rule leaves its file with no lens, and turns
-    # this check red even where a trigger glob still covers the file.
-    lensless = [path for path in lens_corpus
-                if not any(_tpl_triage.glob_matches(rule["glob"], path) for rule in template_doc["lenses"])]
-    check("triage template: every lens-corpus file gets a lens (%d files)" % len(lens_corpus), not lensless, lensless)
+    # One fixed (glob, file) pair per lens rule, under the lenses that rule
+    # must give, written out rather than derived from the template. "Some lens
+    # covers the file" is not enough: a rule a broader one shadows
+    # (docs/spec/*.md by *.md, package.json by *.json, *_test.go by *.go,
+    # Cargo.toml by *.toml) could be renamed or deleted and its file would
+    # still get a lens. So each pair needs one lens rule with EXACTLY its glob
+    # and EXACTLY its lenses, and that glob must match its file (0.6.56; the
+    # lenses since its fix round -- package.json moved from supply-chain to
+    # consistency passed the (glob, file) check).
+    lens_table = {
+        ("consistency",): (
+            ("docs/spec/*.md", "docs/spec/a.md"), ("*.md", "src/a.md"),
+            ("docs/adr/**", "docs/adr/a.txt"), ("docs/decisions/**", "docs/decisions/a.txt"),
+            ("*.json", "src/a.json"), ("*.yml", "src/a.yml"), ("*.yaml", "src/a.yaml"), ("*.toml", "src/a.toml"),
+            ("*.ini", "src/a.ini"), ("*.conf", "src/a.conf"), ("*.xml", "src/a.xml"),
+            ("*.service", "src/a.service"), (".env", ".env"), (".env.*", ".env.local"),
+            ("*.properties", "src/a.properties"), ("*.proto", "src/a.proto"), ("*.graphql", "src/a.graphql"),
+        ),
+        ("correctness",): (
+            ("*.py", "src/a.py"), ("*.js", "src/a.js"), ("*.jsx", "src/a.jsx"), ("*.ts", "src/a.ts"),
+            ("*.tsx", "src/a.tsx"), ("*.vue", "src/a.vue"), ("*.svelte", "src/a.svelte"), ("*.go", "src/a.go"),
+            ("*.rs", "src/a.rs"), ("*.java", "src/a.java"), ("*.kt", "src/a.kt"), ("*.c", "src/a.c"),
+            ("*.h", "src/a.h"), ("*.cc", "src/a.cc"), ("*.cpp", "src/a.cpp"), ("*.hpp", "src/a.hpp"),
+            ("*.cs", "src/a.cs"), ("*.rb", "src/a.rb"), ("*.php", "src/a.php"), ("*.swift", "src/a.swift"),
+            ("*.sh", "src/a.sh"), ("*.ps1", "src/a.ps1"), ("*.sql", "src/a.sql"),
+        ),
+        ("test-falsifiability",): (
+            ("tests/**", "tests/a.txt"), ("**/tests/**", "pkg/tests/a.txt"), ("test/**", "test/a.txt"),
+            ("**/test/**", "pkg/test/a.txt"), ("__tests__/**", "__tests__/a.txt"),
+            ("**/__tests__/**", "pkg/__tests__/a.txt"), ("test_*.py", "tests_x/test_a.py"),
+            ("*_test.py", "pkg/a_test.py"), ("*_test.go", "pkg/a_test.go"), ("*.test.js", "web/a.test.js"),
+            ("*.test.ts", "web/a.test.ts"), ("*.spec.js", "web/a.spec.js"), ("*.spec.ts", "web/a.spec.ts"),
+        ),
+        ("ops-safety",): (
+            (".github/workflows/**", ".github/workflows/a.txt"), (".gitlab-ci.yml", "sub/.gitlab-ci.yml"),
+            ("Jenkinsfile*", "Jenkinsfile"), (".circleci/**", ".circleci/a.txt"), ("Dockerfile*", "Dockerfile"),
+            ("*.Dockerfile", "app.Dockerfile"), ("Containerfile", "sub/Containerfile"),
+            ("docker-compose*.yml", "docker-compose.yml"), ("docker-compose*.yaml", "docker-compose.yaml"),
+            ("compose.yml", "sub/compose.yml"), ("compose.yaml", "sub/compose.yaml"),
+            ("compose.*.yml", "compose.override.yml"), ("compose.*.yaml", "compose.override.yaml"),
+        ),
+        ("build-config",): (
+            ("Makefile", "sub/Makefile"), ("makefile", "sub/makefile"), ("GNUmakefile", "sub/GNUmakefile"),
+            ("*.mk", "src/a.mk"), ("CMakeLists.txt", "sub/CMakeLists.txt"), ("*.cmake", "src/a.cmake"),
+            ("*.gradle", "src/a.gradle"), ("*.gradle.kts", "src/a.gradle.kts"), ("meson.build", "sub/meson.build"),
+            ("*.csproj", "src/a.csproj"), ("*.sln", "src/a.sln"),
+        ),
+        ("supply-chain",): (
+            ("package.json", "sub/package.json"), ("package-lock.json", "sub/package-lock.json"),
+            ("yarn.lock", "sub/yarn.lock"), ("pnpm-lock.yaml", "sub/pnpm-lock.yaml"),
+            ("requirements*.txt", "requirements-dev.txt"), ("requirements/*.txt", "requirements/dev.txt"),
+            ("pyproject.toml", "sub/pyproject.toml"), ("Pipfile", "sub/Pipfile"),
+            ("Pipfile.lock", "sub/Pipfile.lock"), ("poetry.lock", "sub/poetry.lock"), ("uv.lock", "sub/uv.lock"),
+            ("go.mod", "sub/go.mod"), ("go.sum", "sub/go.sum"), ("Cargo.toml", "sub/Cargo.toml"),
+            ("Cargo.lock", "sub/Cargo.lock"), ("Gemfile", "sub/Gemfile"), ("Gemfile.lock", "sub/Gemfile.lock"),
+            ("pom.xml", "sub/pom.xml"),
+        ),
+        ("infra-safety",): (
+            ("*.tf", "src/a.tf"), ("*.tfvars", "src/a.tfvars"), ("k8s/**", "k8s/a.txt"),
+            ("**/k8s/**", "pkg/k8s/a.txt"), ("charts/**", "charts/a.txt"), ("**/charts/**", "pkg/charts/a.txt"),
+        ),
+        ("migration-safety",): (
+            ("migrations/**", "migrations/a.txt"), ("**/migrations/**", "pkg/migrations/a.txt"),
+            ("db/migrate/**", "db/migrate/a.txt"), ("**/db/migrate/**", "pkg/db/migrate/a.txt"),
+            ("db/migration/**", "db/migration/a.txt"), ("**/db/migration/**", "pkg/db/migration/a.txt"),
+            ("alembic/versions/**", "alembic/versions/a.txt"),
+            ("**/alembic/versions/**", "pkg/alembic/versions/a.txt"),
+        ),
+        ("security",): (
+            ("auth/**", "auth/a.txt"), ("**/auth/**", "pkg/auth/a.txt"), ("security/**", "security/a.txt"),
+            ("**/security/**", "pkg/security/a.txt"), ("crypto/**", "crypto/a.txt"),
+            ("**/crypto/**", "pkg/crypto/a.txt"),
+        ),
+        ("money",): (
+            ("billing/**", "billing/a.txt"), ("**/billing/**", "pkg/billing/a.txt"),
+            ("payments/**", "payments/a.txt"), ("**/payments/**", "pkg/payments/a.txt"),
+        ),
+        ("delivery",): (
+            ("notifications/**", "notifications/a.txt"), ("**/notifications/**", "pkg/notifications/a.txt"),
+        ),
+    }
+    lens_triples = [(glob, path, list(lenses)) for lenses, pairs in lens_table.items() for glob, path in pairs]
+    lenses_by_glob = {}
+    for rule in template_doc["lenses"]:
+        lenses_by_glob.setdefault(rule["glob"], []).append(rule.get("lenses"))
+    bad_triples = [(glob, path, lenses) for glob, path, lenses in lens_triples
+                   if lenses_by_glob.get(glob) != [lenses] or not _tpl_triage.glob_matches(glob, path)]
+    check("triage template: every (glob, file, lenses) triple has one lens rule with exactly that glob and "
+          "those lenses, matching the file (%d triples)" % len(lens_triples), not bad_triples, bad_triples)
+    unpaired = [glob for glob in lenses_by_glob if glob not in {triple[0] for triple in lens_triples}]
+    check("triage template: every lens rule has a fixed (glob, file, lenses) triple", not unpaired, unpaired)
+    # Several triggers repeat ONE regex across globs (a trigger takes one glob),
+    # and the table below tests each alternative on one copy only. So every
+    # trigger carrying the same flag must carry the identical added_regex --
+    # per glob for concurrency, whose regex differs by language -- or a branch
+    # broken in one copy would pass. The copy counts are pinned too: a copy
+    # whose flag was renamed would otherwise leave its group and the check.
+    shared = {}
+    for rule in template_doc["delta_triggers"]:
+        if "added_regex" in rule and rule.get("flag"):
+            key = (rule["flag"], rule["glob"]) if rule["flag"] == "concurrency" else rule["flag"]
+            shared.setdefault(key, []).append(rule)
+    split = {str(key): sorted(rule["glob"] for rule in rules) for key, rules in shared.items()
+             if len({rule["added_regex"] for rule in rules}) > 1}
+    check("triage template: triggers sharing a flag share one added_regex (concurrency: per glob)", not split, split)
+    copies = {flag: len(shared.get(flag, [])) for flag in (
+        "credential-looking value", "credential-looking literal", "destructive command",
+        "container privilege or piped installer")}
+    check("triage template: the shared-regex families keep their 9, 9, 5 and 3 copies",
+          list(copies.values()) == [9, 9, 5, 3], copies)
     table = [
         # docs/spec status flip (the original example)
         ("docs/spec/a.md", "Status: Verified", "HIGH"), ("docs/spec/a.md", "Status: Open", "MEDIUM"),
@@ -5542,8 +5734,27 @@ def test_triage(tmp):
     current_vote = patch(1, ps1, base, approvals=[approval("+1")])
     result = changed(101, [current_vote], depends=[{"number": 9, "status": "NEW"}])
     check("triage change: current vote skips", result.get("skip") is not None and result.get("legs") == "none", result)
+    # 0.6.56: a change record names its base. A skip never computes a parent,
+    # so its base is null, and leg-cmd.sh reads null as "nothing to compare"
+    # rather than as a malformed record.
+    check("triage change: a skipped change records a null base", "base" in result and result["base"] is None, result)
+    agy_review = [SCRIPTS / "leg-cmd.sh", "agy", "review", "--model", "gemini-3.8-flash-medium", "--target", repo]
+    got = run(*agy_review, "--base", ps1, env=env)
+    check("leg-cmd triage: a change record with a null base launches, not refused as malformed",
+          got.returncode == 0 and got.stdout.strip() and "malformed" not in got.stderr, got.stdout + got.stderr)
     result = changed(102, [current_vote], comments=[{"timestamp": 30, "reviewer": {"username": "bob"}, "message": "alice please revisit"}])
     check("triage change: a later message naming me unskips", result.get("skip") is None, result)
+    change_doc = json.loads((config_file.parent / "triage-records" / (ps1 + ".json")).read_text())
+    check("triage change: the output and its record carry the patch set's parent as base",
+          result.get("base") == base and change_doc.get("base") == base and change_doc.get("mode") == "change",
+          (result.get("base"), change_doc.get("base"), base))
+    got = run(*agy_review, "--base", base, env=env)
+    check("leg-cmd triage: a --base equal to the change record's base launches",
+          got.returncode == 0 and got.stdout.strip(), got.stdout + got.stderr)
+    got = run(*agy_review, "--base", ps1, env=env)
+    check("leg-cmd triage: a --base that differs from the change record's base is refused",
+          got.returncode != 0 and not got.stdout.strip() and "does not match launch base" in got.stderr
+          and base in got.stderr, got.stdout + got.stderr)
     result = changed(103, [current_vote], wip=True)
     check("triage change: WIP skips without opt-in", result.get("skip", "").startswith("WIP"), result)
     got = run(triage, "change", "103", "--query-json",
@@ -5581,6 +5792,18 @@ def test_triage(tmp):
                            patch(2, ps2, ps1, kind="TRIVIAL_REBASE")])
     check("triage change: carry-over inherits and has no legs",
           result.get("ps_kind") == "carry-over" and result.get("risk_floor") == "inherit" and result.get("legs") == "none", result)
+    # A carry-over takes no legs, but its record still gates a review launched
+    # on it: the base is its parent like any other patch set's.
+    carry_doc = json.loads((config_file.parent / "triage-records" / (ps2 + ".json")).read_text())
+    check("triage change: a carry-over's output and record carry its parent as base",
+          result.get("base") == ps1 and carry_doc.get("base") == ps1, (result.get("base"), carry_doc.get("base"), ps1))
+    got = run(*agy_review, "--base", base, env=env)
+    check("leg-cmd triage: a carry-over record refuses a --base other than its parent",
+          got.returncode != 0 and not got.stdout.strip() and "does not match launch base" in got.stderr
+          and ps1 in got.stderr, got.stdout + got.stderr)
+    got = run(*agy_review, "--base", ps1, env=env)
+    check("leg-cmd triage: ...and launches with its parent", got.returncode == 0 and got.stdout.strip(),
+          got.stdout + got.stderr)
 
     # The kind spans every patch set since my vote (a peer's round, 2026-09-24):
     # vote on PS1, a REWORK PS2, a TRIVIAL_REBASE PS3 is not a carry-over.
@@ -5699,6 +5922,14 @@ def test_triage(tmp):
     move_new = commit("move new")
     result = changed(106, [patch(1, move_old, base, approvals=[approval("+1")]), patch(2, move_new, move_old)])
     check("triage change: normalised relative-link move passes", result.get("ps_kind") == "move-only" and not result.get("flags"), result)
+    move_doc = json.loads((config_file.parent / "triage-records" / (move_new + ".json")).read_text())
+    check("triage change: a move-only patch set's output and record carry its parent as base",
+          result.get("base") == move_old and move_doc.get("base") == move_old,
+          (result.get("base"), move_doc.get("base"), move_old))
+    got = run(*agy_review, "--base", base, env=env)
+    check("leg-cmd triage: a move-only record refuses a --base other than its parent",
+          got.returncode != 0 and not got.stdout.strip() and "does not match launch base" in got.stderr
+          and move_old in got.stderr, got.stdout + got.stderr)
     # Gerrit patch sets amend each other on the same base: the move is "add A"
     # in PS1's own diff and "add B" in PS2's, never a rename in either. Only a
     # tree-to-tree diff pairs them (found replaying real move patch sets).
@@ -6207,6 +6438,25 @@ def test_triage(tmp):
     # revision itself would give [] and must fail this.
     check("triage root patch set: diffs against the empty tree",
           {"src/value.txt", "links/ok.md"} <= set(result.get("delta_files") or []), result)
+    check("triage root patch set: has no parent commit, so its base is null",
+          "base" in result and result["base"] is None, result)
+
+    # 0.6.56: the base is the commit the diff is taken against -- a merge's
+    # FIRST parent -- recorded as a full sha even when the parent field is short.
+    git(repo, "checkout", "-q", "-B", "merge-first", base)
+    write("src/first.txt", "first parent\n")
+    merge_first = commit("first parent")
+    git(repo, "checkout", "-q", "-B", "merge-second", base)
+    write("src/second.txt", "second parent\n")
+    merge_second = commit("second parent")
+    git(repo, "checkout", "-q", "merge-first")
+    git(repo, "merge", "-q", "--no-ff", "--no-edit", "merge-second")
+    merge_rev = git(repo, "rev-parse", "HEAD").stdout.strip()
+    result = changed(145, [dict(patch(1, merge_rev, merge_first), parents=[merge_first, merge_second])])
+    check("triage change: a merge patch set's base is its first parent",
+          result.get("base") == merge_first and result.get("delta_files") == ["src/second.txt"], result)
+    result = changed(146, [dict(patch(1, merge_rev, merge_first), parents=[merge_first[:12], merge_second])])
+    check("triage change: an abbreviated parent is recorded as the full sha", result.get("base") == merge_first, result)
 
     # Fix round 1 B10: literal pathspecs accept ordinary filenames containing
     # a colon rather than treating them as pathspec magic.

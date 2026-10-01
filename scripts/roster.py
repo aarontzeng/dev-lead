@@ -131,10 +131,10 @@ def mechanism_for_role(eff, role, argv):
     `applies_to_role` scopes the adapter's mechanism to that one role (0.6.35;
     before, it scoped config_only only). Every other role follows its own argv
     template: one carrying {EFFORT} takes the value as a flag, one without takes
-    none. That is what lets claude REVIEW require --effort while claude
-    IMPLEMENT stays effort-free -- `roster.py plan --implement claude=<model>`
-    has no effort syntax, so a flag on both roles would make it unlaunchable.
-    Every per-role DECISION -- leg-cmd.sh's refusal, lint.py's launch check,
+    none. claude used it from 0.6.35 to 0.6.55, to require --effort on review
+    while implement took none; since 0.6.56 both of its roles take the flag, and
+    `plan --implement claude=<model>` carries the roster entry's effort the way
+    it does for codex implement. Every per-role DECISION -- leg-cmd.sh's refusal, lint.py's launch check,
     triage.py's effort, this module's validation, plan args and show -- calls
     this. What still reads applies_to_role directly: leg-cmd's banner, for
     DISPLAY only (which note to print, for any scoped mechanism; the in-force
@@ -154,6 +154,28 @@ def role_mechanism(adapter, role):
     return mechanism_for_role(spec["effort"], role, (spec["role"].get(role) or {}).get("argv"))
 
 
+def effort_word_refusal(adapter, effort):
+    """Whether an effort WORD falls outside the adapter's closed vocabulary.
+    None means it does not, or the vocabulary is open.
+
+    `closed: true` in launch.json makes `examples` the CLI's whole vocabulary
+    (claude, 0.6.56). That CLI does not refuse an unknown --effort: it warns on
+    stderr, runs at its default and exits 0 (claude 2.1.286, 2026-10-01), so a
+    typo would run silently at the default unless it is caught here. An open
+    vocabulary is never checked: opencode's words are the provider's, grok's
+    differ per model. One copy, used by effort_flag_refusal (leg-cmd.sh, plan)
+    and _check_effort (check, set).
+    """
+    eff = _effort_spec(adapter)
+    if eff.get("closed") is not True:
+        return None
+    words = [str(word) for word in eff.get("examples") or []]
+    if effort in words:
+        return None
+    return ("%s takes --effort only as one of: %s -- not %r (its CLI would ignore an unknown "
+            "value and run at its default)" % (adapter, ", ".join(words), effort))
+
+
 def effort_flag_refusal(adapter, role, effort):
     """Whether leg-cmd.sh would refuse this effort flag. None means it would not.
 
@@ -166,6 +188,8 @@ def effort_flag_refusal(adapter, role, effort):
     The mechanism is the ROLE's (mechanism_for_role): outside an adapter's
     applies_to_role, a role whose argv carries {EFFORT} is a flag and needs
     --effort, and one without it takes none and refuses a value (0.6.35).
+    A flag adapter whose vocabulary is closed also refuses a word outside it
+    (effort_word_refusal, 0.6.56).
     """
     launch, _ = data()
     spec = launch[adapter]
@@ -178,8 +202,10 @@ def effort_flag_refusal(adapter, role, effort):
     elif mech == "config_only":
         if effort:
             return "%s's %s path has no effort control at all" % (adapter, role)
-    elif mech == "flag" and not effort:
-        return "%s needs --effort" % adapter
+    elif mech == "flag":
+        if not effort:
+            return "%s needs --effort" % adapter
+        return effort_word_refusal(adapter, effort)
     elif mech == "none" and effort:
         return "the suite passes no effort for %s %s" % (adapter, role)
     elif mech not in ("model_suffix", "flag", "config_only", "none"):
@@ -402,6 +428,8 @@ def _check_effort(leg, adapter, role, path, problems):
         if not leg.get("effort"):
             hint = eff.get("migration_hint", {}).get(role) if isinstance(eff.get("migration_hint"), dict) else None
             problems.error(path + ".effort", "missing effort" + ("; " + hint if hint else ""))
+        elif isinstance(leg["effort"], str) and effort_word_refusal(adapter, leg["effort"]):
+            problems.error(path + ".effort", effort_word_refusal(adapter, leg["effort"]))
     elif mech == "config_only":
         declared = leg.get("effort")
         in_force = _config_effort(eff)
@@ -1266,7 +1294,8 @@ def cmd_plan(path, round_name, implement, review, lens):
                     problems.error(impl_path, fam_err)
         if impl_model:
             # A flag adapter with no stored effort cannot be launched. Other
-            # refusals (an effort key on model_suffix / none) are validate() errors.
+            # refusals (an effort key on model_suffix / none, a word outside a
+            # closed vocabulary) are validate() errors.
             # A template containing {EFFORT} (codex implement) is the same hole
             # even when the effort mechanism is not "flag".
             refusal = effort_flag_refusal(adapter, "implement", impl_effort or "")
