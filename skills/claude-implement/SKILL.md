@@ -137,7 +137,18 @@ Identical discipline to every implement skill:
 - **Ask it to run the test suite itself** and report honest counts — this
   delegate can once its launch allows the test command (`--allow-bash`; it
   cannot run a single one otherwise), and self-testing is its feedback loop.
-  Name the exact command in the prompt, spelled as allowed. The lead re-runs
+  Name the exact command in the prompt, spelled as allowed. **An allowed
+  prefix must START the command**: a command that begins with an environment
+  assignment (`PYTHONPATH=src python3 -m pytest ...`) does not match
+  `--allow-bash 'python3 -m pytest'` and is denied (probed 2026-10-01, claude
+  2.1.286: `Bash(python3:*)` denied `FOO=1 python3 -c ...`, `Bash(FOO=1
+  python3:*)` allowed it). So either put the bare command in the brief and
+  export the environment yourself, or pass the whole spelling to `--allow-bash`
+  (`--allow-bash 'PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src python3 -m pytest'`)
+  and tell the delegate to type exactly that. The first dispatch with 0.6.56
+  got this wrong: the brief began the command with two assignments, the
+  launch allowed only `python3 -m pytest`, and the delegate ran no test at
+  all (it said so, and did not route around the permission). The lead re-runs
   everything afterward regardless.
 - Git rules verbatim: leave the work UNCOMMITTED (the lead commits after
   verifying) unless the launch passed `--allow-bash 'git add'` and
@@ -152,6 +163,14 @@ Identical discipline to every implement skill:
   any review script").
 
 ## After it finishes: verify before anything is trusted
+
+Alongside the sequence below, read the delegate's report for "requires
+approval" or a test run it says it could not make because a permission stopped
+it: that is the allow list not matching the command it was told to run (see the
+test-command bullet above), not a code problem, and every test result then has
+to come from the lead. A test run it could not make for another reason (a
+missing dependency, a broken environment) is a different finding: look into
+what it reports.
 
 The same lead sequence as every implement skill, none of it optional:
 

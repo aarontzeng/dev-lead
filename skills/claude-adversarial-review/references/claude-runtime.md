@@ -67,7 +67,11 @@ entry per allowed command prefix, after every other token.
   command prefixes the task needs -- the repo's test command first --
   through `leg-cmd.sh claude implement --allow-bash <prefix>` (`git
   status`/`git diff`/`git log` are its default; `git add`/`git commit` only
-  if the delegate is to commit). The list travels with the launch, not with
+  if the delegate is to commit). A prefix must start the command: with
+  `Bash(python3:*)` allowed, `FOO=1 python3 -c ...` was denied, and
+  `Bash(FOO=1 python3:*)` allowed it (probed 2026-10-01, claude 2.1.286), so a
+  test command that starts with environment assignments needs them in the
+  prefix. The list travels with the launch, not with
   the machine (contrast agy's per-machine `unsandboxed(…)` rules), and it is
   not a sandbox: `git diff` and `git log` can write a file with `--output`,
   and the test command the lead allows runs code the delegate wrote, which
