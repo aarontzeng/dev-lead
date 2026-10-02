@@ -172,15 +172,13 @@ same stop: ask, do not invent a model.
 
 **A fix round's cross-family requirement is relative to who implemented THAT
 round, not to r1** (owner ruling, 2026-09-22). `fix.review` inheriting r1's full leg
-set is a menu, not a floor — how many of those legs a given fix round
-actually needs is the same SIZE judgment Phase 0 already makes for r1, not a
-fixed leg count tied to being a fix round. When the lead writes the fix
-directly (the common case for a small, precisely-diagnosed change quoting a
-verified finding), one leg from any family other than the lead's own
-satisfies the rule; a large or ambiguous fix round earns the same weight as
-r1. Two fix rounds this session (one tool's reorder, `roster.py`'s
-two rounds) each shipped on one codex leg for exactly this reason — not a
-shortcut, the correctly-sized response to a small change.
+set is a menu, not a floor. How many of those legs a fix round of the lead's
+own change takes is not a judgment either (owner ruling, 2026-10-01):
+`triage.py scope --fix-of <the head the last round reviewed>` sizes it by the
+fix's delta, on the ladder in Phase 2 step 3 -- documentation only takes the
+lead's own read, a small fix with a failing-before test and a killed mutation
+per finding takes one leg, anything else takes the range's minimum. Whichever
+legs run come from a family other than the fix's author.
 
 **Compose every launch command with the suite's `leg-cmd.sh`, never from recall.**
 
@@ -641,7 +639,27 @@ two rounds and would have run a third on no principle at all.
    (or `triage.py change <number>` for a Gerrit change), then launch at least
    its `min_review_legs` from distinct families using the lenses it lists.
    MEDIUM's minimum of two is unconditional here: take the second reviewer
-   anyway. `leg-cmd.sh … review` reads the reviewed HEAD from `--target`, or
+   anyway -- with one exception, the fix round of the lead's own change.
+
+   **A fix round of your own change adds `--fix-of <the head the previous
+   round reviewed>`** (that head's triage record must exist), and the record's
+   minimum becomes the fix's rung (owner ruling, 2026-10-01, after one change
+   took four rounds and another three):
+
+   | the fix's delta | rung | legs |
+   |---|---|---|
+   | documentation only (`.md`, `.rst`, `.adoc`, or the rules file's `wording_globs`), or only the commit message | wording | none: the lead's own read |
+   | within `small_delta_lines`, and every fixed finding has a test that failed before the fix and a mutation the lead killed, stated as `--fix-tested '<which tests, which mutations>'` | tested | one cross-family leg |
+   | anything else, or a delta a `delta_triggers` rule raises to HIGH | full | the range's minimum |
+
+   A comment inside a code file is not detected as wording: telling a
+   comment from code per language is a guess, so such a fix is at least the
+   tested rung. The delta is taken between the two reviewed patches, the way
+   `change` compares patch sets, so an amended or rebased fix is sized by
+   what it changed and not by the base it moved to. From the third fix round
+   on, a full round needs `--blocker '<the finding>'` (Convergence, under the
+   stop conditions). `round-check` and `leg-cmd.sh` read the same record, so
+   a lower minimum here needs no `--no-triage`; the report names the rung. `leg-cmd.sh … review` reads the reviewed HEAD from `--target`, or
    from the caller's cwd when the adapter has no `{TARGET}` slot. `--head` is
    only an assertion and must resolve to that same HEAD. Launch cursor-type
    adapters from inside the frozen worktree, because they review their caller
@@ -684,19 +702,36 @@ two rounds and would have run a third on no principle at all.
    precisely diagnosed defects — enter the merge with zero cross-family eyes on
    them. Measured: in one round the only BROKEN verdict any leg returned was
    about a test the LEAD had written after the delegate finished, and it was
-   right. Either fold lead fixes into a re-review, or at minimum hold them to
-   the mutation standard you hold the delegate's work to, and say in the run
-   log which parts of the final diff no leg ever saw.
+   right. So the lead's fixes get a re-review sized by `triage.py scope
+   --fix-of` (the ladder above): only a documentation fix goes without a leg, and a code
+   fix gets one leg only when the mutation standard you hold the delegate's
+   work to is met and stated. Say in the run log which parts of the final
+   diff no leg ever saw.
 
 4. **Route**: no verified HIGH findings → merge gate. Verified findings →
    next round. Small, precisely diagnosed defects (a fake test, a stray
    trailer) the lead fixes directly in-place — a delegation round for a
    one-line fix costs more than it protects.
 
+   **A fix exercised for real may be pushed before its re-review** (owner
+   ruling, 2026-10-01): the build, the CI job, the board. It moves the order,
+   not the review: the re-review still runs at the rung `--fix-of` gives, and
+   the report says that the push came first and what ran.
+
 **Stop conditions** (report instead of looping):
 
 - Cap reached with verified HIGH findings open → keep the worktree, present
-  the findings history, let the user decide. Do not merge.
+  the findings history, let the user decide. Do not merge. (A blocker in a
+  fix round of the lead's own change gets another round under Convergence
+  below; the run log says the cap was passed and for which finding.)
+- **Convergence: after two fix rounds, findings that are not blockers do not
+  open another full round** (owner ruling, 2026-10-01: in one change rounds
+  two and three each found one real defect and later rounds only corner
+  cases, and nothing said when to stop). Fix them under the lower rungs of
+  the ladder in step 3, or record them in the commit message as known
+  limits, and say which. A blocker always gets another round: `triage.py
+  scope --fix-of` refuses a third full fix round without `--blocker '<the
+  finding>'`, and records the statement.
 - A fix round introduces a **new** HIGH finding (fix churn) → the spec or the
   delegate is wrong for this task; lead takes over or stops.
   **When the lead IS the implementer, that escalation inverts**: "lead takes

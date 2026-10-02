@@ -7469,6 +7469,188 @@ def test_triage_gate(tmp):
           got.returncode == 2 and "tracked files" in got.stderr, got.stdout + got.stderr)
 
 
+def test_triage_fix_round(tmp):
+    """scope --fix-of: a fix round of the lead's own change is sized by the
+    fix's delta (owner ruling, 2026-10-01, aadev bb6a3ab) -- documentation
+    only: no leg; small and tested: one; anything else: the range's minimum
+    -- and from the third fix round a full round needs a blocker.
+    Position: after test_triage_gate."""
+    import hashlib
+
+    triage = SCRIPTS / "triage.py"
+    repo = tmp / "fix-round-repo"
+    repo.mkdir()
+    git(repo, "init", "-q")
+    git(repo, "config", "user.email", "test@example.invalid")
+    git(repo, "config", "user.name", "Test")
+
+    def write(path, body):
+        target = repo / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(body, encoding="utf-8")
+
+    def commit(message, *extra):
+        git(repo, "add", "-A")
+        git(repo, "commit", "-qm", message, *extra)
+        return git(repo, "rev-parse", "HEAD").stdout.strip()
+
+    code = "".join("line %d\n" % i for i in range(20))
+    write("src/app.py", code)
+    write("docs/guide.md", "# guide\n")
+    write("docs/spec/status.md", "draft\n")
+    base = commit("base")
+    write("src/app.py", code + "".join("feature %d\n" % i for i in range(10)))
+    r1 = commit("the change")
+
+    home = tmp / "fix-round-home"
+    home.mkdir()
+    roster_file, rules_file = home / "roster.json", home / "triage.json"
+    _write_doc(roster_file, _live_roster())
+    rules = {
+        "version": 1, "me": ["alice"], "lens_classes": {"mechanical": "mechanical", "judgment": "judgment"},
+        "lenses": [{"glob": "**", "lenses": ["mechanical"], "why": "everything"}],
+        "delta_triggers": [{"glob": "docs/spec/*.md", "added_regex": "Status.*Verified", "risk": "HIGH",
+                            "lenses": ["judgment"], "why": "status claim"}],
+        "risk_default": "MEDIUM", "move_check": {"naming": []}, "small_delta_lines": 4, "order": [],
+    }
+    _write_doc(rules_file, rules)
+    env = _roster_env(home, DEV_LEAD_ROSTER=roster_file, DEV_LEAD_TRIAGE=rules_file)
+
+    def scoped(*args, at_base=None):
+        got = run(triage, "scope", "--base", at_base or base, "--target", repo, *args, env=env)
+        return got, (json.loads(got.stdout) if got.returncode == 0 else {})
+
+    got, first = scoped()
+    check("triage fix: the first round takes the range's minimum and has no fix block",
+          got.returncode == 0 and first.get("min_review_legs") == 2 and "fix" not in first,
+          got.stdout + got.stderr)
+
+    # rung 1: documentation only -> the lead's own read
+    write("docs/guide.md", "# guide\n\nclarified\n")
+    f1 = commit("fix 1: wording")
+    got, wording = scoped("--fix-of", r1)
+    fix = wording.get("fix", {})
+    check("triage fix: a documentation-only fix is the wording rung, no leg, round 1",
+          got.returncode == 0 and wording.get("min_review_legs") == 0 and wording.get("legs") == "own-read"
+          and wording.get("review_legs") == [] and fix.get("rung") == "wording" and fix.get("round") == 1
+          and fix.get("of") == r1 and fix.get("delta_files") == ["docs/guide.md"]
+          and fix.get("range_min_review_legs") == 2, got.stdout + got.stderr)
+    record = json.loads((home / "triage-records" / (f1 + ".json")).read_text())
+    check("triage fix: the record carries the sizing, so round-check and leg-cmd see it",
+          record.get("min_review_legs") == 0 and record.get("fix", {}).get("rung") == "wording")
+    got = run(triage, "round-check", "--head", f1, "--target", repo, env=env)
+    checked = json.loads(got.stdout) if got.stdout else {}
+    check("triage fix: round-check passes a wording fix with no leg and names the rung",
+          got.returncode == 0 and checked.get("ok") and checked.get("fix", {}).get("rung") == "wording",
+          got.stdout + got.stderr)
+
+    # a commit whose tree did not change: message only
+    f1b = commit("fix 1b: message only", "--allow-empty")
+    got, message = scoped("--fix-of", f1)
+    check("triage fix: a message-only fix is wording, and the round counts on (2)",
+          got.returncode == 0 and message.get("fix", {}).get("rung") == "wording"
+          and message["fix"].get("why") == "only the commit message changed"
+          and message["fix"].get("round") == 2, got.stdout + got.stderr)
+
+    # rung 2: small code delta -> one leg only with the stated evidence
+    write("src/app.py", code + "".join("feature %d\n" % i for i in range(10)).replace("feature 3", "fixed 3"))
+    f2 = commit("fix 2: one line")
+    # sized against f1 (round 1), so this is round 2 -- below the gate
+    got, untested = scoped("--fix-of", f1)
+    check("triage fix: a small code fix without --fix-tested is the full rung and says what would lower it",
+          got.returncode == 0 and untested.get("min_review_legs") == 2
+          and untested.get("fix", {}).get("rung") == "full" and "--fix-tested" in untested["fix"].get("why", "")
+          and untested["fix"].get("delta_lines") == 2, got.stdout + got.stderr)
+    evidence = "test_fixed_3 failed before the fix; mutation fixed->feature killed"
+    got, tested = scoped("--fix-of", f1, "--fix-tested", evidence)
+    check("triage fix: a small tested fix is one leg, and the evidence is recorded",
+          got.returncode == 0 and tested.get("min_review_legs") == 1 and tested.get("legs") != "own-read"
+          and tested.get("fix", {}).get("rung") == "tested" and tested["fix"].get("evidence") == evidence
+          and tested["fix"].get("round") == 2 and tested.get("review_legs"), got.stdout + got.stderr)
+
+    # convergence: the third fix round of a large change needs a blocker
+    write("src/app.py", code + "".join("rewritten %d\n" % i for i in range(10)))
+    f3 = commit("fix 3: large")
+    got, _ = scoped("--fix-of", f2)
+    check("triage fix: after two fix rounds a full round without a blocker is refused, naming the ways out",
+          got.returncode == 2 and "only for a blocker" in got.stderr and "known limits" in got.stderr
+          and "--blocker" in got.stderr and "--fix-tested" in got.stderr, got.stdout + got.stderr)
+    check("triage fix: ...and no record was written for the refused round",
+          not (home / "triage-records" / (f3 + ".json")).exists())
+    got, blocked = scoped("--fix-of", f2, "--blocker", "the reset path leaks the lock")
+    check("triage fix: a stated blocker opens the full round and is recorded",
+          got.returncode == 0 and blocked.get("min_review_legs") == 2
+          and blocked.get("fix", {}).get("blocker") == "the reset path leaks the lock"
+          and blocked["fix"].get("round") == 3, got.stdout + got.stderr)
+
+    # a trigger in the delta lifts even a documentation fix to the full rung
+    write("docs/spec/status.md", "Status Verified\n")
+    f4 = commit("fix 4: claims verified")
+    got, raised = scoped("--fix-of", f3, "--blocker", "the status must be stated")
+    check("triage fix: a delta that a trigger raises to HIGH is the full rung, documentation or not",
+          got.returncode == 0 and raised.get("fix", {}).get("rung") == "full"
+          and "trigger" in raised["fix"].get("why", "") and raised.get("min_review_legs") == 2,
+          got.stdout + got.stderr)
+    del f4
+
+    # an amended and rebased fix is compared by its own patch, not the moved base
+    git(repo, "checkout", "-q", "-b", "upstream", base)
+    write("other.txt", "upstream work\n" * 30)
+    base2 = commit("upstream moved")
+    git(repo, "checkout", "-q", "-b", "rebased", r1)
+    git(repo, "rebase", "-q", base2)
+    write("docs/guide.md", "# guide\n\nreworded after rebase\n")
+    rebased = commit("the change, rebased, plus wording", "--amend")
+    got, moved = scoped("--fix-of", r1, at_base=base2)
+    check("triage fix: a rebased and amended fix is sized by its own delta, not by the upstream move",
+          got.returncode == 0 and moved.get("fix", {}).get("rung") == "wording"
+          and moved["fix"].get("delta_files") == ["docs/guide.md"]
+          and "other.txt" not in moved.get("files", []), got.stdout + got.stderr)
+    del rebased
+
+    # wording_globs replaces the default suffixes
+    _write_doc(rules_file, dict(rules, wording_globs=["notes/**"]))
+    git(repo, "checkout", "-q", "master")
+    git(repo, "checkout", "-q", f1b)
+    write("docs/guide.md", "# guide\n\nclarified again\n")
+    f5 = commit("fix: md is not wording under these rules")
+    got, custom = scoped("--fix-of", r1)   # round 1: the rung, not the gate, is under test
+    check("triage fix: wording_globs decides what is wording, replacing the default suffixes",
+          got.returncode == 0 and custom.get("fix", {}).get("rung") == "full", got.stdout + got.stderr)
+    del f5
+    _write_doc(rules_file, dict(rules, wording_globs="notes/**"))
+    got = run(triage, "check", env=env)
+    check("triage fix: wording_globs must be a list of globs",
+          got.returncode != 0 and "wording_globs" in got.stdout + got.stderr, got.stdout + got.stderr)
+    _write_doc(rules_file, rules)
+
+    # input errors
+    for args, needle, label in (
+            (["--fix-tested", "x"], "needs --fix-of", "--fix-tested alone"),
+            (["--blocker", "x"], "needs --fix-of", "--blocker alone"),
+            (["--fix-of", r1, "--fix-tested", "   "], "non-empty", "a blank evidence statement"),
+            (["--fix-of", "no-such-ref"], "is not a commit", "an unknown reviewed head"),
+            (["--fix-of", "HEAD"], "the HEAD under review", "the head under review itself"),
+            (["--fix-of", base], "no triage record for the reviewed head", "a reviewed head never triaged")):
+        got = run(triage, "scope", "--base", base, "--target", repo, *args, env=env)
+        check("triage fix: refuses %s" % label, got.returncode == 2 and needle in got.stderr,
+              got.stdout + got.stderr)
+    got = run(triage, "scope", "--files", "src/app.py", "--fix-of", r1, env=env)
+    check("triage fix: --fix-of with --files is refused (it sizes a committed range)",
+          got.returncode == 2 and "committed range" in got.stderr, got.stdout + got.stderr)
+
+    # the launcher shows the sizing beside the minimum
+    head = git(repo, "rev-parse", "HEAD").stdout.strip()
+    got, latest = scoped("--fix-of", f1b)
+    leg = run(SCRIPTS / "leg-cmd.sh", "agy", "review", "--model", "gemini-3.8-flash-medium",
+              "--base", base, "--target", repo, env=env)
+    check("leg-cmd: a fix-round record's rung is printed with the minimum",
+          leg.returncode == 0 and ("fix=round %s %s" % (latest["fix"]["round"], latest["fix"]["rung"])) in leg.stderr
+          and ("min_review_legs=%s" % latest["min_review_legs"]) in leg.stderr and head[:12] in leg.stderr,
+          leg.stdout + leg.stderr)
+    del hashlib
+
+
 # ------------------------------------------------ line-ending renormalization ----
 
 
@@ -7788,6 +7970,8 @@ def main():
     print("triage.py range records and round-check")
     with tempfile.TemporaryDirectory() as td:
         test_triage_gate(Path(td))
+    with tempfile.TemporaryDirectory() as td:
+        test_triage_fix_round(Path(td))
 
     print("lint.py check_version")
     with tempfile.TemporaryDirectory() as td:

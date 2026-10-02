@@ -32,7 +32,9 @@ ROOT_KEYS = {
 # with no Gerrit, say -- may leave these out. When present they are checked.
 CHANGE_KEYS = ("gerrit", "clones", "gateways")
 # Optional: without it, review legs carry no effort and behave as before.
-OPTIONAL_ROOT_KEYS = {"effort"}
+# wording_globs (0.6.58): the paths a fix round may change and still be sized
+# as wording only; without it, the documentation suffixes below.
+OPTIONAL_ROOT_KEYS = {"effort", "wording_globs"}
 # An abstract effort ladder. The table names a tier; each adapter's own
 # spelling of it comes from data/launch.json, never from personal rules.
 EFFORT_LADDER = ("low", "medium", "high", "xhigh", "max")
@@ -352,6 +354,13 @@ def validate(doc):
                 _check_regex(rule.get("regex"), path + ".regex", problems)
     if type(doc.get("small_delta_lines")) is not int or doc.get("small_delta_lines", -1) < 0:
         problems.error("small_delta_lines", "must be an int >= 0")
+    if "wording_globs" in doc:
+        wording = doc["wording_globs"]
+        if not isinstance(wording, list):
+            problems.error("wording_globs", "must be a list of globs")
+        else:
+            for index, glob in enumerate(wording):
+                _check_glob(glob, "wording_globs[%s]" % index, problems)
     order = doc.get("order")
     if not isinstance(order, list):
         problems.error("order", "must be a list")
@@ -984,6 +993,14 @@ def _tree_renames(repo, previous_revision, current_revision, entries):
 
 
 MARKDOWN_SUFFIXES = (".md", ".markdown", ".mdx")
+# A fix round that changes only these is wording: the lead's own read, no leg.
+# Comments inside code are NOT detected as wording -- a code file's change is
+# at least the tested rung -- because telling a comment from code per language
+# is a guess, and a wrong guess would wave real code through unreviewed.
+WORDING_SUFFIXES = MARKDOWN_SUFFIXES + (".rst", ".adoc")
+# The fix round from which a full round needs a blocker (owner ruling,
+# 2026-10-01: after two fix rounds, non-blockers do not open another).
+CONVERGENCE_ROUND = 3
 LINK_DEPTH = re.compile(r"(\]\(\s*<?)(?:\.\./)+")
 REFERENCE_DEPTH = re.compile(r"(?m)^( {0,3}\[[^\]]+\]:[ \t]*<?)(?:\.\./)+")
 
@@ -1716,6 +1733,98 @@ def scope(config, raw, path, files, category, *, delta_lines=None, path_only=Tru
     return output
 
 
+def _is_wording(config, path):
+    globs = config.get("wording_globs")
+    if globs is not None:
+        return any(glob_matches(glob, path) for glob in globs)
+    return path.lower().endswith(WORDING_SUFFIXES)
+
+
+def _reviewed_record(reviewed):
+    """The triage record of the head the previous round reviewed."""
+    try:
+        return _load_record(reviewed)
+    except InputError:
+        raise InputError("triage scope: no triage record for the reviewed head %s. A fix round is sized "
+                         "against the round that reviewed it; triage that head first, or run scope without "
+                         "--fix-of and take the full legs." % reviewed)
+
+
+def fix_sizing(config, target, base, head, fix_of, *, evidence=None, blocker=None, range_min=0, fired=None):
+    """Size a fix round of the lead's own change by what the fix changed.
+
+    Owner ruling, 2026-10-01 (aadev bb6a3ab): the delta from the head the
+    previous round reviewed decides the legs, not the whole range --
+
+      wording  every changed path is documentation (or only the message
+               changed): the lead's own read, no leg;
+      tested   the delta is within small_delta_lines and the lead states that
+               every fixed finding has a test that failed before the fix and a
+               mutation the lead killed (``evidence``): one cross-family leg;
+      full     anything else, or a delta a delta_triggers rule raises to HIGH:
+               the range's own minimum.
+
+    From the third fix round on, a full round needs ``blocker``: after two
+    fix rounds non-blocker findings are fixed under the lower rungs or
+    recorded as known limits. The delta between the two reviews is computed
+    the way ``change`` computes one between patch sets, so an amended or
+    rebased commit is compared by its own patch, not by the moved base.
+    """
+    fired = fired if fired is not None else []
+    repo = Path(target)
+    try:
+        reviewed = _git(repo, "rev-parse", "--verify", fix_of + "^{commit}").strip()
+    except InputError:
+        raise InputError("triage scope: --fix-of %s is not a commit in %s" % (fix_of, repo))
+    if reviewed == head:
+        raise InputError("triage scope: --fix-of names the HEAD under review; it is the head the previous "
+                         "round reviewed")
+    previous = _reviewed_record(reviewed)
+    previous_fix = previous.get("fix") if isinstance(previous.get("fix"), dict) else {}
+    earlier = previous_fix.get("round")
+    round_number = (earlier if type(earlier) is int and earlier > 0 else 0) + 1
+    previous_base = previous.get("base") or base
+    previous_entries = _diff_entries(repo, previous_base, reviewed)
+    current_entries = _diff_entries(repo, base, head)
+    delta_entries, _pairs = _delta(previous_entries, current_entries)
+    moves, _only_moves = _tree_renames(repo, reviewed, head, delta_entries)
+    delta_lines = _between_lines(repo, reviewed, head, delta_entries, moves)
+    delta_files = sorted({path for entry in delta_entries for path in _paths_for(entry)})
+    delta_count = _line_count(delta_lines)
+    # Only a trigger may lift the fix to the full rung here: a risk_default of
+    # MEDIUM or HIGH is the range's floor, already in range_min.
+    _lenses, raised, _flags = _lenses_and_triggers(dict(config, risk_default="LOW"), delta_files,
+                                                   delta_lines, [])
+    if raised == "HIGH":
+        rung, why = "full", "a delta trigger raises the fix itself to HIGH"
+    elif all(_is_wording(config, path) for path in delta_files):
+        rung, why = "wording", ("only the commit message changed" if not delta_files
+                                else "every changed path is documentation")
+    elif delta_count <= config["small_delta_lines"] and evidence:
+        rung, why = "tested", "%s lines, within small_delta_lines=%s, with tests and killed mutations stated" % (
+            delta_count, config["small_delta_lines"])
+    elif delta_count <= config["small_delta_lines"]:
+        rung, why = "full", ("%s lines is small, but no --fix-tested evidence was given; with it this fix "
+                             "takes one leg" % delta_count)
+    else:
+        rung, why = "full", "%s lines exceeds small_delta_lines=%s" % (delta_count, config["small_delta_lines"])
+    if rung == "full" and round_number >= CONVERGENCE_ROUND and not blocker:
+        raise InputError(
+            "triage scope: fix round %d: after two fix rounds a full round opens only for a blocker (%s). "
+            "Fix the remaining findings under the lower rungs (documentation only, or --fix-tested "
+            "'<evidence>' within small_delta_lines=%s), record them in the commit message as known limits, "
+            "or pass --blocker '<the finding>'." % (round_number, why, config["small_delta_lines"]))
+    minimum = {"wording": 0, "tested": min(1, range_min)}.get(rung, range_min)
+    _fired(fired, "fix-round", "fix round %d of %s: %s rung (%s); %s leg(s)"
+           % (round_number, reviewed[:12], rung, why, minimum))
+    return {
+        "of": reviewed, "round": round_number, "rung": rung, "why": why,
+        "delta_files": delta_files, "delta_lines": delta_count,
+        "evidence": evidence or None, "blocker": blocker or None,
+        "range_min_review_legs": range_min,
+    }, minimum
+
+
 def _scope_range(base_ref, target):
     target = Path(target)
     status = _git(target, "-c", "core.quotePath=false", "status", "--porcelain=v1", "--untracked-files=no")
@@ -1827,6 +1936,10 @@ def round_check(head_ref, legs, target=None, expect=None):
     if uncounted:
         output["accounting_note"] = ("delivered but not counted: %s cannot satisfy the cross-family rule "
                                      "(data/families.json accounting_valid false)" % ", ".join(uncounted))
+    if isinstance(record.get("fix"), dict):
+        # The round's report names the rung it was sized at (owner ruling,
+        # 2026-10-01): say what the fix was sized as, not only that it passed.
+        output["fix"] = {key: record["fix"].get(key) for key in ("of", "round", "rung", "why")}
     output["ok"] = output["distinct_families"] >= minimum
     return output
 
@@ -1874,6 +1987,16 @@ def main(argv=None):
     scope_input.add_argument("--base")
     scope_parser.add_argument("--target")
     scope_parser.add_argument("--category")
+    scope_parser.add_argument(
+        "--fix-of", metavar="REVIEWED_HEAD",
+        help="this is a fix round of the lead's own change; size it by the delta from the head the previous "
+             "round reviewed (needs --base/--target and that head's triage record)")
+    scope_parser.add_argument(
+        "--fix-tested", metavar="EVIDENCE",
+        help="with --fix-of: each fixed finding's test that failed before the fix, and the mutation killed")
+    scope_parser.add_argument(
+        "--blocker", metavar="FINDING",
+        help="with --fix-of from the third fix round on: the blocker that justifies a full round")
     round_parser = sub.add_parser("round-check")
     round_parser.add_argument("--head", required=True)
     round_parser.add_argument("--leg", action="append",
@@ -1924,6 +2047,13 @@ def main(argv=None):
         else:
             if bool(args.base) != bool(args.target):
                 raise InputError("triage scope: --base and --target must be given together (or use --files)")
+            for flag, value in (("--fix-tested", args.fix_tested), ("--blocker", args.blocker)):
+                if value is not None and not args.fix_of:
+                    raise InputError("triage scope: %s needs --fix-of" % flag)
+                if value is not None and not value.strip():
+                    raise InputError("triage scope: %s needs a non-empty statement" % flag)
+            if args.fix_of and args.files:
+                raise InputError("triage scope: --fix-of sizes a committed range; use --base/--target")
             if args.files:
                 output = scope(config, raw, path, args.files, args.category)
                 output["record"] = None
@@ -1932,6 +2062,17 @@ def main(argv=None):
                 output = scope(config, raw, path, files, args.category, delta_lines=delta_lines,
                                path_only=False, review_legs=True)
                 output.update({"head": head, "base": base, "files": files})
+                if args.fix_of:
+                    fix, minimum = fix_sizing(
+                        config, args.target, base, head, args.fix_of,
+                        evidence=(args.fix_tested or "").strip() or None,
+                        blocker=(args.blocker or "").strip() or None,
+                        range_min=output["min_review_legs"], fired=output["fired_rules"])
+                    output["fix"] = fix
+                    output["min_review_legs"] = minimum
+                    if minimum == 0:
+                        output["review_legs"] = []
+                        output["legs"] = "own-read"
                 _write_record(output, head, "scope")
     except InputError as exc:
         print(exc, file=sys.stderr)

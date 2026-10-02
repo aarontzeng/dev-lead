@@ -288,6 +288,27 @@ entry means no lens or trigger covers it, so fix the local rules. The older
 set's diff is taken against (the first parent of a merge), or null for a root
 patch set and for a change triage skipped.
 
+A fix round of the lead's own change is sized by the fix, not by the range
+(since 0.6.58):
+
+```bash
+python3 scripts/triage.py scope --base "$BASE" --target "$FROZEN_DIR" \
+  --fix-of "$REVIEWED_HEAD" [--fix-tested '<which tests, which mutations>'] \
+  [--blocker '<the finding>']
+```
+
+`--fix-of` names the head the previous round reviewed, whose record must
+exist. The delta between the two reviewed patches decides `min_review_legs`:
+documentation only (`.md`, `.rst`, `.adoc`, or an optional `wording_globs`
+list in `triage.json`) or a message-only change is `wording`, no leg; a delta
+within `small_delta_lines` with `--fix-tested` evidence is `tested`, one leg;
+anything else, or a delta a trigger raises to HIGH, keeps the range's minimum.
+The record gains a `fix` block (`of`, `round`, `rung`, `why`, `delta_files`,
+`delta_lines`, `evidence`, `blocker`, `range_min_review_legs`) that
+`round-check` and `leg-cmd.sh` report. From the third fix round on, a `full`
+rung is refused without `--blocker`: after two fix rounds, non-blockers are
+fixed under the lower rungs or recorded as known limits.
+
 Every `leg-cmd.sh <adapter> review` launch checks the HEAD it will actually
 review: `--target`'s HEAD, or the caller's cwd when that adapter has no
 `{TARGET}` slot. `--head <rev>` is an assertion resolved in that same
@@ -298,8 +319,8 @@ resolve to that same commit too (only the adapters whose template has a
 `{BASE}` slot take `--base`: agy, codex and opencode review; the others
 assert `--head` and refuse `--base`). It refuses missing rules, an
 absent record, or a mismatched base with the command to make a new record.
-MEDIUM's minimum is unconditionally two legs (take the second reviewer
-anyway); going below it requires the owner's word through
+MEDIUM's minimum is two legs (take the second reviewer anyway), lowered only
+by a `--fix-of` record as above; going below it otherwise requires the owner's word through
 `--no-triage '<reason>'`, which is appended to `triage-records/skips.jsonl`,
 never silently ignored. Once all logs return, check the recorded requirement
 with:

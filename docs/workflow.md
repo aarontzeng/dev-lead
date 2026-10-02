@@ -172,7 +172,7 @@ sandbox test of `git push`, so the honest entry is instruction level.
 ## When a run stops instead of looping
 
 Iteration is where the quality comes from; unbounded iteration is where the
-budget dies. Four conditions end a run with a report rather than another
+budget dies. Five conditions end a run with a report rather than another
 round:
 
 | Condition | What it actually means |
@@ -180,6 +180,7 @@ round:
 | Round cap reached with verified HIGH findings still open | Hand the findings history to the human. Do not merge |
 | A fix round introduces a **new** HIGH finding | Fix churn — the spec or this delegate is wrong for the task |
 | The same finding survives two fix rounds | The prompt is failing to transmit it; the lead fixes it directly |
+| Two fix rounds done, and only non-blockers remain | Convergence: fix them at a lower rung of the fix-round ladder or record them as known limits; only a blocker opens another full round (`triage.py scope --fix-of` enforces it) |
 | The same finding **category** keeps reopening against approximation-shaped code | The review property is unbounded, not the code unfixable. Declare the approximation's scope in the code, then re-scope the review to that boundary — *before* the next review is fired |
 
 ## Where to go next

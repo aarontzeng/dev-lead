@@ -428,6 +428,9 @@ def _triage_gate():
                      % (record_base, resolved_base, repo, resolved_base, repo))
     lens_entries = record["lenses"] if isinstance(record.get("lenses"), list) else []
     lenses = ", ".join(str(item.get("name")) for item in lens_entries if isinstance(item, dict)) or "(none)"
+    fix = record.get("fix") if isinstance(record.get("fix"), dict) else None
+    if fix:
+        lenses += " fix=round %s %s" % (fix.get("round"), fix.get("rung"))
     print("# triage %s risk=%s min_review_legs=%s lenses=%s recorded_at=%s"
           % (head[:12], record["risk_floor"], record["min_review_legs"], lenses, record["recorded_at"]),
           file=sys.stderr)
