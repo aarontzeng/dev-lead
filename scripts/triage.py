@@ -1777,7 +1777,12 @@ def _reviewed_record(reviewed):
     except OSError as exc:
         raise InputError("triage scope: cannot reach the record %s (%s); fix the permissions of %s"
                          % (path, exc, path.parent))
-    if not path.exists():
+    try:
+        reachable = path.exists()
+    except OSError as exc:                     # a link into a directory that cannot be searched
+        raise InputError("triage scope: cannot reach the record %s (%s); fix the permissions on its "
+                         "target" % (path, exc))
+    if not reachable:
         raise InputError("triage scope: the record %s is a link to nothing. %s" % (path, REPAIR_TEXT))
     document = _load_record(reviewed)
     missing = [key for key in ("head", "risk_floor", "min_review_legs") if key not in document]
@@ -1788,6 +1793,7 @@ def _reviewed_record(reviewed):
 
 
 _RECORD_NAME = re.compile(r"[0-9a-f]{40}\.json")
+_COMMIT = re.compile(r"[0-9a-f]{40}")
 REPAIR_TEXT = "Repair it, or remove it if that head was never reviewed (then triage that head again)."
 
 
@@ -1825,13 +1831,13 @@ def _recorded_rounds(root, head):
             raise unreadable(path, exc)
         if not isinstance(document, dict):
             raise unreadable(path, "not a JSON object")
-        fix = document.get("fix")
-        if fix is None:
-            continue
+        if "fix" not in document:
+            continue                           # a first round, or another kind of record
+        fix = document["fix"]
         if not isinstance(fix, dict):
             raise unreadable(path, "its fix block is not an object")
-        if not isinstance(fix.get("root"), str):
-            raise unreadable(path, "its fix block has no root")
+        if not isinstance(fix.get("root"), str) or not _COMMIT.fullmatch(fix["root"]):
+            raise unreadable(path, "its fix block has no commit as its root")
         if fix.get("root") != root:
             continue
         number = fix.get("round")
@@ -1892,9 +1898,17 @@ def fix_sizing(config, target, base, head, fix_of, *, evidence=None, blocker=Non
         raise InputError("triage scope: --fix-of %s is the HEAD under review; name the head the previous "
                          "round reviewed" % reviewed[:12])
     previous = _reviewed_record(reviewed)
-    previous_fix = previous.get("fix") if isinstance(previous.get("fix"), dict) else {}
-    earlier = previous_fix.get("round")
-    earlier = earlier if type(earlier) is int and earlier > 0 else 0
+    previous_fix = previous.get("fix", {})
+    if "fix" not in previous:
+        previous_fix = {}                      # the change's first reviewed round
+    elif (not isinstance(previous_fix, dict) or not isinstance(previous_fix.get("root"), str)
+          or not _COMMIT.fullmatch(previous_fix["root"])
+          or type(previous_fix.get("round")) is not int or previous_fix["round"] < 1):
+        # the shapes the count refuses in every other record: read as "first round"
+        # they would restart the count at this head
+        raise InputError("triage scope: the reviewed record %s has a malformed fix block. %s"
+                         % (_record_path(reviewed), REPAIR_TEXT))
+    earlier = previous_fix.get("round", 0)
     # --fix-of must name the latest round recorded for the change: an older
     # head would restart the count and step around the convergence gate, and
     # its delta could hide a later reviewed fix (three review legs, 0.6.58).

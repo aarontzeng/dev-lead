@@ -7837,7 +7837,7 @@ def test_triage_fix_round(tmp):
         (records / (tried + ".json")).unlink()
         git(repo, "reset", "-q", "--hard", skill)
     for directory in (".claude", ".clinerules", ".codex", ".continue", ".cursor", ".gemini", ".windsurf",
-                      "agents", "commands", "prompts", "skills", "pkg/.cursor", "a/b/agents"):
+                      "agents", "commands", "prompts", "skills", "pkg/.cursor", "a/b/agents", "pkg/.cursor/sub"):
         write(directory + "/notes.md", "# notes\n\nplain words\n")
         git(repo, "add", "-f", directory + "/notes.md")
         tried = commit("fix: notes under " + directory)
@@ -7917,7 +7917,9 @@ def test_triage_fix_round(tmp):
                          ('{"fix": {"of": "%s", "round": 9}}' % s1, "a fix block with no root"),
                          ('{"fix": {"root": "%s", "round": "9"}}' % s1, "a round of this change that is not an integer"),
                          ('{"fix": {"root": "%s", "round": 0}}' % s1, "a round of this change that is zero"),
-                         ('{"fix": {"root": "%s", "round": true}}' % s1, "a round of this change that is a boolean")):
+                         ('{"fix": {"root": "%s", "round": true}}' % s1, "a round of this change that is a boolean"),
+                         ('{"fix": null}', "a fix block that is null"),
+                         ('{"fix": {"root": "bad-root", "round": 2}}', "a root that is not a commit")):
         (records / (stranger + ".json")).write_text(content)
         got, _ = scoped("--fix-of", pointed, "--blocker", "x")
         check("triage fix: %s refuses the fix round instead of being skipped" % why,
@@ -7960,6 +7962,24 @@ def test_triage_fix_round(tmp):
           got.returncode == 2 and "link to nothing" in got.stderr and "no triage record" not in got.stderr,
           got.stdout + got.stderr)
     (records / (pointed + ".json")).unlink()
+    hidden = tmp / "hidden-records"
+    hidden.mkdir()
+    (records / (pointed + ".json")).symlink_to(hidden / "record.json")
+    hidden.chmod(0o000)
+    try:
+        got, _ = scoped("--fix-of", pointed, "--blocker", "x")
+    finally:
+        hidden.chmod(0o755)
+    check("triage fix: a record linked into a directory that cannot be searched is an error, not a traceback",
+          got.returncode == 2 and "cannot reach the record" in got.stderr and "Traceback" not in got.stderr,
+          got.stdout + got.stderr)
+    (records / (pointed + ".json")).unlink()
+    for broken_fix in ('"round 2"', '{"of": "%s", "round": 2}' % r1, '{"root": "%s", "round": 0}' % s1, "null",
+                       '{"root": "bad-root", "round": 2}'):
+        _write_doc(records / (pointed + ".json"), dict(json.loads(kept), fix=json.loads(broken_fix)))
+        got, _ = scoped("--fix-of", pointed, "--blocker", "x")
+        check("triage fix: a reviewed record with a malformed fix block (%s) is refused, not read as round 1"
+              % broken_fix[:12], got.returncode == 2 and "malformed fix block" in got.stderr, got.stdout + got.stderr)
     (records / (pointed + ".json")).write_text(kept)
     records.chmod(0o600)
     try:
@@ -8030,8 +8050,9 @@ def test_triage_fix_round(tmp):
     leg = run(SCRIPTS / "leg-cmd.sh", "agy", "review", "--model", "gemini-3.8-flash-medium",
               "--base", r1, "--target", spaced, env=env)
     words = advised(leg.stderr)
-    check("leg-cmd: the advice parses back into the record's target, --fix-of, evidence and blocker",
+    check("leg-cmd: the advice parses back into the launch base, the record's target, --fix-of, evidence and blocker",
           words[:2] == ["triage.py", "scope"] and words[words.index("--target") + 1] == str(spaced)
+          and words[words.index("--base") + 1] == git(repo, "rev-parse", r1).stdout.strip()
           and "--fix-of=" + added in words and "--fix-tested=" + tricky_evidence in words
           and "--blocker=" + dash_blocker in words, leg.stderr)
     parsed = run(triage, "scope", "--base", base, "--target", repo, "--fix-of", added,
@@ -8043,8 +8064,10 @@ def test_triage_fix_round(tmp):
     leg = run(SCRIPTS / "leg-cmd.sh", "agy", "review", "--model", "gemini-3.8-flash-medium",
               "--base", f1, "--target", spaced, env=env)
     words = advised(leg.stderr)
-    check("leg-cmd: a record with no fix block is advised a plain scope",
-          words[:2] == ["triage.py", "scope"] and not any(word.startswith("--fix") for word in words), leg.stderr)
+    check("leg-cmd: a record with no fix block is advised a plain scope, with the launch base and the target",
+          words[:2] == ["triage.py", "scope"] and not any(word.startswith("--fix") for word in words)
+          and words[words.index("--base") + 1] == f1 and words[words.index("--target") + 1] == str(spaced),
+          leg.stderr)
     first_record = (records / (r1 + ".json")).read_text()
     _write_doc(records / (r1 + ".json"), dict(json.loads(first_record), mode="change", change=4242))
     leg = run(SCRIPTS / "leg-cmd.sh", "agy", "review", "--model", "gemini-3.8-flash-medium",
@@ -8052,6 +8075,21 @@ def test_triage_fix_round(tmp):
     (records / (r1 + ".json")).write_text(first_record)
     check("leg-cmd: a change record is advised `triage.py change <number>`, not a scope",
           advised(leg.stderr) == ["triage.py", "change", "4242"], leg.stderr)
+    as_of = json.loads(first_record)
+    _write_doc(records / (r1 + ".json"), dict(as_of, mode="change", change=4242, wip=True, skip=None,
+                                              rules=dict(as_of.get("rules") or {}, as_of_patch_set=3)))
+    leg = run(SCRIPTS / "leg-cmd.sh", "agy", "review", "--model", "gemini-3.8-flash-medium",
+              "--base", f1, "--target", spaced, env=env)
+    (records / (r1 + ".json")).write_text(first_record)
+    check("leg-cmd: ...made the way it was made: --include-wip and --as-of-ps kept",
+          advised(leg.stderr) == ["triage.py", "change", "4242", "--include-wip", "--as-of-ps", "3"], leg.stderr)
+    _write_doc(records / (r1 + ".json"), dict(json.loads(first_record), mode="change"))
+    leg = run(SCRIPTS / "leg-cmd.sh", "agy", "review", "--model", "gemini-3.8-flash-medium",
+              "--base", f1, "--target", spaced, env=env)
+    (records / (r1 + ".json")).write_text(first_record)
+    check("leg-cmd: a change record without its number is named, not given a command that cannot run",
+          leg.returncode != 0 and "without its change number" in leg.stderr and "<number>" not in leg.stderr,
+          leg.stderr)
     del hashlib
 
 

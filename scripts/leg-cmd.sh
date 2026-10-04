@@ -426,10 +426,21 @@ def _triage_gate():
             # a fix-round record is replaced only by a scope that names its --fix-of again
             record_fix = record.get("fix") if isinstance(record.get("fix"), dict) else {}
             if record.get("mode") == "change":
-                # a Gerrit change's record is remade the way it was made
-                sys.exit("leg-cmd: triage record base %s does not match launch base %s in %s; run "
-                         "triage.py change %s" % (record_base, resolved_base, repo,
-                                                  shlex.quote(str(record.get("change") or "<number>"))))
+                # a Gerrit change's record is remade the way it was made: a WIP change
+                # triaged with --include-wip, or one replayed --as-of-ps, keeps that flag
+                number = record.get("change")
+                if not str(number or "").isdigit():
+                    sys.exit("leg-cmd: triage record %s is a change record without its change number, and its "
+                             "base %s does not match launch base %s; run triage.py change with the Gerrit "
+                             "change's number" % (record_path, record_base, resolved_base))
+                remake = "triage.py change " + shlex.quote(str(number))
+                if record.get("wip") and not record.get("skip"):
+                    remake += " --include-wip"
+                rules = record.get("rules") if isinstance(record.get("rules"), dict) else {}
+                if rules.get("as_of_patch_set") is not None:
+                    remake += " --as-of-ps " + shlex.quote(str(rules["as_of_patch_set"]))
+                sys.exit("leg-cmd: triage record base %s does not match launch base %s in %s; run %s"
+                         % (record_base, resolved_base, repo, remake))
             again = ""
             if record_fix.get("of"):
                 again = " --fix-of=" + shlex.quote(str(record_fix["of"]))
