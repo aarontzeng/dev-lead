@@ -6,7 +6,7 @@
     "Each trigger takes one glob, so a rule for several file kinds is repeated per glob. Never give a trigger a glob that matches every file (** or *): unmatched_files counts trigger globs as coverage, so it would hide every gap.",
     "lenses map file kinds to review lenses (the brief each leg gets); a file no lens or trigger covers is listed in unmatched_files -- a gap worth a rule.",
     "gerrit, clones and gateways are read only by `change`; a file used for `scope` alone may leave them out.",
-    "small_delta_lines also sizes a fix round of your own change (`scope --fix-of <reviewed head>`): a fix within it, with --fix-tested evidence, takes one leg. An optional wording_globs list replaces the default documentation suffixes (.md .markdown .rst .adoc) that make a fix wording only, no leg."
+    "small_delta_lines also sizes a fix round of your own change (`scope --fix-of <reviewed head>`): a fix within it, with --fix-tested evidence, takes one leg. An optional wording_globs list replaces the default that makes a fix wording only, no leg: the suffixes .md .markdown .rst .adoc, except agent instruction files (AGENTS.md CLAUDE.md GEMINI.md QUANTA.md SKILL.md)."
   ],
   "version": 1,
   "me": [

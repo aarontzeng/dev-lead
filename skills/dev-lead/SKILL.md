@@ -636,7 +636,8 @@ two rounds and would have run a third on no principle at all.
    **Triage the immutable target before launching every review round,
    including fix rounds.** Run
    `"$DEV_LEAD/scripts/triage.py" scope --base "$BASE" --target "$FROZEN_DIR"`
-   (or `triage.py change <number>` for a Gerrit change), then launch at least
+   (or `triage.py change <number>` for a Gerrit change; a fix round of your
+   own change adds `--fix-of`, below), then launch at least
    its `min_review_legs` from distinct families using the lenses it lists.
    MEDIUM's minimum of two is unconditional here: take the second reviewer
    anyway -- with one exception, the fix round of the lead's own change.
@@ -650,21 +651,23 @@ two rounds and would have run a third on no principle at all.
 
    | the fix's delta | rung | legs |
    |---|---|---|
-   | documentation only (`.md`, `.markdown`, `.rst`, `.adoc`; the rules file's `wording_globs`, when set, replaces these), or only the commit message | wording | none: the lead's own read |
+   | documentation only (`.md`, `.markdown`, `.rst`, `.adoc`, not an agent instruction file such as `SKILL.md` or `AGENTS.md`; the rules file's `wording_globs`, when set, replaces this default), or only the commit message | wording | none: the lead's own read |
    | within `small_delta_lines`, and every fixed finding has a test that failed before the fix and a mutation the lead killed, stated as `--fix-tested '<which tests, which mutations>'` | tested | one cross-family leg |
-   | anything else, or a delta a `delta_triggers` rule raises to HIGH | full | the range's minimum |
+   | anything else, or a delta a `delta_triggers` rule raises to HIGH | full | the range's minimum (at least HIGH's for a trigger) |
 
    A comment inside a code file is not detected as wording: telling a
    comment from code per language is a guess, so such a fix is at least the
-   tested rung; a binary or mode change has no lines to size and is the full
-   rung. The delta is taken between the two reviewed patches, the way
+   tested rung; a binary, mode or move change has no lines to size and is the
+   full rung. `--fix-tested` and `--blocker` are your statements: the record
+   and `round-check` carry them verbatim, and nothing checks them. The delta is taken between the two reviewed patches, the way
    `change` compares patch sets, so an amended or rebased fix is sized by
    what it changed and not by the base it moved to. From the third fix round
    on, a full round needs `--blocker '<the finding>'` (Convergence, under the
-   stop conditions). Rounds are counted over every fix round recorded since
-   the first reviewed head, whichever head `--fix-of` names; a head amended
-   before its review keeps its record, and removing that record is how to say
-   it was never reviewed. `round-check` and `leg-cmd.sh` read the same record,
+   stop conditions). `--fix-of` must name the head of the latest round
+   recorded for the change; an older head is refused, since the count would
+   restart. A head amended before its review keeps its record, and removing
+   that record is how to say it was never reviewed. A `scope` without
+   `--fix-of` (or a `change`) will not replace a fix-round record. `round-check` and `leg-cmd.sh` read the same record,
    so a lower minimum here needs no `--no-triage`; the report names the rung.
 
    `leg-cmd.sh … review` reads the reviewed HEAD from `--target`, or
@@ -672,7 +675,8 @@ two rounds and would have run a third on no principle at all.
    only an assertion and must resolve to that same HEAD. Launch cursor-type
    adapters from inside the frozen worktree, because they review their caller
    cwd. When a record has `base`, a launch's `--base` must match it; otherwise
-   rerun `triage.py scope --base <this base> --target <frozen dir>` first.
+   rerun `triage.py scope --base <this base> --target <frozen dir>` first,
+   with the same `--fix-of` on a fix round.
    Going below the minimum is `--no-triage '<reason>'` only with the owner's
    word, and records that exception. After the legs return, run `triage.py
    round-check --head "$REVIEW_HEAD" --target "$FROZEN_DIR" --leg

@@ -999,6 +999,10 @@ MARKDOWN_SUFFIXES = (".md", ".markdown", ".mdx")
 # is a guess, and a wrong guess would wave real code through unreviewed.
 # .mdx is left out: it imports and renders components, which is code.
 WORDING_SUFFIXES = (".md", ".markdown", ".rst", ".adoc")
+# Agent instruction files are markdown that agents act on, not prose about the
+# code: a fix to one is not wording, whatever its suffix. wording_globs, when
+# set, replaces this default as it replaces the suffixes.
+AGENT_INSTRUCTION_NAMES = ("agents.md", "claude.md", "gemini.md", "quanta.md", "skill.md")
 # The fix round from which a full round needs a blocker (owner ruling,
 # 2026-10-01: after two fix rounds, non-blockers do not open another).
 CONVERGENCE_ROUND = 3
@@ -1738,7 +1742,8 @@ def _is_wording(config, path):
     globs = config.get("wording_globs")
     if globs is not None:
         return any(glob_matches(glob, path) for glob in globs)
-    return path.lower().endswith(WORDING_SUFFIXES)
+    name = path.rsplit("/", 1)[-1].lower()
+    return name.endswith(WORDING_SUFFIXES) and name not in AGENT_INSTRUCTION_NAMES
 
 
 def _reviewed_record(reviewed):
@@ -1752,14 +1757,15 @@ def _reviewed_record(reviewed):
 
 
 def _recorded_rounds(root, head):
-    """The highest fix round recorded since ``root``, other than this head's
-    own record. The records cannot tell a reviewed head from one amended
-    before its review, so both count: the refusal names the way out."""
-    highest = 0
+    """The highest fix round recorded since ``root`` and the heads recorded at
+    it, other than this head's own record. The records cannot tell a reviewed
+    head from one amended before its review, so both count: the refusal names
+    the way out."""
+    highest, heads = 0, []
     try:
         paths = sorted(records_path().glob("*.json"))
     except OSError:
-        return highest
+        return highest, heads
     for path in paths:
         if path.stem == head:
             continue
@@ -1772,8 +1778,25 @@ def _recorded_rounds(root, head):
             continue
         number = fix.get("round")
         if type(number) is int and number > highest:
-            highest = number
-    return highest
+            highest, heads = number, [path.stem]
+        elif type(number) is int and number == highest:
+            heads.append(path.stem)
+    return highest, heads
+
+
+def _refuse_fix_overwrite(head, mode):
+    """A record without --fix-of must not replace a fix-round record: the next
+    round would lose the count and start again at one."""
+    try:
+        existing = _load_record(head)
+    except InputError:
+        return
+    fix = existing.get("fix")
+    if isinstance(fix, dict):
+        raise InputError("triage %s: %s was sized as fix round %s of %s; rerun scope with --fix-of %s (and the "
+                         "--fix-tested or --blocker it had), or remove %s to size it as a change of its own"
+                         % (mode, head[:12], fix.get("round"), str(fix.get("of"))[:12], fix.get("of"),
+                            _record_path(head)))
 
 
 def fix_sizing(config, target, base, head, fix_of, *, evidence=None, blocker=None, range_min=0, fired=None):
@@ -1809,11 +1832,19 @@ def fix_sizing(config, target, base, head, fix_of, *, evidence=None, blocker=Non
     previous_fix = previous.get("fix") if isinstance(previous.get("fix"), dict) else {}
     earlier = previous_fix.get("round")
     earlier = earlier if type(earlier) is int and earlier > 0 else 0
-    # Rounds are counted over every recorded fix round of the change, not along
-    # the head named here: naming an older head must not restart the count and
-    # step around the convergence gate (two review legs, 0.6.58).
+    # --fix-of must name the latest round recorded for the change: an older
+    # head would restart the count and step around the convergence gate, and
+    # its delta could hide a later reviewed fix (three review legs, 0.6.58).
     root = previous_fix.get("root") if isinstance(previous_fix.get("root"), str) else reviewed
-    round_number = max(earlier, _recorded_rounds(root, head)) + 1
+    latest, latest_heads = _recorded_rounds(root, head)
+    if latest > earlier:
+        raise InputError(
+            "triage scope: --fix-of %s is %s, but fix round %d is recorded since %s (%s). Name the head the "
+            "last round reviewed. A head amended before its review keeps its record; removing it from %s is "
+            "how to say it was never reviewed."
+            % (reviewed[:12], "fix round %d" % earlier if earlier else "the first reviewed head", latest,
+               root[:12], ", ".join(name[:12] for name in latest_heads), records_path()))
+    round_number = earlier + 1
     previous_base = previous.get("base") or base
     previous_entries = _diff_entries(repo, previous_base, reviewed)
     current_entries = _diff_entries(repo, base, head)
@@ -1825,12 +1856,15 @@ def fix_sizing(config, target, base, head, fix_of, *, evidence=None, blocker=Non
     # Only a trigger may lift the fix to the full rung here: a risk_default of
     # MEDIUM or HIGH is the range's floor, already in range_min.
     _lenses, raised, _flags = _lenses_and_triggers(dict(config, risk_default="LOW"), delta_files,
-                                                   delta_lines, [])
-    unsized = ["%s: binary" % entry["new"] for entry in delta_entries if entry.get("binary")] + _mode_flags(pairs)
+                                                   delta_lines, fired)
+    unsized = (["%s: binary" % entry["new"] for entry in delta_entries if entry.get("binary")]
+               + ["%s: moved from %s" % (entry["new"], entry["old"]) for entry in delta_entries
+                  if entry["status"][:1] in "RC"]
+               + _mode_flags(pairs))
     if raised == "HIGH":
         rung, why = "full", "a delta trigger raises the fix itself to HIGH"
     elif unsized:
-        rung, why = "full", "a binary or mode change has no lines to size (%s)" % "; ".join(unsized)
+        rung, why = "full", "a binary, mode or move change has no lines to size (%s)" % "; ".join(unsized)
     elif all(_is_wording(config, path) for path in delta_files):
         rung, why = "wording", ("only the commit message changed" if not delta_files
                                 else "every changed path is documentation")
@@ -1847,11 +1881,12 @@ def fix_sizing(config, target, base, head, fix_of, *, evidence=None, blocker=Non
             "triage scope: fix round %d: after two fix rounds a full round opens only for a blocker (%s). "
             "Fix the remaining findings under the lower rungs (documentation only, or --fix-tested "
             "'<evidence>' within small_delta_lines=%s), record them in the commit message as known limits, "
-            "or pass --blocker '<the finding>'. Rounds are counted over every fix round recorded since %s, "
-            "whichever head --fix-of names; a head amended before its review still has a record in %s, and "
-            "removing that record is how to say it was never reviewed."
-            % (round_number, why, config["small_delta_lines"], root[:12], records_path()))
+            "or pass --blocker '<the finding>'." % (round_number, why, config["small_delta_lines"]))
     minimum = {"wording": 0, "tested": min(1, range_min)}.get(rung, range_min)
+    if raised == "HIGH":
+        # The trigger may fire on the fix alone (a line the fix removed), so the
+        # range's floor can be lower than HIGH's.
+        minimum = max(minimum, MIN_REVIEW_LEGS["HIGH"])
     _fired(fired, "fix-round", "fix round %d of %s: %s rung (%s); %s leg(s)"
            % (round_number, reviewed[:12], rung, why, minimum))
     return {
@@ -1976,7 +2011,8 @@ def round_check(head_ref, legs, target=None, expect=None):
     if isinstance(record.get("fix"), dict):
         # The round's report names the rung it was sized at (owner ruling,
         # 2026-10-01): say what the fix was sized as, not only that it passed.
-        output["fix"] = {key: record["fix"].get(key) for key in ("of", "round", "rung", "why")}
+        output["fix"] = {key: record["fix"].get(key)
+                         for key in ("of", "root", "round", "rung", "why", "evidence", "blocker")}
     output["ok"] = output["distinct_families"] >= minimum
     return output
 
@@ -2080,6 +2116,7 @@ def main(argv=None):
         if args.cmd == "change":
             number = _change_number(args.number)
             output = triage_change(config, raw, path, number, args.query_json, args.include_wip, args.as_of_ps)
+            _refuse_fix_overwrite(output["head"], "change")
             _write_record(output, output["head"], "change")
         else:
             if bool(args.base) != bool(args.target):
@@ -2110,6 +2147,8 @@ def main(argv=None):
                     if minimum == 0:
                         output["review_legs"] = []
                         output["legs"] = "own-read"
+                else:
+                    _refuse_fix_overwrite(head, "scope")
                 _write_record(output, head, "scope")
     except InputError as exc:
         print(exc, file=sys.stderr)
