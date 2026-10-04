@@ -80,7 +80,7 @@ ADAPTER="$ADAPTER" ROLE="$ROLE" MODEL="$MODEL" EFFORT="$EFFORT" TARGET="$TARGET"
 BASE="$BASE" PROMPT_FILE="$PROMPT_FILE" RUN_DIR_ARG="$RUN_DIR_ARG" HEAD="$HEAD" NO_TRIAGE="$NO_TRIAGE" \
 HEAD_GIVEN="$HEAD_GIVEN" NO_TRIAGE_GIVEN="$NO_TRIAGE_GIVEN" \
 CHECK="$CHECK" DATA="$DATA" ADD_DIRS="$ADD_DIRS" ALLOW_BASH="$ALLOW_BASH" HERE="$HERE" python3 - <<'PY'
-import json, os, shlex, sys
+import json, os, re, shlex, sys
 
 # One absolute --target for everything below: the gate reads HEAD with
 # `git -C`, while the emitted command `cd`s (or passes -C) -- a relative path
@@ -429,7 +429,7 @@ def _triage_gate():
                 # a Gerrit change's record is remade the way it was made: a WIP change
                 # triaged with --include-wip, or one replayed --as-of-ps, keeps that flag
                 number = record.get("change")
-                if not str(number or "").isdigit():
+                if not re.fullmatch(r"[0-9]+", str(number or "")):      # ASCII, as triage.py change takes it
                     sys.exit("leg-cmd: triage record %s is a change record without its change number, and its "
                              "base %s does not match launch base %s; run triage.py change with the Gerrit "
                              "change's number" % (record_path, record_base, resolved_base))

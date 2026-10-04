@@ -1778,17 +1778,21 @@ def _reviewed_record(reviewed):
         raise InputError("triage scope: cannot reach the record %s (%s); fix the permissions of %s"
                          % (path, exc, path.parent))
     try:
-        reachable = path.exists()
+        os.stat(path)                          # follows a link; Path.exists() hides EACCES on some Pythons
+    except FileNotFoundError:
+        raise InputError("triage scope: the record %s is a link to nothing. %s" % (path, REPAIR_TEXT))
     except OSError as exc:                     # a link into a directory that cannot be searched
         raise InputError("triage scope: cannot reach the record %s (%s); fix the permissions on its "
-                         "target" % (path, exc))
-    if not reachable:
-        raise InputError("triage scope: the record %s is a link to nothing. %s" % (path, REPAIR_TEXT))
+                         "target -- the record is there, do not remove it" % (path, exc))
     document = _load_record(reviewed)
     missing = [key for key in ("head", "risk_floor", "min_review_legs") if key not in document]
     if missing:
         raise InputError("triage scope: record %s is not a triage record (no %s). %s"
                          % (path, ", ".join(missing), REPAIR_TEXT))
+    if document.get("skip"):
+        # a skipped change was not reviewed; sizing from it would start a first round at a head no leg saw
+        raise InputError("triage scope: the record %s was a skip (%s), not a review; name the head the "
+                         "last round actually reviewed" % (path, document["skip"]))
     return document
 
 

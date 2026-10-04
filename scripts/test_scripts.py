@@ -7919,7 +7919,8 @@ def test_triage_fix_round(tmp):
                          ('{"fix": {"root": "%s", "round": 0}}' % s1, "a round of this change that is zero"),
                          ('{"fix": {"root": "%s", "round": true}}' % s1, "a round of this change that is a boolean"),
                          ('{"fix": null}', "a fix block that is null"),
-                         ('{"fix": {"root": "bad-root", "round": 2}}', "a root that is not a commit")):
+                         ('{"fix": {"root": "bad-root", "round": 2}}', "a root that is not a commit"),
+                         ('{"fix": {"root": "%s", "round": 2}}' % ("g" * 40), "a 40-character root that is not hex")):
         (records / (stranger + ".json")).write_text(content)
         got, _ = scoped("--fix-of", pointed, "--blocker", "x")
         check("triage fix: %s refuses the fix round instead of being skipped" % why,
@@ -7971,15 +7972,20 @@ def test_triage_fix_round(tmp):
     finally:
         hidden.chmod(0o755)
     check("triage fix: a record linked into a directory that cannot be searched is an error, not a traceback",
-          got.returncode == 2 and "cannot reach the record" in got.stderr and "Traceback" not in got.stderr,
-          got.stdout + got.stderr)
+          got.returncode == 2 and "cannot reach the record" in got.stderr and "do not remove it" in got.stderr
+          and "link to nothing" not in got.stderr and "Traceback" not in got.stderr, got.stdout + got.stderr)
     (records / (pointed + ".json")).unlink()
     for broken_fix in ('"round 2"', '{"of": "%s", "round": 2}' % r1, '{"root": "%s", "round": 0}' % s1, "null",
-                       '{"root": "bad-root", "round": 2}'):
+                       '{"root": "bad-root", "round": 2}', '{"root": "%s", "round": 2}' % ("g" * 40),
+                       '{"root": "%s", "round": true}' % s1):
         _write_doc(records / (pointed + ".json"), dict(json.loads(kept), fix=json.loads(broken_fix)))
         got, _ = scoped("--fix-of", pointed, "--blocker", "x")
         check("triage fix: a reviewed record with a malformed fix block (%s) is refused, not read as round 1"
               % broken_fix[:12], got.returncode == 2 and "malformed fix block" in got.stderr, got.stdout + got.stderr)
+    _write_doc(records / (pointed + ".json"), dict(json.loads(kept), skip="WIP, not reviewed"))
+    got, _ = scoped("--fix-of", pointed, "--blocker", "x")
+    check("triage fix: a skipped record is not a reviewed head to size a fix from",
+          got.returncode == 2 and "was a skip" in got.stderr, got.stdout + got.stderr)
     (records / (pointed + ".json")).write_text(kept)
     records.chmod(0o600)
     try:
@@ -8090,6 +8096,12 @@ def test_triage_fix_round(tmp):
     check("leg-cmd: a change record without its number is named, not given a command that cannot run",
           leg.returncode != 0 and "without its change number" in leg.stderr and "<number>" not in leg.stderr,
           leg.stderr)
+    _write_doc(records / (r1 + ".json"), dict(json.loads(first_record), mode="change", change="\u00b2"))
+    leg = run(SCRIPTS / "leg-cmd.sh", "agy", "review", "--model", "gemini-3.8-flash-medium",
+              "--base", f1, "--target", spaced, env=env)
+    (records / (r1 + ".json")).write_text(first_record)
+    check("leg-cmd: ...and so is one whose number is not ASCII digits",
+          leg.returncode != 0 and "without its change number" in leg.stderr, leg.stderr)
     del hashlib
 
 
