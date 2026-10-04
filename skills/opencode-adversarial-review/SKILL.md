@@ -35,7 +35,7 @@ and calibration rows. (The earlier attempt to write a single model in here as
 
 | lens | model | why |
 |---|---|---|
-| mechanical — consistency, is-it-still-true, convention, falsifiability | `opencode/muse-spark-1.3-contributor-free`, switching to `opencode-go/muse-spark-1.3-contributor` only when the free pool is congested | measured strong on fact-checking and line accuracy; the Go twin is ~$0.014 a leg on its own bucket |
+| mechanical — consistency, is-it-still-true, convention, falsifiability | `opencode-go/muse-spark-1.3-contributor`; `opencode/muse-spark-1.3-contributor-free` only when the go plan is not available | owner, 2026-10-04: on the go plan this model has no rate limit and draws no quota, while the free twin is a rate-limited pool. measured strong on fact-checking and line accuracy; the Go twin is ~$0.014 a leg on its own bucket |
 | judgement — challenge, design rulings, sequences | `opencode-go/glm-5.3` | an independent family, ~$0.20 a leg against the large ($12 / 5 h) bucket. **No calibration row yet — treat as unproven until one exists** |
 | top-tier judgement only | `opencode-go/kimi-k3`, `opencode-go/qwen3.8-max` | 1–2 legs per 5-hour window at most, and the buckets are shared across sessions, so probe immediately before dispatch |
 

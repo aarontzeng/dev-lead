@@ -1,5 +1,5 @@
 {
-  "_comment": "Generic leg roster. `roster.py init` copies it to the path that `roster.py path` prints first; then change it with the config skill (or roster.py set), which probes and checks each leg. The model ids below are examples that ran on the maintainer's accounts in October 2026: a model id belongs to YOUR account and pool, so check each one against your CLI's model list before you rely on it. No machine-specific account data belongs here.",
+  "_comment": "Generic leg roster. `roster.py init` copies it to the path that `roster.py path` prints first; then change it with the config skill, which probes a new model once before writing it (roster.py set only checks the file). The model ids below are examples that ran on the maintainer's accounts in October 2026: a model id belongs to YOUR account and pool, so check each one against your CLI's model list before you rely on it. No machine-specific account data belongs here.",
   "version": 1,
   "merge_gate": {
     "_comment": "Who approves that a green verdict may land: 'user' (the person approves the verdict and the diff, the lead then merges and pushes in that same run) or 'lead' (a fully green verdict is its own approval). Absent means 'user'. Neither mode changes what counts as green: an unanswered review round, a failing test, an open blocker or an unverified finding goes to the person either way, and a stricter repo contract still wins. Change it with: roster.py gate <user|lead> --why \"...\"",
@@ -42,7 +42,7 @@
           "family": "Grok"
         },
         "opencode": {
-          "_comment": "Picked by the lens the leg carries. The go plan spends no quota on this model; the free pool is the fallback, and it is rate-limited.",
+          "_comment": "Picked by the lens the leg carries. On the go plan this model has no rate limit and draws no quota (owner, 2026-10-04); the free twin is the fallback, a rate-limited pool. The opencode skill suggests an independent family for judgment (opencode-go/glm-5.3, uncalibrated); this roster runs Meta for both lenses.",
           "by_lens": {
             "mechanical": {
               "model": "opencode-go/muse-spark-1.3-contributor",

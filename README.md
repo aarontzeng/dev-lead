@@ -469,15 +469,22 @@ into your project root (see Portability below).
 
 Which model each CLI runs, per role and round, lives in a machine-local
 `roster.json`, not in the install. Start one from the template:
-`"$DEV_LEAD/scripts/roster.py" init` copies
-[`templates/roster.example.json`](templates/roster.example.json) to the path
-`roster.py path` prints first (it will not replace an existing file without
-`--force`). The template's model ids are examples that ran on the
-maintainer's accounts; a model id belongs to *your* account and pool, so check
-each one against your CLI's model list and change it with `/dev-lead:config`
-(or `roster.py set`), which probes the model and checks the file against
-`data/families.json` and `data/launch.json`. `roster.py check` validates it
-at any time.
+
+```bash
+DEV_LEAD=${DEV_LEAD_ROOT:-$(ls -d "$HOME"/.claude/plugins/cache/dev-lead/dev-lead/* | sort -V | tail -1)}
+"$DEV_LEAD/scripts/roster.py" init
+```
+
+`init` copies [`templates/roster.example.json`](templates/roster.example.json)
+to the path that `roster.py path` prints first. It will not replace an
+existing file, or a symlink (even a dangling one), without `--force`; with
+`--force` a symlinked roster keeps its link and its target is replaced. The
+template's model ids are examples that ran on the maintainer's accounts; a
+model id belongs to *your* account and pool, so check each one against your
+CLI's model list. `/dev-lead:config` probes a new model with one real call
+before writing it; `roster.py set` writes and checks the file against
+`data/families.json` and `data/launch.json` but calls no model.
+`roster.py check` validates the file at any time.
 
 ### Prerequisites
 

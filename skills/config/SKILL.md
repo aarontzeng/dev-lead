@@ -23,10 +23,11 @@ reported, never swapped for another file:
    will not have the variable at all.
 3. `~/.claude/plugins/data/dev-lead-dev-lead/roster.json`
 
-A missing file is normal on a new machine: `"$DEV_LEAD/scripts/roster.py" init`
-copies [`templates/roster.example.json`](../../templates/roster.example.json)
-there (never over an existing file without `--force`). Its model ids are
-examples; take each slot through step 2 below before relying on it.
+A missing file is normal on a new machine: `roster.py init` (run as in the
+Procedure below) copies
+[`templates/roster.example.json`](../../templates/roster.example.json) there,
+never over an existing file or symlink without `--force`. Its model ids are
+examples; take each slot through steps 2-3 below before relying on it.
 Keys that start with `_` are comments and are kept across writes.
 
 ## Procedure
@@ -43,8 +44,8 @@ DEV_LEAD=${DEV_LEAD_ROOT:-$(ls -d "$HOME"/.claude/plugins/cache/dev-lead/dev-lea
 
 1. **Show.** Run `"$DEV_LEAD/scripts/roster.py" show`. A fix round that
    inherits prints each of r1's legs marked inherited. If the file is
-   missing, the command names the path and how to create one with `set`;
-   that is not an error.
+   missing, the command names the path and how to start one with `init`
+   (or write one leg with `set`); that is not an error.
 
 2. **Write one leg per call.** If the user named assignments, apply each
    with `set` and a `--why` that quotes the user. Do not invent a reason

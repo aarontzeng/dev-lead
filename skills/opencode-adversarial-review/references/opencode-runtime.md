@@ -474,8 +474,9 @@ not slow, it is looping.
 **The one-character money trap.** Free and paid twins differ by a suffix, and
 choosing wrong raises no error — it silently spends:
 
-    opencode/muse-spark-1.3-contributor-free     free
-    opencode-go/muse-spark-1.3-contributor       PAID, one suffix apart
+    opencode/muse-spark-1.3-contributor-free     free, rate-limited pool
+    opencode-go/muse-spark-1.3-contributor       go plan, one suffix apart -- owner, 2026-10-04: no rate
+                                                 limit and no quota drawn on the go plan
     openrouter/nvidia/nemotron-3.5-lightning:free   free
     openrouter/nvidia/nemotron-3.5-lightning        PAID
 

@@ -742,7 +742,7 @@ def load_roster(path):
         text = path.read_text(encoding="utf-8")
     except FileNotFoundError:
         return None, "roster: %s: file not found" % path
-    except OSError as exc:
+    except (OSError, UnicodeDecodeError) as exc:
         return None, "roster: %s: %s" % (path, exc)
     try:
         doc = json.loads(text)
@@ -1087,7 +1087,8 @@ def cmd_show(path, only):
     path = Path(path)
     if not os.path.lexists(path) or (path.is_symlink() and not path.exists()):
         print("roster: no roster file at %s" % path)
-        print('create one with: roster.py set <round> <role> <adapter> '
+        print("start one from the template with: roster.py init")
+        print('or write one leg with: roster.py set <round> <role> <adapter> '
               '--model M [--effort E] [--family F] [--lens L] --why "why"')
         return 0
     doc, err = load_roster(path)
@@ -1393,26 +1394,41 @@ def cmd_init(path, force):
     roster kept in another repository stays linked. The template is checked
     first, so a broken template is reported instead of installed."""
     template = ROOT / "templates" / "roster.example.json"
-    if os.path.lexists(path) and not force:
-        print("roster: %s already exists (pass --force to replace it)" % path)
+    if os.path.isdir(path):
+        print("roster: %s is a directory; move it aside -- --force replaces a file, not a directory" % path)
         return 1
-    doc, err = load_roster(template)
-    if err:
-        print(err)
+    try:
+        text = template.read_bytes().decode("utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        print("roster: %s: %s" % (template, exc))
         return 2
-    problems = validate(doc)
-    if problems.errors:
-        for line in problems.errors:
+    try:
+        doc = json.loads(text)
+    except json.JSONDecodeError as exc:
+        print("roster: %s: invalid JSON: %s" % (template, exc))
+        return 2
+    problems = validate(doc) if isinstance(doc, dict) else None
+    if problems is None or problems.errors:
+        for line in (problems.errors if problems else ["roster: %s: roster must be a JSON object" % template]):
             print(line)
         return 1
     try:
-        atomic_write(path, template.read_text(encoding="utf-8"))
+        # the same lock `set` takes: a roster another call creates meanwhile is
+        # seen here, not overwritten
+        with _locked(path):
+            if os.path.lexists(path) and not force:
+                print("roster: %s already exists (pass --force to replace it)" % path)
+                return 1
+            atomic_write(path, text)        # the text that was validated, not a second read
+    except RosterLocked as exc:
+        print(exc)
+        return 1
     except OSError as exc:
         print("roster: cannot write %s: %s" % (path, exc))
         return 2
     print(path)
-    print("roster: the model ids are the template's examples; check each against your CLI's model list "
-          "and change them with /dev-lead:config (roster.py set), which probes and checks them")
+    print("roster: the model ids are the template's examples; check each against your CLI's model list. "
+          "/dev-lead:config probes a new model once before writing it; roster.py set only checks the file")
     return 0
 
 

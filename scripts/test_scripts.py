@@ -4551,9 +4551,37 @@ def test_roster(tmp):
     dangling = tmp / "init" / "dangling.json"
     dangling.symlink_to(tmp / "init" / "nowhere.json")
     got = run(roster, "init", env=_roster_env(tmp, DEV_LEAD_ROSTER=str(dangling)))
-    check("roster init: a dangling symlink counts as an existing roster",
-          got.returncode == 1 and "already exists" in got.stdout and not (tmp / "init" / "nowhere.json").exists(),
-          got.stdout + got.stderr)
+    check("roster init: a dangling symlink counts as an existing roster, left as it was",
+          got.returncode == 1 and "already exists" in got.stdout and not (tmp / "init" / "nowhere.json").exists()
+          and dangling.is_symlink(), got.stdout + got.stderr)
+    a_dir = tmp / "init" / "a-dir.json"
+    a_dir.mkdir()
+    got = run(roster, "init", "--force", env=_roster_env(tmp, DEV_LEAD_ROSTER=str(a_dir)))
+    check("roster init: a directory at the roster path is named, even with --force",
+          got.returncode == 1 and "is a directory" in got.stdout and a_dir.is_dir(), got.stdout + got.stderr)
+    # with no DEV_LEAD_ROSTER the roster is the home fallback, created with its directories
+    home = tmp / "init-home"
+    home.mkdir()
+    got = run(roster, "init", env=_roster_env(home))
+    landed = home / ".claude" / "plugins" / "data" / "dev-lead-dev-lead" / "roster.json"
+    check("roster init: without DEV_LEAD_ROSTER it writes the path `roster.py path` names",
+          got.returncode == 0 and landed.read_bytes() == example.read_bytes()
+          and run(roster, "path", env=_roster_env(home)).stdout.split()[0] == str(landed), got.stdout + got.stderr)
+    got = run(roster, "show", env=_roster_env(tmp / "init-empty-home"))
+    check("roster show: a missing roster names init first",
+          got.returncode == 0 and "start one from the template with: roster.py init" in got.stdout, got.stdout)
+    # a roster another call holds the lock on is not written over
+    locked_path = tmp / "init" / "held.json"
+    holder = subprocess.Popen([sys.executable, "-c",
+                               "import fcntl,os,sys,time; fd=os.open(sys.argv[1],os.O_RDWR|os.O_CREAT); "
+                               "fcntl.flock(fd,fcntl.LOCK_EX); print('held',flush=True); time.sleep(5)",
+                               str(locked_path) + ".lock"], stdout=subprocess.PIPE, text=True)
+    holder.stdout.readline()
+    got = run(roster, "init", env=_roster_env(tmp, DEV_LEAD_ROSTER=str(locked_path), DEV_LEAD_ROSTER_LOCK_SECS="0.3"))
+    holder.kill()
+    holder.wait()
+    check("roster init: takes the roster lock, and reports a held one instead of writing",
+          got.returncode == 1 and "another roster.py" in got.stdout and not locked_path.exists(), got.stdout + got.stderr)
 
     # The plugin's own data files, missing or broken: named, exit 2, no
     # traceback -- the way load_roster has always answered for the roster.
