@@ -7760,9 +7760,9 @@ def test_triage_fix_round(tmp):
           got.returncode == 2 and "fix round 7" in got.stderr and "only for a blocker" in got.stderr,
           got.stdout + got.stderr)
     got, late = scoped("--fix-of", f6, "--fix-tested", evidence)
-    check("triage fix: past the gate the tested rung needs no blocker",
-          got.returncode == 0 and late.get("fix", {}).get("rung") == "tested" and late["fix"].get("round") == 7,
-          got.stdout + got.stderr)
+    check("triage fix: past the gate the tested rung needs no blocker, and is still one leg",
+          got.returncode == 0 and late.get("fix", {}).get("rung") == "tested" and late["fix"].get("round") == 7
+          and late.get("min_review_legs") == 1, got.stdout + got.stderr)
 
     # an amended and rebased fix is compared by its own patch, not the moved base
     git(repo, "checkout", "-q", "-b", "upstream", base)
@@ -7795,6 +7795,14 @@ def test_triage_fix_round(tmp):
     got, empty = scoped("--fix-of", s1)
     check("triage fix: an empty wording_globs makes no documentation path wording",
           got.returncode == 0 and empty.get("fix", {}).get("rung") == "full", got.stdout + got.stderr)
+    for suffix in (".markdown", ".rst", ".adoc"):
+        write("docs/page" + suffix, "a page\n")
+        tried = commit("fix: a page" + suffix)
+        got, other = scoped("--fix-of", f5, "--blocker", "x")
+        check("triage fix: an empty wording_globs makes %s not wording either" % suffix,
+              got.returncode == 0 and other.get("fix", {}).get("rung") == "full", got.stdout + got.stderr)
+        (records / (tried + ".json")).unlink()
+        git(repo, "reset", "-q", "--hard", f5)
     _write_doc(rules_file, rules)
     got, plain = scoped("--fix-of", s1)
     check("triage fix: ...and without it the same fix is wording",
@@ -7826,6 +7834,25 @@ def test_triage_fix_round(tmp):
         got, instructed = scoped("--fix-of", skill, "--blocker", "x")
         check("triage fix: %s is an agent instruction file, not wording" % agent_file,
               got.returncode == 0 and instructed.get("fix", {}).get("rung") == "full", got.stdout + got.stderr)
+        (records / (tried + ".json")).unlink()
+        git(repo, "reset", "-q", "--hard", skill)
+    for directory in (".claude", ".clinerules", ".codex", ".continue", ".cursor", ".gemini", ".windsurf",
+                      "agents", "commands", "prompts", "skills"):
+        write(directory + "/notes.md", "# notes\n\nplain words\n")
+        git(repo, "add", "-f", directory + "/notes.md")
+        tried = commit("fix: notes under " + directory)
+        got, under = scoped("--fix-of", skill, "--blocker", "x")
+        check("triage fix: a plain document under %s/ is an agent instruction file" % directory,
+              got.returncode == 0 and under.get("fix", {}).get("rung") == "full", got.stdout + got.stderr)
+        (records / (tried + ".json")).unlink()
+        git(repo, "reset", "-q", "--hard", skill)
+    for document in (".github/README.md", ".github/ISSUE_TEMPLATE/bug.md"):
+        write(document, "# a document\n")
+        git(repo, "add", "-f", document)
+        tried = commit("fix: " + document)
+        got, plain_doc = scoped("--fix-of", skill)
+        check("triage fix: %s is documentation, not an agent instruction file" % document,
+              got.returncode == 0 and plain_doc.get("fix", {}).get("rung") == "wording", got.stdout + got.stderr)
         (records / (tried + ".json")).unlink()
         git(repo, "reset", "-q", "--hard", skill)
     git(repo, "mv", "src/app.py", "src/main.py")
@@ -7863,19 +7890,60 @@ def test_triage_fix_round(tmp):
     check("triage fix: a removed gitlink is the full rung (a pointer line is not a small fix)",
           got.returncode == 0 and unpointed.get("fix", {}).get("rung") == "full"
           and "a mode 160000 entry removed" in unpointed["fix"].get("why", ""), got.stdout + got.stderr)
-    # a record the count cannot read stops the count, and stops a plain scope from replacing it
-    (records / "unreadable.json").write_text("{")
-    got, _ = scoped("--fix-of", linked, "--blocker", "x")
-    check("triage fix: an unreadable record refuses the fix round instead of being skipped",
-          got.returncode == 2 and "cannot read record" in got.stderr and "unreadable.json" in got.stderr,
-          got.stdout + got.stderr)
-    (records / "unreadable.json").unlink()
+    (repo / "src" / "current").symlink_to("main.py")
+    git(repo, "add", "src/current")
+    git(repo, "commit", "-qm", "fix: a link")
+    pointed = git(repo, "rev-parse", "HEAD").stdout.strip()
+    scoped("--fix-of", gone, "--blocker", "x")
+    git(repo, "rm", "-q", "src/current")
+    git(repo, "commit", "-qm", "fix: the link removed")
+    unlinked = git(repo, "rev-parse", "HEAD").stdout.strip()
+    got, delinked = scoped("--fix-of", pointed, "--fix-tested", evidence, "--blocker", "x")
+    check("triage fix: a removed symlink is the full rung too (any non-regular entry, not only a gitlink)",
+          got.returncode == 0 and delinked.get("fix", {}).get("rung") == "full"
+          and "a mode 120000 entry removed" in delinked["fix"].get("why", ""), got.stdout + got.stderr)
+    gone = unlinked
+    # a triage record the count cannot read as one stops the count; another tool's file does not
+    (records / "another-tool.json").write_text("{")
+    got, _ = scoped("--fix-of", pointed, "--blocker", "x")
+    check("triage fix: a file not named for a commit is another tool's, and the count leaves it alone",
+          got.returncode == 0, got.stdout + got.stderr)
+    (records / "another-tool.json").unlink()
+    stranger = "f" * 40
+    for content, why in (("{", "an undecodable record"), ("[]", "a record that is not an object"),
+                         ('{"fix": "round 9"}', "a fix block that is not an object"),
+                         ('{"fix": {"root": "%s", "round": "9"}}' % s1, "a round of this change that is not an integer")):
+        (records / (stranger + ".json")).write_text(content)
+        got, _ = scoped("--fix-of", pointed, "--blocker", "x")
+        check("triage fix: %s refuses the fix round instead of being skipped" % why,
+              got.returncode == 2 and "cannot read record" in got.stderr and stranger in got.stderr,
+              got.stdout + got.stderr)
+    (records / (stranger + ".json")).write_text('{"fix": {"root": "%s", "round": "9"}}' % r1)
+    got, _ = scoped("--fix-of", pointed, "--blocker", "x")
+    check("triage fix: ...while a record of another change is not this count's to read",
+          got.returncode == 0, got.stdout + got.stderr)
+    (records / (stranger + ".json")).unlink()
+    records.chmod(0o300)
+    try:
+        got, _ = scoped("--fix-of", pointed, "--blocker", "x")
+    finally:
+        records.chmod(0o755)
+    check("triage fix: a records directory that cannot be listed refuses the count",
+          got.returncode == 2 and "cannot list the triage records" in got.stderr, got.stdout + got.stderr)
     saved = (records / (gone + ".json")).read_text()
     (records / (gone + ".json")).write_text("{")
     got, _ = scoped()
-    check("triage fix: an unreadable fix record is not replaced by a plain scope",
-          got.returncode == 2 and "cannot read record" in got.stderr, got.stdout + got.stderr)
+    check("triage fix: an unreadable fix record is not replaced by a plain scope, and the refusal is scope's",
+          got.returncode == 2 and "cannot read record" in got.stderr and "round-check" not in got.stderr
+          and (records / (gone + ".json")).read_text() == "{", got.stdout + got.stderr)
     (records / (gone + ".json")).write_text(saved)
+    kept = (records / (pointed + ".json")).read_text()
+    (records / (pointed + ".json")).write_text("{")
+    got, _ = scoped("--fix-of", pointed, "--blocker", "x")
+    check("triage fix: a reviewed head whose record is broken is reported as broken, not missing",
+          got.returncode == 2 and "cannot read record" in got.stderr and "no triage record" not in got.stderr,
+          got.stdout + got.stderr)
+    (records / (pointed + ".json")).write_text(kept)
     write("src/added.py", "".join("added %d\n" % i for i in range(3)))
     added = commit("fix: a module the change adds")
     got, _ = scoped("--fix-of", gone, "--blocker", "x")
@@ -7922,6 +7990,9 @@ def test_triage_fix_round(tmp):
     check("leg-cmd: a base mismatch on a fix-round record advises a scope that keeps its --fix-of",
           leg.returncode != 0 and "does not match launch base" in leg.stderr and "--fix-of " + added in leg.stderr,
           leg.stdout + leg.stderr)
+    check("leg-cmd: ...with the record's --fix-tested and --blocker, shell-quoted",
+          "--fix-tested 'test_fixed_3 failed before the fix; mutation fixed->feature killed'" in leg.stderr
+          and "--blocker x" in leg.stderr, leg.stderr)
     del hashlib
 
 

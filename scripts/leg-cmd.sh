@@ -425,11 +425,15 @@ def _triage_gate():
         if resolved_base != record_base:
             # a fix-round record is replaced only by a scope that names its --fix-of again
             record_fix = record.get("fix") if isinstance(record.get("fix"), dict) else {}
-            again = (" --fix-of %s (with the --fix-tested or --blocker it had)" % record_fix["of"]
-                     if record_fix.get("of") else "")
+            again = ""
+            if record_fix.get("of"):
+                again = " --fix-of " + shlex.quote(str(record_fix["of"]))
+                for flag, key in (("--fix-tested", "evidence"), ("--blocker", "blocker")):
+                    if isinstance(record_fix.get(key), str) and record_fix[key]:
+                        again += " %s %s" % (flag, shlex.quote(record_fix[key]))
             sys.exit("leg-cmd: triage record base %s does not match launch base %s in %s; run "
                      "triage.py scope --base %s --target %s%s"
-                     % (record_base, resolved_base, repo, resolved_base, repo, again))
+                     % (record_base, resolved_base, repo, shlex.quote(resolved_base), shlex.quote(str(repo)), again))
     lens_entries = record["lenses"] if isinstance(record.get("lenses"), list) else []
     lenses = ", ".join(str(item.get("name")) for item in lens_entries if isinstance(item, dict)) or "(none)"
     fix = record.get("fix") if isinstance(record.get("fix"), dict) else None

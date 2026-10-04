@@ -651,7 +651,7 @@ two rounds and would have run a third on no principle at all.
 
    | the fix's delta | rung | legs |
    |---|---|---|
-   | documentation only (`.md`, `.markdown`, `.rst`, `.adoc`, not an agent instruction file -- `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `QUANTA.md`, `SKILL.md` and their variants, `*instructions*` / `*prompt*` files, anything under `.claude/`, `.github/`, `skills/` and the other agent directories README lists; the rules file's `wording_globs`, when set, replaces this default), or only the commit message | wording | none: the lead's own read |
+   | documentation only (`.md`, `.markdown`, `.rst`, `.adoc`, not an agent instruction file -- `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `QUANTA.md`, `SKILL.md` and their variants, `*instructions*` / `*prompt*` files, anything under `.claude/`, `skills/` and the other agent directories README lists; the rules file's `wording_globs`, when set, replaces this default), or only the commit message | wording | none: the lead's own read |
    | within `small_delta_lines`, and every fixed finding has a test that failed before the fix and a mutation the lead killed, stated as `--fix-tested '<which tests, which mutations>'` | tested | one cross-family leg |
    | anything else, or a delta a `delta_triggers` rule raises to HIGH | full | the range's minimum (at least HIGH's for a trigger) |
 
@@ -678,7 +678,8 @@ two rounds and would have run a third on no principle at all.
    adapters from inside the frozen worktree, because they review their caller
    cwd. When a record has `base`, a launch's `--base` must match it; otherwise
    rerun `triage.py scope --base <this base> --target <frozen dir>` first,
-   with the same `--fix-of` on a fix round.
+   with the same `--fix-of`, `--fix-tested` and `--blocker` on a fix round
+   (leg-cmd.sh prints that command, quoted, from the record).
    Going below the minimum is `--no-triage '<reason>'` only with the owner's
    word, and records that exception. After the legs return, run `triage.py
    round-check --head "$REVIEW_HEAD" --target "$FROZEN_DIR" --leg

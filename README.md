@@ -302,9 +302,11 @@ exist. The delta between the two reviewed patches decides `min_review_legs`:
 documentation only (`.md`, `.markdown`, `.rst`, `.adoc`, but not an agent
 instruction file: `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `QUANTA.md`,
 `SKILL.md` and their variants such as `AGENTS.override.md`, any
-`*instructions*` or `*prompt*` file, and anything under `.claude/`, `.codex/`,
-`.cursor/`, `.gemini/`, `.github/`, `agents/`, `commands/`, `prompts/` or
-`skills/` -- best effort, erring toward legs; an optional `wording_globs` list
+`*instructions*` or `*prompt*` file, and anything under `.claude/`,
+`.clinerules/`, `.codex/`, `.continue/`, `.cursor/`, `.gemini/`, `.windsurf/`,
+`agents/`, `commands/`, `prompts/` or `skills/` -- best effort, erring toward
+legs; `.github/` is not on that list, since its README and issue templates are
+documents and its agent files are caught by name; an optional `wording_globs` list
 in `triage.json` replaces this default) or a message-only change is `wording`, no leg; a delta within
 `small_delta_lines` with `--fix-tested` evidence is `tested`, one leg;
 anything else -- a binary, mode or move change included -- keeps the range's
@@ -320,9 +322,12 @@ name the head of the latest round recorded since the first reviewed head
 (`root`): an older head is refused, since the count would restart. A head
 amended before its review keeps its record, and removing that record is how
 to say it was never reviewed. `scope` without `--fix-of`, and `change`,
-refuse to replace a fix-round record of the same head. A record the count
-cannot decode refuses the round and names the file: repair it, or remove it
-if that head was never reviewed.
+refuse to replace a fix-round record of the same head. A triage record (a
+file named for a commit) that the count cannot read as one -- undecodable,
+not an object, a malformed fix block or round -- refuses the round and names
+the file, and so does a records directory that cannot be listed: repair it,
+or remove the record if that head was never reviewed. Other files in the
+directory are left alone.
 
 Every `leg-cmd.sh <adapter> review` launch checks the HEAD it will actually
 review: `--target`'s HEAD, or the caller's cwd when that adapter has no

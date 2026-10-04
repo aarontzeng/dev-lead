@@ -1003,11 +1003,13 @@ WORDING_SUFFIXES = (".md", ".markdown", ".rst", ".adoc")
 # code: a fix to one is not wording, whatever its suffix. Best effort, and it
 # errs toward legs: the five names and their variants (AGENTS.override.md,
 # CLAUDE.local.md), any *instructions* or *prompt* file, and anything under a
-# directory agents read from. wording_globs, when set, replaces this default
+# directory agents read from. Not .github/: its README and issue templates are
+# documents, and its agent files (copilot-instructions.md, *.prompt.md) are
+# caught by name. wording_globs, when set, replaces this default
 # as it replaces the suffixes.
 AGENT_INSTRUCTION_NAMES = ("agents", "claude", "gemini", "quanta", "skill")
-AGENT_INSTRUCTION_DIRS = (".claude", ".codex", ".cursor", ".gemini", ".github", "agents", "commands", "prompts",
-                          "skills")
+AGENT_INSTRUCTION_DIRS = (".claude", ".clinerules", ".codex", ".continue", ".cursor", ".gemini", ".windsurf",
+                          "agents", "commands", "prompts", "skills")
 # The fix round from which a full round needs a blocker (owner ruling,
 # 2026-10-01: after two fix rounds, non-blockers do not open another).
 CONVERGENCE_ROUND = 3
@@ -1759,6 +1761,8 @@ def _is_wording(config, path):
 
 def _reviewed_record(reviewed):
     """The triage record of the head the previous round reviewed."""
+    if _record_path(reviewed).exists():
+        return _load_record(reviewed)       # a record that is there but broken says so, not "missing"
     try:
         return _load_record(reviewed)
     except InputError:
@@ -1767,29 +1771,52 @@ def _reviewed_record(reviewed):
                          "--fix-of and take the full legs." % reviewed)
 
 
+_RECORD_NAME = re.compile(r"[0-9a-f]{40}\.json")
+
+
 def _recorded_rounds(root, head):
     """The highest fix round recorded since ``root`` and the heads recorded at
     it, other than this head's own record. The records cannot tell a reviewed
     head from one amended before its review, so both count: the refusal names
-    the way out."""
+    the way out.
+
+    Only files named for a commit are triage records; anything else in the
+    directory is another tool's and is left alone. A triage record the count
+    cannot read AS one -- undecodable, not an object, a fix block that is not
+    an object, a round that is not a positive integer -- refuses the count,
+    and so does a directory that cannot be listed: a round the count cannot
+    see is not a round that did not happen."""
+    def unreadable(path, why):
+        return InputError("triage scope: cannot read record %s (%s); the fix-round count cannot skip it. "
+                          "Repair it, or remove it if that head was never reviewed." % (path, why))
     highest, heads = 0, []
+    directory = records_path()
     try:
-        paths = sorted(records_path().glob("*.json"))
-    except OSError:
+        paths = sorted(path for path in directory.iterdir() if _RECORD_NAME.fullmatch(path.name))
+    except FileNotFoundError:
         return highest, heads
+    except OSError as exc:
+        raise InputError("triage scope: cannot list the triage records in %s (%s); the fix-round count "
+                         "needs every record" % (directory, exc))
     for path in paths:
         if path.stem == head:
             continue
         try:
             document = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
-            # a round the count cannot read is not a round that did not happen
-            raise InputError("triage scope: cannot read record %s (%s); the fix-round count cannot skip it. "
-                             "Repair it, or remove it if that head was never reviewed." % (path, exc))
-        fix = document.get("fix") if isinstance(document, dict) else None
-        if not isinstance(fix, dict) or fix.get("root") != root:
+            raise unreadable(path, exc)
+        if not isinstance(document, dict):
+            raise unreadable(path, "not a JSON object")
+        fix = document.get("fix")
+        if fix is None:
+            continue
+        if not isinstance(fix, dict):
+            raise unreadable(path, "its fix block is not an object")
+        if fix.get("root") != root:
             continue
         number = fix.get("round")
+        if type(number) is not int or number < 1:
+            raise unreadable(path, "its fix round is %r, not a positive integer" % (number,))
         if type(number) is int and number > highest:
             highest, heads = number, [path.stem]
         elif type(number) is int and number == highest:
@@ -1952,12 +1979,12 @@ def _load_record(head):
     try:
         document = json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError:
-        raise InputError("triage round-check: no record for %s; run triage.py scope --base <base> --target <frozen dir> "
+        raise InputError("triage: no record for %s; run triage.py scope --base <base> --target <frozen dir> "
                          "or triage.py change <number> first" % head)
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise InputError("triage round-check: cannot read record %s: %s" % (path, exc))
+        raise InputError("triage: cannot read record %s: %s" % (path, exc))
     if not isinstance(document, dict):
-        raise InputError("triage round-check: record %s must be a JSON object" % path)
+        raise InputError("triage: record %s must be a JSON object" % path)
     return document
 
 
