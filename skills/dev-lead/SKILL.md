@@ -651,7 +651,7 @@ two rounds and would have run a third on no principle at all.
 
    | the fix's delta | rung | legs |
    |---|---|---|
-   | documentation only (`.md`, `.markdown`, `.rst`, `.adoc`, not an agent instruction file such as `SKILL.md` or `AGENTS.md`; the rules file's `wording_globs`, when set, replaces this default), or only the commit message | wording | none: the lead's own read |
+   | documentation only (`.md`, `.markdown`, `.rst`, `.adoc`, not an agent instruction file -- `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `QUANTA.md`, `SKILL.md` and their variants, `*instructions*` / `*prompt*` files, anything under `.claude/`, `.github/`, `skills/` and the other agent directories README lists; the rules file's `wording_globs`, when set, replaces this default), or only the commit message | wording | none: the lead's own read |
    | within `small_delta_lines`, and every fixed finding has a test that failed before the fix and a mutation the lead killed, stated as `--fix-tested '<which tests, which mutations>'` | tested | one cross-family leg |
    | anything else, or a delta a `delta_triggers` rule raises to HIGH | full | the range's minimum (at least HIGH's for a trigger) |
 
@@ -667,7 +667,9 @@ two rounds and would have run a third on no principle at all.
    recorded for the change; an older head is refused, since the count would
    restart. A head amended before its review keeps its record, and removing
    that record is how to say it was never reviewed. A `scope` without
-   `--fix-of` (or a `change`) will not replace a fix-round record. `round-check` and `leg-cmd.sh` read the same record,
+   `--fix-of` (or a `change`) will not replace a fix-round record. The gate
+   binds rounds sized with `--fix-of`: triaging a fix as a change of its own
+   takes the full legs and no gate, so the convergence rule there is yours. `round-check` and `leg-cmd.sh` read the same record,
    so a lower minimum here needs no `--no-triage`; the report names the rung.
 
    `leg-cmd.sh … review` reads the reviewed HEAD from `--target`, or
@@ -716,8 +718,8 @@ two rounds and would have run a third on no principle at all.
    about a test the LEAD had written after the delegate finished, and it was
    right. So the lead's fixes get a re-review sized by `triage.py scope
    --fix-of` (the ladder above): only a documentation fix goes without a leg, and a code
-   fix gets one leg only when the mutation standard you hold the delegate's
-   work to is met and stated. Say in the run log which parts of the final
+   fix within `small_delta_lines` gets one leg only when the mutation standard
+   you hold the delegate's work to is met and stated. Say in the run log which parts of the final
    diff no leg ever saw.
 
 4. **Route**: no verified HIGH findings → merge gate. Verified findings →

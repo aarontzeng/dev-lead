@@ -1000,9 +1000,14 @@ MARKDOWN_SUFFIXES = (".md", ".markdown", ".mdx")
 # .mdx is left out: it imports and renders components, which is code.
 WORDING_SUFFIXES = (".md", ".markdown", ".rst", ".adoc")
 # Agent instruction files are markdown that agents act on, not prose about the
-# code: a fix to one is not wording, whatever its suffix. wording_globs, when
-# set, replaces this default as it replaces the suffixes.
-AGENT_INSTRUCTION_NAMES = ("agents.md", "claude.md", "gemini.md", "quanta.md", "skill.md")
+# code: a fix to one is not wording, whatever its suffix. Best effort, and it
+# errs toward legs: the five names and their variants (AGENTS.override.md,
+# CLAUDE.local.md), any *instructions* or *prompt* file, and anything under a
+# directory agents read from. wording_globs, when set, replaces this default
+# as it replaces the suffixes.
+AGENT_INSTRUCTION_NAMES = ("agents", "claude", "gemini", "quanta", "skill")
+AGENT_INSTRUCTION_DIRS = (".claude", ".codex", ".cursor", ".gemini", ".github", "agents", "commands", "prompts",
+                          "skills")
 # The fix round from which a full round needs a blocker (owner ruling,
 # 2026-10-01: after two fix rounds, non-blockers do not open another).
 CONVERGENCE_ROUND = 3
@@ -1742,8 +1747,14 @@ def _is_wording(config, path):
     globs = config.get("wording_globs")
     if globs is not None:
         return any(glob_matches(glob, path) for glob in globs)
-    name = path.rsplit("/", 1)[-1].lower()
-    return name.endswith(WORDING_SUFFIXES) and name not in AGENT_INSTRUCTION_NAMES
+    parts = path.lower().split("/")
+    name = parts[-1]
+    if not name.endswith(WORDING_SUFFIXES):
+        return False
+    stem = name.split(".", 1)[0]
+    instructions = (stem in AGENT_INSTRUCTION_NAMES or "instructions" in name or "prompt" in name
+                    or any(part in AGENT_INSTRUCTION_DIRS for part in parts[:-1]))
+    return not instructions
 
 
 def _reviewed_record(reviewed):
@@ -1771,8 +1782,10 @@ def _recorded_rounds(root, head):
             continue
         try:
             document = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
-            continue
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            # a round the count cannot read is not a round that did not happen
+            raise InputError("triage scope: cannot read record %s (%s); the fix-round count cannot skip it. "
+                             "Repair it, or remove it if that head was never reviewed." % (path, exc))
         fix = document.get("fix") if isinstance(document, dict) else None
         if not isinstance(fix, dict) or fix.get("root") != root:
             continue
@@ -1787,10 +1800,9 @@ def _recorded_rounds(root, head):
 def _refuse_fix_overwrite(head, mode):
     """A record without --fix-of must not replace a fix-round record: the next
     round would lose the count and start again at one."""
-    try:
-        existing = _load_record(head)
-    except InputError:
+    if not _record_path(head).exists():
         return
+    existing = _load_record(head)      # unreadable: refused, not taken for "no record"
     fix = existing.get("fix")
     if isinstance(fix, dict):
         raise InputError("triage %s: %s was sized as fix round %s of %s; rerun scope with --fix-of %s (and the "
@@ -1810,9 +1822,13 @@ def fix_sizing(config, target, base, head, fix_of, *, evidence=None, blocker=Non
       tested   the delta is within small_delta_lines and the lead states that
                every fixed finding has a test that failed before the fix and a
                mutation the lead killed (``evidence``): one cross-family leg;
-      full     anything else, or a delta a delta_triggers rule raises to HIGH:
-               the range's own minimum.
+      full     anything else -- a binary, mode or move change included: the
+               range's own minimum; at least HIGH's when a delta_triggers
+               rule raises the fix itself to HIGH.
 
+    Documentation is the wording suffixes minus the agent instruction files,
+    or the rules file's wording_globs. ``fix_of`` must name the head of the
+    latest round recorded since the change's first reviewed head (the root).
     From the third fix round on, a full round needs ``blocker``: after two
     fix rounds non-blocker findings are fixed under the lower rungs or
     recorded as known limits. The delta between the two reviews is computed
@@ -1857,10 +1873,20 @@ def fix_sizing(config, target, base, head, fix_of, *, evidence=None, blocker=Non
     # MEDIUM or HIGH is the range's floor, already in range_min.
     _lenses, raised, _flags = _lenses_and_triggers(dict(config, risk_default="LOW"), delta_files,
                                                    delta_lines, fired)
+    # A move is one between the two reviewed trees: a rename against the base that
+    # an earlier round already reviewed is not this fix's. _mode_flags leaves a
+    # renamed entry to the move checks, so its mode is compared here.
     unsized = (["%s: binary" % entry["new"] for entry in delta_entries if entry.get("binary")]
-               + ["%s: moved from %s" % (entry["new"], entry["old"]) for entry in delta_entries
-                  if entry["status"][:1] in "RC"]
-               + _mode_flags(pairs))
+               + ["%s: moved from %s" % (entry["new"], entry["old"]) for entry in moves]
+               + _mode_flags(pairs)
+               + ["%s: file mode changed %s -> %s" % (entry["new"], before["new_mode"], entry.get("new_mode"))
+                  for before, entry in pairs if before is not None and entry["status"][:1] == "R"
+                  and before.get("new_mode") != entry.get("new_mode")]
+               # _mode_flags skips deletions; a removed gitlink is one pointer line
+               + ["%s: a mode %s entry removed" % (entry["old"], mode) for before, entry in pairs
+                  if entry["status"][:1] == "D"
+                  for mode in [before["new_mode"] if before is not None else entry.get("old_mode")]
+                  if mode not in REGULAR_MODES + ("000000", None)])
     if raised == "HIGH":
         rung, why = "full", "a delta trigger raises the fix itself to HIGH"
     elif unsized:
@@ -2062,8 +2088,9 @@ def main(argv=None):
     scope_parser.add_argument("--category")
     scope_parser.add_argument(
         "--fix-of", metavar="REVIEWED_HEAD",
-        help="this is a fix round of the lead's own change; size it by the delta from the head the previous "
-             "round reviewed (needs --base/--target and that head's triage record)")
+        help="this is a fix round of the lead's own change; size it by the delta from the head the last "
+             "round reviewed, which must be the latest round recorded for the change (needs --base/--target "
+             "and that head's triage record)")
     scope_parser.add_argument(
         "--fix-tested", metavar="EVIDENCE",
         help="with --fix-of: each fixed finding's test that failed before the fix, and the mutation killed")

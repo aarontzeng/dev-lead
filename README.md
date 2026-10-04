@@ -300,16 +300,20 @@ python3 scripts/triage.py scope --base "$BASE" --target "$FROZEN_DIR" \
 `--fix-of` names the head the previous round reviewed, whose record must
 exist. The delta between the two reviewed patches decides `min_review_legs`:
 documentation only (`.md`, `.markdown`, `.rst`, `.adoc`, but not an agent
-instruction file -- `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `QUANTA.md`,
-`SKILL.md`; an optional `wording_globs` list in `triage.json` replaces this
-default) or a message-only change is `wording`, no leg; a delta within
+instruction file: `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `QUANTA.md`,
+`SKILL.md` and their variants such as `AGENTS.override.md`, any
+`*instructions*` or `*prompt*` file, and anything under `.claude/`, `.codex/`,
+`.cursor/`, `.gemini/`, `.github/`, `agents/`, `commands/`, `prompts/` or
+`skills/` -- best effort, erring toward legs; an optional `wording_globs` list
+in `triage.json` replaces this default) or a message-only change is `wording`, no leg; a delta within
 `small_delta_lines` with `--fix-tested` evidence is `tested`, one leg;
 anything else -- a binary, mode or move change included -- keeps the range's
 minimum, and a delta a trigger raises to HIGH takes at least HIGH's. The
 evidence and blocker are the lead's statements, recorded and reported, not
 checked. The record gains a `fix` block (`of`, `root`, `round`, `rung`, `why`,
-`delta_files`, `delta_lines`, `evidence`, `blocker`, `range_min_review_legs`)
-that `round-check` and `leg-cmd.sh` report. From the third fix round on, a
+`delta_files`, `delta_lines`, `evidence`, `blocker`, `range_min_review_legs`);
+`round-check` reports its `of`, `root`, `round`, `rung`, `why`, `evidence` and
+`blocker`, and `leg-cmd.sh` prints the round and rung. From the third fix round on, a
 `full` rung is refused without `--blocker`: after two fix rounds, non-blockers
 are fixed under the lower rungs or recorded as known limits. `--fix-of` must
 name the head of the latest round recorded since the first reviewed head

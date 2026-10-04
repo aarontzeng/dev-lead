@@ -669,10 +669,12 @@ round that did not verify, whatever its findings table looks like.
 Iteration is where quality comes from, but unbounded iteration is where
 budgets die. Default: three implementation rounds (initial + two fix rounds).
 A fix round is reviewed in proportion to the fix, not the change: a fix that
-only touched documentation is the lead's own read, a small fix whose every
+only touched documentation (not an agent instruction file such as
+`SKILL.md`) is the lead's own read, a small fix whose every
 finding has a failing-before test and a killed mutation takes one
-cross-family leg, anything else the change's own legs (`triage.py scope
---fix-of`, owner ruling 2026-10-01). After two fix rounds a non-blocker does
+cross-family leg, anything else the change's own legs, and at least HIGH's
+when a trigger fires on the fix (`triage.py scope --fix-of`, owner ruling
+2026-10-01). After two fix rounds a non-blocker does
 not open another full round: fix it at a lower rung or record it as a known
 limit. A blocker always gets another round. And a fix that was run for real
 may be pushed before its re-review, which still happens, and the report says
