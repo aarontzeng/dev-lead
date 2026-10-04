@@ -1760,18 +1760,35 @@ def _is_wording(config, path):
 
 
 def _reviewed_record(reviewed):
-    """The triage record of the head the previous round reviewed."""
-    if _record_path(reviewed).exists():
-        return _load_record(reviewed)       # a record that is there but broken says so, not "missing"
+    """The triage record of the head the previous round reviewed.
+
+    Missing is only "the path does not exist": a dangling link, an unreadable
+    directory or a broken file is reported as what it is, never as missing
+    (that sent the lead to re-triage a head that had a record). The record must
+    carry what scope writes; a stub such as {} would size the round from
+    nothing."""
+    path = _record_path(reviewed)
     try:
-        return _load_record(reviewed)
-    except InputError:
+        os.lstat(path)
+    except FileNotFoundError:
         raise InputError("triage scope: no triage record for the reviewed head %s. A fix round is sized "
                          "against the round that reviewed it; triage that head first, or run scope without "
                          "--fix-of and take the full legs." % reviewed)
+    except OSError as exc:
+        raise InputError("triage scope: cannot reach the record %s (%s); fix the permissions of %s"
+                         % (path, exc, path.parent))
+    if not path.exists():
+        raise InputError("triage scope: the record %s is a link to nothing. %s" % (path, REPAIR_TEXT))
+    document = _load_record(reviewed)
+    missing = [key for key in ("head", "risk_floor", "min_review_legs") if key not in document]
+    if missing:
+        raise InputError("triage scope: record %s is not a triage record (no %s). %s"
+                         % (path, ", ".join(missing), REPAIR_TEXT))
+    return document
 
 
 _RECORD_NAME = re.compile(r"[0-9a-f]{40}\.json")
+REPAIR_TEXT = "Repair it, or remove it if that head was never reviewed (then triage that head again)."
 
 
 def _recorded_rounds(root, head):
@@ -1787,8 +1804,9 @@ def _recorded_rounds(root, head):
     and so does a directory that cannot be listed: a round the count cannot
     see is not a round that did not happen."""
     def unreadable(path, why):
-        return InputError("triage scope: cannot read record %s (%s); the fix-round count cannot skip it. "
-                          "Repair it, or remove it if that head was never reviewed." % (path, why))
+        # a record whose change cannot be told stops every change's count, not only its own
+        return InputError("triage scope: cannot read record %s (%s); the fix-round count cannot skip it. %s"
+                          % (path, why, REPAIR_TEXT))
     highest, heads = 0, []
     directory = records_path()
     try:
@@ -1797,7 +1815,7 @@ def _recorded_rounds(root, head):
         return highest, heads
     except OSError as exc:
         raise InputError("triage scope: cannot list the triage records in %s (%s); the fix-round count "
-                         "needs every record" % (directory, exc))
+                         "needs every record -- fix the directory's permissions" % (directory, exc))
     for path in paths:
         if path.stem == head:
             continue
@@ -1812,6 +1830,8 @@ def _recorded_rounds(root, head):
             continue
         if not isinstance(fix, dict):
             raise unreadable(path, "its fix block is not an object")
+        if not isinstance(fix.get("root"), str):
+            raise unreadable(path, "its fix block has no root")
         if fix.get("root") != root:
             continue
         number = fix.get("round")
@@ -1982,9 +2002,9 @@ def _load_record(head):
         raise InputError("triage: no record for %s; run triage.py scope --base <base> --target <frozen dir> "
                          "or triage.py change <number> first" % head)
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise InputError("triage: cannot read record %s: %s" % (path, exc))
+        raise InputError("triage: cannot read record %s: %s. %s" % (path, exc, REPAIR_TEXT))
     if not isinstance(document, dict):
-        raise InputError("triage: record %s must be a JSON object" % path)
+        raise InputError("triage: record %s must be a JSON object. %s" % (path, REPAIR_TEXT))
     return document
 
 

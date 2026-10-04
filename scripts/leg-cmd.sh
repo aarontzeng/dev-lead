@@ -425,12 +425,18 @@ def _triage_gate():
         if resolved_base != record_base:
             # a fix-round record is replaced only by a scope that names its --fix-of again
             record_fix = record.get("fix") if isinstance(record.get("fix"), dict) else {}
+            if record.get("mode") == "change":
+                # a Gerrit change's record is remade the way it was made
+                sys.exit("leg-cmd: triage record base %s does not match launch base %s in %s; run "
+                         "triage.py change %s" % (record_base, resolved_base, repo,
+                                                  shlex.quote(str(record.get("change") or "<number>"))))
             again = ""
             if record_fix.get("of"):
-                again = " --fix-of " + shlex.quote(str(record_fix["of"]))
+                again = " --fix-of=" + shlex.quote(str(record_fix["of"]))
                 for flag, key in (("--fix-tested", "evidence"), ("--blocker", "blocker")):
                     if isinstance(record_fix.get(key), str) and record_fix[key]:
-                        again += " %s %s" % (flag, shlex.quote(record_fix[key]))
+                        # --flag=value: a value that starts with '-' is not taken for an option
+                        again += " %s=%s" % (flag, shlex.quote(record_fix[key]))
             sys.exit("leg-cmd: triage record base %s does not match launch base %s in %s; run "
                      "triage.py scope --base %s --target %s%s"
                      % (record_base, resolved_base, repo, shlex.quote(resolved_base), shlex.quote(str(repo)), again))

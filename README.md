@@ -323,11 +323,13 @@ name the head of the latest round recorded since the first reviewed head
 amended before its review keeps its record, and removing that record is how
 to say it was never reviewed. `scope` without `--fix-of`, and `change`,
 refuse to replace a fix-round record of the same head. A triage record (a
-file named for a commit) that the count cannot read as one -- undecodable,
-not an object, a malformed fix block or round -- refuses the round and names
-the file, and so does a records directory that cannot be listed: repair it,
-or remove the record if that head was never reviewed. Other files in the
-directory are left alone.
+file named for a commit, 40 lowercase hex digits) that the count cannot read
+as one -- undecodable, not an object, a fix block that is not an object or
+has no root -- refuses every change's count, since its change cannot be
+told; one of this change with a round that is not a positive integer refuses
+this change's. A records directory that cannot be listed refuses too. The
+error names the file: repair it, or remove it if that head was never
+reviewed. Other files in the directory are left alone.
 
 Every `leg-cmd.sh <adapter> review` launch checks the HEAD it will actually
 review: `--target`'s HEAD, or the caller's cwd when that adapter has no

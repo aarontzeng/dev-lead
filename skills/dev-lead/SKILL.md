@@ -679,7 +679,8 @@ two rounds and would have run a third on no principle at all.
    cwd. When a record has `base`, a launch's `--base` must match it; otherwise
    rerun `triage.py scope --base <this base> --target <frozen dir>` first,
    with the same `--fix-of`, `--fix-tested` and `--blocker` on a fix round
-   (leg-cmd.sh prints that command, quoted, from the record).
+   (leg-cmd.sh prints that command, quoted, from the record; for a
+   `change` record it prints `triage.py change <number>`).
    Going below the minimum is `--no-triage '<reason>'` only with the owner's
    word, and records that exception. After the legs return, run `triage.py
    round-check --head "$REVIEW_HEAD" --target "$FROZEN_DIR" --leg

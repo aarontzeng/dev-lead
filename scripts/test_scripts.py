@@ -7837,7 +7837,7 @@ def test_triage_fix_round(tmp):
         (records / (tried + ".json")).unlink()
         git(repo, "reset", "-q", "--hard", skill)
     for directory in (".claude", ".clinerules", ".codex", ".continue", ".cursor", ".gemini", ".windsurf",
-                      "agents", "commands", "prompts", "skills"):
+                      "agents", "commands", "prompts", "skills", "pkg/.cursor", "a/b/agents"):
         write(directory + "/notes.md", "# notes\n\nplain words\n")
         git(repo, "add", "-f", directory + "/notes.md")
         tried = commit("fix: notes under " + directory)
@@ -7846,7 +7846,7 @@ def test_triage_fix_round(tmp):
               got.returncode == 0 and under.get("fix", {}).get("rung") == "full", got.stdout + got.stderr)
         (records / (tried + ".json")).unlink()
         git(repo, "reset", "-q", "--hard", skill)
-    for document in (".github/README.md", ".github/ISSUE_TEMPLATE/bug.md"):
+    for document in (".github/README.md", ".github/ISSUE_TEMPLATE/bug.md", ".github/PULL_REQUEST_TEMPLATE.md"):
         write(document, "# a document\n")
         git(repo, "add", "-f", document)
         tried = commit("fix: " + document)
@@ -7905,14 +7905,19 @@ def test_triage_fix_round(tmp):
     gone = unlinked
     # a triage record the count cannot read as one stops the count; another tool's file does not
     (records / "another-tool.json").write_text("{")
+    (records / ("backup-" + "e" * 40 + ".json")).write_text("{")
     got, _ = scoped("--fix-of", pointed, "--blocker", "x")
     check("triage fix: a file not named for a commit is another tool's, and the count leaves it alone",
           got.returncode == 0, got.stdout + got.stderr)
     (records / "another-tool.json").unlink()
+    (records / ("backup-" + "e" * 40 + ".json")).unlink()
     stranger = "f" * 40
     for content, why in (("{", "an undecodable record"), ("[]", "a record that is not an object"),
                          ('{"fix": "round 9"}', "a fix block that is not an object"),
-                         ('{"fix": {"root": "%s", "round": "9"}}' % s1, "a round of this change that is not an integer")):
+                         ('{"fix": {"of": "%s", "round": 9}}' % s1, "a fix block with no root"),
+                         ('{"fix": {"root": "%s", "round": "9"}}' % s1, "a round of this change that is not an integer"),
+                         ('{"fix": {"root": "%s", "round": 0}}' % s1, "a round of this change that is zero"),
+                         ('{"fix": {"root": "%s", "round": true}}' % s1, "a round of this change that is a boolean")):
         (records / (stranger + ".json")).write_text(content)
         got, _ = scoped("--fix-of", pointed, "--blocker", "x")
         check("triage fix: %s refuses the fix round instead of being skipped" % why,
@@ -7933,9 +7938,10 @@ def test_triage_fix_round(tmp):
     saved = (records / (gone + ".json")).read_text()
     (records / (gone + ".json")).write_text("{")
     got, _ = scoped()
-    check("triage fix: an unreadable fix record is not replaced by a plain scope, and the refusal is scope's",
+    check("triage fix: an unreadable fix record is not replaced by a plain scope, and the message is not round-check's",
           got.returncode == 2 and "cannot read record" in got.stderr and "round-check" not in got.stderr
-          and (records / (gone + ".json")).read_text() == "{", got.stdout + got.stderr)
+          and "Repair it, or remove it" in got.stderr and (records / (gone + ".json")).read_text() == "{",
+          got.stdout + got.stderr)
     (records / (gone + ".json")).write_text(saved)
     kept = (records / (pointed + ".json")).read_text()
     (records / (pointed + ".json")).write_text("{")
@@ -7943,7 +7949,26 @@ def test_triage_fix_round(tmp):
     check("triage fix: a reviewed head whose record is broken is reported as broken, not missing",
           got.returncode == 2 and "cannot read record" in got.stderr and "no triage record" not in got.stderr,
           got.stdout + got.stderr)
+    (records / (pointed + ".json")).write_text("{}")
+    got, _ = scoped("--fix-of", pointed, "--blocker", "x")
+    check("triage fix: a reviewed record that is not a triage record (a {} stub) is refused, not sized from",
+          got.returncode == 2 and "is not a triage record" in got.stderr, got.stdout + got.stderr)
+    (records / (pointed + ".json")).unlink()
+    (records / (pointed + ".json")).symlink_to(records / "nowhere-at-all.json")
+    got, _ = scoped("--fix-of", pointed, "--blocker", "x")
+    check("triage fix: a reviewed record that is a dangling link is named as one, not as missing",
+          got.returncode == 2 and "link to nothing" in got.stderr and "no triage record" not in got.stderr,
+          got.stdout + got.stderr)
+    (records / (pointed + ".json")).unlink()
     (records / (pointed + ".json")).write_text(kept)
+    records.chmod(0o600)
+    try:
+        got, _ = scoped("--fix-of", pointed, "--blocker", "x")
+    finally:
+        records.chmod(0o755)
+    check("triage fix: a records directory that cannot be searched is named, not taken for a missing record",
+          got.returncode == 2 and "cannot reach the record" in got.stderr and "no triage record" not in got.stderr,
+          got.stdout + got.stderr)
     write("src/added.py", "".join("added %d\n" % i for i in range(3)))
     added = commit("fix: a module the change adds")
     got, _ = scoped("--fix-of", gone, "--blocker", "x")
@@ -7988,11 +8013,45 @@ def test_triage_fix_round(tmp):
     leg = run(SCRIPTS / "leg-cmd.sh", "agy", "review", "--model", "gemini-3.8-flash-medium",
               "--base", r1, "--target", repo, env=env)
     check("leg-cmd: a base mismatch on a fix-round record advises a scope that keeps its --fix-of",
-          leg.returncode != 0 and "does not match launch base" in leg.stderr and "--fix-of " + added in leg.stderr,
+          leg.returncode != 0 and "does not match launch base" in leg.stderr and "--fix-of=" + added in leg.stderr,
           leg.stdout + leg.stderr)
-    check("leg-cmd: ...with the record's --fix-tested and --blocker, shell-quoted",
-          "--fix-tested 'test_fixed_3 failed before the fix; mutation fixed->feature killed'" in leg.stderr
-          and "--blocker x" in leg.stderr, leg.stderr)
+
+    def advised(stderr):
+        line = [text for text in stderr.splitlines() if "; run triage.py" in text][-1]
+        return shlex.split(line.split("; run ", 1)[1])
+
+    # the advice parses back into exactly the record's statements, from a target path with a space,
+    # with evidence that has a quote and a blocker that starts with '-'
+    tricky_evidence, dash_blocker = "it's tested; mutant 'x' killed", "-1: the lock leaks"
+    got, _ = scoped("--fix-of", added, "--fix-tested", tricky_evidence, "--blocker", dash_blocker)
+    spaced = tmp / "spaced home" / "fix round"
+    git(tmp, "clone", "-q", str(repo), str(spaced))
+    git(spaced, "checkout", "-q", head)
+    leg = run(SCRIPTS / "leg-cmd.sh", "agy", "review", "--model", "gemini-3.8-flash-medium",
+              "--base", r1, "--target", spaced, env=env)
+    words = advised(leg.stderr)
+    check("leg-cmd: the advice parses back into the record's target, --fix-of, evidence and blocker",
+          words[:2] == ["triage.py", "scope"] and words[words.index("--target") + 1] == str(spaced)
+          and "--fix-of=" + added in words and "--fix-tested=" + tricky_evidence in words
+          and "--blocker=" + dash_blocker in words, leg.stderr)
+    parsed = run(triage, "scope", "--base", base, "--target", repo, "--fix-of", added,
+                 "--fix-tested=" + tricky_evidence, "--blocker=" + dash_blocker, env=env)
+    check("leg-cmd: ...and that form is one argparse takes, a leading '-' included",
+          parsed.returncode == 0 and json.loads(parsed.stdout)["fix"]["blocker"] == dash_blocker,
+          parsed.stdout + parsed.stderr)
+    git(spaced, "checkout", "-q", r1)
+    leg = run(SCRIPTS / "leg-cmd.sh", "agy", "review", "--model", "gemini-3.8-flash-medium",
+              "--base", f1, "--target", spaced, env=env)
+    words = advised(leg.stderr)
+    check("leg-cmd: a record with no fix block is advised a plain scope",
+          words[:2] == ["triage.py", "scope"] and not any(word.startswith("--fix") for word in words), leg.stderr)
+    first_record = (records / (r1 + ".json")).read_text()
+    _write_doc(records / (r1 + ".json"), dict(json.loads(first_record), mode="change", change=4242))
+    leg = run(SCRIPTS / "leg-cmd.sh", "agy", "review", "--model", "gemini-3.8-flash-medium",
+              "--base", f1, "--target", spaced, env=env)
+    (records / (r1 + ".json")).write_text(first_record)
+    check("leg-cmd: a change record is advised `triage.py change <number>`, not a scope",
+          advised(leg.stderr) == ["triage.py", "change", "4242"], leg.stderr)
     del hashlib
 
 
