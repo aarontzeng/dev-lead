@@ -102,7 +102,7 @@ reports what qualified. Anything not green goes to you either way.
 | **≈0 % overlap** | between the principal findings of parallel reviewers given *different briefs* (sequences / challenge / consistency / staleness) — extra legs pay only when the brief changes |
 | **1 → 17 routes** | what one demand — "give the exact command and how many results it returned" — did to a single leg's enumeration on the same question |
 | **3 readers missed, 1 executor found** | a cross-tenant leak that three reading legs (two of them frontier models) passed and the one executing leg reproduced in one round |
-| **3 → 8 · 4 → 7** | known defects found by a Gemini Flash leg and a muse-spark leg when their plain brief was swapped for the suite's adversarial frame — same three known-answer targets, three runs per arm. Not free and not universal: Gemini's false positives rose 2 → 5, and the strongest leg lost two hits (17 → 15 of 18), so it keeps its plain brief |
+| **3 → 8 · 4 → 7 · 7 → 9** | known defects found once the suite's adversarial frame replaced a leg's previous brief — three known-answer targets, three runs per arm: Gemini 3.8 Flash (agy) and muse-spark 1.3 (opencode) against their plain brief, gpt-6-luna (codex) against the companion's own review prompt (of 21). The cost: Gemini's false positives rose 2 → 5 and its runs took 10–15 % longer |
 
 ## Why
 
@@ -426,12 +426,15 @@ people most often get wrong:
    overlap near zero percent.
 7. **Measure the review frame per leg; do not assume it.** The suite's
    adversarial frame asks for the strongest reasons NOT to merge and a
-   HOLDS/BROKEN answer per claim with the quoted code.
-   On three known-answer targets it lifted two cheaper legs from 3 to 8 and
-   from 4 to 7 known defects, and left a mid-tier leg about even (11 → 12).
-   It made the strongest leg slightly worse (17 → 15 of 18), so that leg
-   keeps its plain brief. Each adapter's skill says which brief it uses and
-   why; re-measure when the model changes
+   HOLDS/BROKEN answer per claim with the quoted code. It is the default on
+   the three legs where it measured better: agy (Gemini 3.8 Flash, 3 → 8
+   known defects), opencode (muse-spark 1.3, 4 → 7) and codex (gpt-6-luna,
+   7 → 9 of 21 against the companion prompt it replaced; on one target also
+   7 real findings beyond the known answers to the companion's 1, at equal
+   false positives, slower on a large target). The other two keep
+   their own brief: on cursor's grok-4.7 it was inside the noise and slower
+   (11 → 12), so it is optional there; on claude it lost two hits
+   (17 → 15 of 18) and ran ~25 % slower. Re-measure when the model changes
    ([methodology §2](docs/methodology.md#2-roles-and-briefs-diversity-beyond-the-model)).
 
 ## Install
