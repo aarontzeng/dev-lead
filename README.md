@@ -471,7 +471,8 @@ Which model each CLI runs, per role and round, lives in a machine-local
 `roster.json`, not in the install. Start one from the template:
 
 ```bash
-DEV_LEAD=${DEV_LEAD_ROOT:-$(ls -d "$HOME"/.claude/plugins/cache/dev-lead/dev-lead/* | sort -V | tail -1)}
+DEV_LEAD=${DEV_LEAD_ROOT:-$(ls -d "$HOME"/.claude/plugins/cache/dev-lead/dev-lead/* 2>/dev/null | sort -V | tail -1)}
+[ -x "$DEV_LEAD/scripts/roster.py" ] || echo "dev-lead not found: set DEV_LEAD_ROOT to your checkout"
 "$DEV_LEAD/scripts/roster.py" init
 ```
 

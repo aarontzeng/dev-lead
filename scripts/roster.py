@@ -1412,6 +1412,11 @@ def cmd_init(path, force):
         for line in (problems.errors if problems else ["roster: %s: roster must be a JSON object" % template]):
             print(line)
         return 1
+    if os.path.lexists(path) and not force:
+        # refused before the lock: _locked would create the lock file (and its
+        # directory) beside a dangling link's target, and a refusal leaves nothing
+        print("roster: %s already exists (pass --force to replace it)" % path)
+        return 1
     try:
         # the same lock `set` takes: a roster another call creates meanwhile is
         # seen here, not overwritten

@@ -4553,7 +4553,20 @@ def test_roster(tmp):
     got = run(roster, "init", env=_roster_env(tmp, DEV_LEAD_ROSTER=str(dangling)))
     check("roster init: a dangling symlink counts as an existing roster, left as it was",
           got.returncode == 1 and "already exists" in got.stdout and not (tmp / "init" / "nowhere.json").exists()
-          and dangling.is_symlink(), got.stdout + got.stderr)
+          and dangling.is_symlink() and os.readlink(dangling) == str(tmp / "init" / "nowhere.json"),
+          got.stdout + got.stderr)
+    far = tmp / "init" / "far.json"
+    far.symlink_to(tmp / "init" / "gone" / "roster.json")
+    got = run(roster, "init", env=_roster_env(tmp, DEV_LEAD_ROSTER=str(far)))
+    check("roster init: a refusal leaves nothing behind (no lock file or directory at the link's target)",
+          got.returncode == 1 and not (tmp / "init" / "gone").exists()
+          and not (tmp / "init" / "nowhere.json.lock").exists(), got.stdout + got.stderr)
+    undecodable = tmp / "init" / "latin1.json"
+    undecodable.write_bytes(b'{"version": 1, "_comment": "\xe9t\xe9"}')
+    got = run(roster, "check", "--file", str(undecodable), env=_roster_env(tmp))
+    check("roster: an undecodable roster is reported, not a traceback",
+          got.returncode != 0 and "latin1.json" in got.stdout and "Traceback" not in got.stderr,
+          got.stdout + got.stderr)
     a_dir = tmp / "init" / "a-dir.json"
     a_dir.mkdir()
     got = run(roster, "init", "--force", env=_roster_env(tmp, DEV_LEAD_ROSTER=str(a_dir)))
