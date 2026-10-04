@@ -320,7 +320,9 @@ name the head of the latest round recorded since the first reviewed head
 (`root`): an older head is refused, since the count would restart. A head
 amended before its review keeps its record, and removing that record is how
 to say it was never reviewed. `scope` without `--fix-of`, and `change`,
-refuse to replace a fix-round record of the same head.
+refuse to replace a fix-round record of the same head. A record the count
+cannot decode refuses the round and names the file: repair it, or remove it
+if that head was never reviewed.
 
 Every `leg-cmd.sh <adapter> review` launch checks the HEAD it will actually
 review: `--target`'s HEAD, or the caller's cwd when that adapter has no

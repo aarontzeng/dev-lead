@@ -669,8 +669,9 @@ round that did not verify, whatever its findings table looks like.
 Iteration is where quality comes from, but unbounded iteration is where
 budgets die. Default: three implementation rounds (initial + two fix rounds).
 A fix round is reviewed in proportion to the fix, not the change: a fix that
-only touched documentation (not an agent instruction file such as
-`SKILL.md`) is the lead's own read, a small fix whose every
+only touched documentation (not an agent instruction file: names,
+variants, `*instructions*` / `*prompt*` files and agent directories, as the
+README's triage section lists them) is the lead's own read, a small fix whose every
 finding has a failing-before test and a killed mutation takes one
 cross-family leg, anything else the change's own legs, and at least HIGH's
 when a trigger fires on the fix (`triage.py scope --fix-of`, owner ruling
