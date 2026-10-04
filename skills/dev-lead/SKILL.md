@@ -642,24 +642,32 @@ two rounds and would have run a third on no principle at all.
    anyway -- with one exception, the fix round of the lead's own change.
 
    **A fix round of your own change adds `--fix-of <the head the previous
-   round reviewed>`** (that head's triage record must exist), and the record's
+   round reviewed>` to `scope`** (that head's triage record must exist;
+   `change` has no such option, so a fix of your own Gerrit change is triaged
+   with `scope` on its frozen clone), and the record's
    minimum becomes the fix's rung (owner ruling, 2026-10-01, after one change
    took four rounds and another three):
 
    | the fix's delta | rung | legs |
    |---|---|---|
-   | documentation only (`.md`, `.rst`, `.adoc`, or the rules file's `wording_globs`), or only the commit message | wording | none: the lead's own read |
+   | documentation only (`.md`, `.markdown`, `.rst`, `.adoc`; the rules file's `wording_globs`, when set, replaces these), or only the commit message | wording | none: the lead's own read |
    | within `small_delta_lines`, and every fixed finding has a test that failed before the fix and a mutation the lead killed, stated as `--fix-tested '<which tests, which mutations>'` | tested | one cross-family leg |
    | anything else, or a delta a `delta_triggers` rule raises to HIGH | full | the range's minimum |
 
    A comment inside a code file is not detected as wording: telling a
    comment from code per language is a guess, so such a fix is at least the
-   tested rung. The delta is taken between the two reviewed patches, the way
+   tested rung; a binary or mode change has no lines to size and is the full
+   rung. The delta is taken between the two reviewed patches, the way
    `change` compares patch sets, so an amended or rebased fix is sized by
    what it changed and not by the base it moved to. From the third fix round
    on, a full round needs `--blocker '<the finding>'` (Convergence, under the
-   stop conditions). `round-check` and `leg-cmd.sh` read the same record, so
-   a lower minimum here needs no `--no-triage`; the report names the rung. `leg-cmd.sh … review` reads the reviewed HEAD from `--target`, or
+   stop conditions). Rounds are counted over every fix round recorded since
+   the first reviewed head, whichever head `--fix-of` names; a head amended
+   before its review keeps its record, and removing that record is how to say
+   it was never reviewed. `round-check` and `leg-cmd.sh` read the same record,
+   so a lower minimum here needs no `--no-triage`; the report names the rung.
+
+   `leg-cmd.sh … review` reads the reviewed HEAD from `--target`, or
    from the caller's cwd when the adapter has no `{TARGET}` slot. `--head` is
    only an assertion and must resolve to that same HEAD. Launch cursor-type
    adapters from inside the frozen worktree, because they review their caller

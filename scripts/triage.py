@@ -997,7 +997,8 @@ MARKDOWN_SUFFIXES = (".md", ".markdown", ".mdx")
 # Comments inside code are NOT detected as wording -- a code file's change is
 # at least the tested rung -- because telling a comment from code per language
 # is a guess, and a wrong guess would wave real code through unreviewed.
-WORDING_SUFFIXES = MARKDOWN_SUFFIXES + (".rst", ".adoc")
+# .mdx is left out: it imports and renders components, which is code.
+WORDING_SUFFIXES = (".md", ".markdown", ".rst", ".adoc")
 # The fix round from which a full round needs a blocker (owner ruling,
 # 2026-10-01: after two fix rounds, non-blockers do not open another).
 CONVERGENCE_ROUND = 3
@@ -1750,6 +1751,31 @@ def _reviewed_record(reviewed):
                          "--fix-of and take the full legs." % reviewed)
 
 
+def _recorded_rounds(root, head):
+    """The highest fix round recorded since ``root``, other than this head's
+    own record. The records cannot tell a reviewed head from one amended
+    before its review, so both count: the refusal names the way out."""
+    highest = 0
+    try:
+        paths = sorted(records_path().glob("*.json"))
+    except OSError:
+        return highest
+    for path in paths:
+        if path.stem == head:
+            continue
+        try:
+            document = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            continue
+        fix = document.get("fix") if isinstance(document, dict) else None
+        if not isinstance(fix, dict) or fix.get("root") != root:
+            continue
+        number = fix.get("round")
+        if type(number) is int and number > highest:
+            highest = number
+    return highest
+
+
 def fix_sizing(config, target, base, head, fix_of, *, evidence=None, blocker=None, range_min=0, fired=None):
     """Size a fix round of the lead's own change by what the fix changed.
 
@@ -1777,16 +1803,21 @@ def fix_sizing(config, target, base, head, fix_of, *, evidence=None, blocker=Non
     except InputError:
         raise InputError("triage scope: --fix-of %s is not a commit in %s" % (fix_of, repo))
     if reviewed == head:
-        raise InputError("triage scope: --fix-of names the HEAD under review; it is the head the previous "
-                         "round reviewed")
+        raise InputError("triage scope: --fix-of %s is the HEAD under review; name the head the previous "
+                         "round reviewed" % reviewed[:12])
     previous = _reviewed_record(reviewed)
     previous_fix = previous.get("fix") if isinstance(previous.get("fix"), dict) else {}
     earlier = previous_fix.get("round")
-    round_number = (earlier if type(earlier) is int and earlier > 0 else 0) + 1
+    earlier = earlier if type(earlier) is int and earlier > 0 else 0
+    # Rounds are counted over every recorded fix round of the change, not along
+    # the head named here: naming an older head must not restart the count and
+    # step around the convergence gate (two review legs, 0.6.58).
+    root = previous_fix.get("root") if isinstance(previous_fix.get("root"), str) else reviewed
+    round_number = max(earlier, _recorded_rounds(root, head)) + 1
     previous_base = previous.get("base") or base
     previous_entries = _diff_entries(repo, previous_base, reviewed)
     current_entries = _diff_entries(repo, base, head)
-    delta_entries, _pairs = _delta(previous_entries, current_entries)
+    delta_entries, pairs = _delta(previous_entries, current_entries)
     moves, _only_moves = _tree_renames(repo, reviewed, head, delta_entries)
     delta_lines = _between_lines(repo, reviewed, head, delta_entries, moves)
     delta_files = sorted({path for entry in delta_entries for path in _paths_for(entry)})
@@ -1795,8 +1826,11 @@ def fix_sizing(config, target, base, head, fix_of, *, evidence=None, blocker=Non
     # MEDIUM or HIGH is the range's floor, already in range_min.
     _lenses, raised, _flags = _lenses_and_triggers(dict(config, risk_default="LOW"), delta_files,
                                                    delta_lines, [])
+    unsized = ["%s: binary" % entry["new"] for entry in delta_entries if entry.get("binary")] + _mode_flags(pairs)
     if raised == "HIGH":
         rung, why = "full", "a delta trigger raises the fix itself to HIGH"
+    elif unsized:
+        rung, why = "full", "a binary or mode change has no lines to size (%s)" % "; ".join(unsized)
     elif all(_is_wording(config, path) for path in delta_files):
         rung, why = "wording", ("only the commit message changed" if not delta_files
                                 else "every changed path is documentation")
@@ -1813,12 +1847,15 @@ def fix_sizing(config, target, base, head, fix_of, *, evidence=None, blocker=Non
             "triage scope: fix round %d: after two fix rounds a full round opens only for a blocker (%s). "
             "Fix the remaining findings under the lower rungs (documentation only, or --fix-tested "
             "'<evidence>' within small_delta_lines=%s), record them in the commit message as known limits, "
-            "or pass --blocker '<the finding>'." % (round_number, why, config["small_delta_lines"]))
+            "or pass --blocker '<the finding>'. Rounds are counted over every fix round recorded since %s, "
+            "whichever head --fix-of names; a head amended before its review still has a record in %s, and "
+            "removing that record is how to say it was never reviewed."
+            % (round_number, why, config["small_delta_lines"], root[:12], records_path()))
     minimum = {"wording": 0, "tested": min(1, range_min)}.get(rung, range_min)
     _fired(fired, "fix-round", "fix round %d of %s: %s rung (%s); %s leg(s)"
            % (round_number, reviewed[:12], rung, why, minimum))
     return {
-        "of": reviewed, "round": round_number, "rung": rung, "why": why,
+        "of": reviewed, "root": root, "round": round_number, "rung": rung, "why": why,
         "delta_files": delta_files, "delta_lines": delta_count,
         "evidence": evidence or None, "blocker": blocker or None,
         "range_min_review_legs": range_min,

@@ -299,15 +299,19 @@ python3 scripts/triage.py scope --base "$BASE" --target "$FROZEN_DIR" \
 
 `--fix-of` names the head the previous round reviewed, whose record must
 exist. The delta between the two reviewed patches decides `min_review_legs`:
-documentation only (`.md`, `.rst`, `.adoc`, or an optional `wording_globs`
-list in `triage.json`) or a message-only change is `wording`, no leg; a delta
-within `small_delta_lines` with `--fix-tested` evidence is `tested`, one leg;
-anything else, or a delta a trigger raises to HIGH, keeps the range's minimum.
-The record gains a `fix` block (`of`, `round`, `rung`, `why`, `delta_files`,
-`delta_lines`, `evidence`, `blocker`, `range_min_review_legs`) that
-`round-check` and `leg-cmd.sh` report. From the third fix round on, a `full`
-rung is refused without `--blocker`: after two fix rounds, non-blockers are
-fixed under the lower rungs or recorded as known limits.
+documentation only (`.md`, `.markdown`, `.rst`, `.adoc`; an optional
+`wording_globs` list in `triage.json` replaces these suffixes) or a
+message-only change is `wording`, no leg; a delta within `small_delta_lines`
+with `--fix-tested` evidence is `tested`, one leg; anything else -- a binary
+or mode change, or a delta a trigger raises to HIGH -- keeps the range's
+minimum. The record gains a `fix` block (`of`, `root`, `round`, `rung`, `why`,
+`delta_files`, `delta_lines`, `evidence`, `blocker`, `range_min_review_legs`)
+that `round-check` and `leg-cmd.sh` report. From the third fix round on, a
+`full` rung is refused without `--blocker`: after two fix rounds, non-blockers
+are fixed under the lower rungs or recorded as known limits. Rounds are
+counted over every fix round recorded since the first reviewed head (`root`),
+so naming an older head does not restart the count; a head amended before
+its review keeps its record, and removing that record is how to say so.
 
 Every `leg-cmd.sh <adapter> review` launch checks the HEAD it will actually
 review: `--target`'s HEAD, or the caller's cwd when that adapter has no
