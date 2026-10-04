@@ -1,5 +1,5 @@
 {
-  "_comment": "Generic leg roster. Copy it to the path that `roster.py path` prints first, then change it with the config skill so the checks run. No machine-specific account data belongs here.",
+  "_comment": "Generic leg roster. `roster.py init` copies it to the path that `roster.py path` prints first; then change it with the config skill (or roster.py set), which probes and checks each leg. The model ids below are examples that ran on the maintainer's accounts in October 2026: a model id belongs to YOUR account and pool, so check each one against your CLI's model list before you rely on it. No machine-specific account data belongs here.",
   "version": 1,
   "merge_gate": {
     "_comment": "Who approves that a green verdict may land: 'user' (the person approves the verdict and the diff, the lead then merges and pushes in that same run) or 'lead' (a fully green verdict is its own approval). Absent means 'user'. Neither mode changes what counts as green: an unanswered review round, a failing test, an open blocker or an unverified finding goes to the person either way, and a stricter repo contract still wins. Change it with: roster.py gate <user|lead> --why \"...\"",
@@ -15,47 +15,53 @@
         "codex": null,
         "cursor": null,
         "opencode": null,
-        "claude": null,
+        "claude": {
+          "model": "claude-opus-5-5",
+          "effort": "xhigh",
+          "effort_in": "flag",
+          "family": "Claude",
+          "_comment": "One example implementer. The others stay null until you pick them: the launcher never assumes a model."
+        },
         "grok": null
       },
       "review": {
         "agy": {
-          "model": "gemini-3.8-flash-medium",
+          "model": "gemini-3.8-flash-high",
           "effort_in": "model_name",
           "family": "Gemini"
         },
         "codex": {
-          "model": "gpt-5.6-terra",
-          "effort": "medium",
+          "model": "gpt-6-luna",
+          "effort": "xhigh",
           "effort_in": "flag",
           "family": "GPT"
         },
         "cursor": {
-          "model": "cursor-grok-4.6-medium",
+          "model": "grok-4.7-medium",
           "effort_in": "model_name",
           "family": "Grok"
         },
         "opencode": {
-          "_comment": "Picked by the lens the leg carries.",
+          "_comment": "Picked by the lens the leg carries. The go plan spends no quota on this model; the free pool is the fallback, and it is rate-limited.",
           "by_lens": {
             "mechanical": {
-              "model": "opencode/muse-spark-1.3-contributor-free",
+              "model": "opencode-go/muse-spark-1.3-contributor",
               "effort": "xhigh",
               "effort_in": "flag",
               "family": "Meta",
               "fallback": {
                 "when": "the primary model is unavailable",
-                "model": "opencode-go/muse-spark-1.3-contributor",
+                "model": "opencode/muse-spark-1.3-contributor-free",
                 "effort": "xhigh",
                 "family": "Meta",
                 "note": "same leg, other pool; adds no family"
               }
             },
             "judgment": {
-              "model": "opencode-go/glm-5.2",
-              "effort": "high",
+              "model": "opencode-go/muse-spark-1.3-contributor",
+              "effort": "xhigh",
               "effort_in": "flag",
-              "family": "GLM"
+              "family": "Meta"
             }
           }
         }
@@ -73,13 +79,13 @@
       },
       "review": {
         "agy": {
-          "model": "gemini-3.8-flash-medium",
+          "model": "gemini-3.8-flash-high",
           "effort_in": "model_name",
           "family": "Gemini"
         },
         "codex": {
-          "model": "gpt-5.6-terra",
-          "effort": "medium",
+          "model": "gpt-6-luna",
+          "effort": "xhigh",
           "effort_in": "flag",
           "family": "GPT"
         }

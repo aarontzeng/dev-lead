@@ -1385,6 +1385,37 @@ def _plan_line(role, adapter, model, family, effort_value, override, leg):
     return " ".join(bits)
 
 
+def cmd_init(path, force):
+    """Start a roster from templates/roster.example.json, the way triage.py init starts triage.json.
+
+    An existing file -- or a symlink, even a dangling one -- is never replaced
+    without --force; with it, atomic_write replaces the link's target, so a
+    roster kept in another repository stays linked. The template is checked
+    first, so a broken template is reported instead of installed."""
+    template = ROOT / "templates" / "roster.example.json"
+    if os.path.lexists(path) and not force:
+        print("roster: %s already exists (pass --force to replace it)" % path)
+        return 1
+    doc, err = load_roster(template)
+    if err:
+        print(err)
+        return 2
+    problems = validate(doc)
+    if problems.errors:
+        for line in problems.errors:
+            print(line)
+        return 1
+    try:
+        atomic_write(path, template.read_text(encoding="utf-8"))
+    except OSError as exc:
+        print("roster: cannot write %s: %s" % (path, exc))
+        return 2
+    print(path)
+    print("roster: the model ids are the template's examples; check each against your CLI's model list "
+          "and change them with /dev-lead:config (roster.py set), which probes and checks them")
+    return 0
+
+
 def cmd_check(path):
     doc, err = load_roster(path)
     if err:
@@ -1610,6 +1641,9 @@ def main(argv=None):
 
     sub.add_parser("path")
 
+    p_init = sub.add_parser("init")
+    p_init.add_argument("--force", action="store_true")
+
     p_show = sub.add_parser("show")
     p_show.add_argument("--round", choices=("r1", "fix"))
 
@@ -1655,6 +1689,8 @@ def main(argv=None):
     path = roster_path()
     if args.cmd == "path":
         return cmd_path(path)
+    if args.cmd == "init":
+        return cmd_init(path, args.force)
     if args.cmd == "show":
         return cmd_show(path, args.round)
     if args.cmd == "plan":

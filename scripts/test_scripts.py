@@ -4524,6 +4524,37 @@ def test_roster(tmp):
     check("roster: templates/roster.example.json passes check",
           got.returncode == 0 and got.stdout == "", got.stdout + got.stderr)
 
+    # init starts a roster from the template, the way triage.py init starts triage.json
+    (tmp / "init").mkdir()
+    fresh = tmp / "init" / "roster.json"
+    init_env = _roster_env(tmp, DEV_LEAD_ROSTER=str(fresh))
+    got = run(roster, "init", env=init_env)
+    check("roster init: copies the template to the roster path and names it",
+          got.returncode == 0 and fresh.read_bytes() == example.read_bytes() and str(fresh) in got.stdout
+          and "check each against your CLI's model list" in got.stdout, got.stdout + got.stderr)
+    fresh.write_text('{"version": 1, "rounds": {}}\n')
+    got = run(roster, "init", env=init_env)
+    check("roster init: refuses to replace an existing roster",
+          got.returncode == 1 and "already exists" in got.stdout
+          and fresh.read_text() == '{"version": 1, "rounds": {}}\n', got.stdout + got.stderr)
+    got = run(roster, "init", "--force", env=init_env)
+    check("roster init: --force replaces it with the template",
+          got.returncode == 0 and fresh.read_bytes() == example.read_bytes(), got.stdout + got.stderr)
+    kept = tmp / "init" / "kept-elsewhere.json"
+    kept.write_text("{}\n")
+    linked = tmp / "init" / "linked.json"
+    linked.symlink_to(kept)
+    got = run(roster, "init", "--force", env=_roster_env(tmp, DEV_LEAD_ROSTER=str(linked)))
+    check("roster init: --force over a symlink replaces its target and keeps the link",
+          got.returncode == 0 and linked.is_symlink() and kept.read_bytes() == example.read_bytes(),
+          got.stdout + got.stderr)
+    dangling = tmp / "init" / "dangling.json"
+    dangling.symlink_to(tmp / "init" / "nowhere.json")
+    got = run(roster, "init", env=_roster_env(tmp, DEV_LEAD_ROSTER=str(dangling)))
+    check("roster init: a dangling symlink counts as an existing roster",
+          got.returncode == 1 and "already exists" in got.stdout and not (tmp / "init" / "nowhere.json").exists(),
+          got.stdout + got.stderr)
+
     # The plugin's own data files, missing or broken: named, exit 2, no
     # traceback -- the way load_roster has always answered for the roster.
     # Until 0.6.48 data() read them bare and the first command to touch them

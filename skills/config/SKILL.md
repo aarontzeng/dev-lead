@@ -23,8 +23,10 @@ reported, never swapped for another file:
    will not have the variable at all.
 3. `~/.claude/plugins/data/dev-lead-dev-lead/roster.json`
 
-A missing file is normal on a new machine. The shape is in
-[`templates/roster.example.json`](../../templates/roster.example.json).
+A missing file is normal on a new machine: `"$DEV_LEAD/scripts/roster.py" init`
+copies [`templates/roster.example.json`](../../templates/roster.example.json)
+there (never over an existing file without `--force`). Its model ids are
+examples; take each slot through step 2 below before relying on it.
 Keys that start with `_` are comments and are kept across writes.
 
 ## Procedure
