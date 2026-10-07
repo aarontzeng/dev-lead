@@ -226,7 +226,7 @@
     ],
     "gotchas": [
       "`--mode ask` is the only posture that both refuses writes and returns a report; bare `-p` writes files, `--mode plan` returns empty output headless.",
-      "The pinned model decides the family for cross-family accounting; `auto` and `composer-*` satisfy nothing.",
+      "The pinned model decides the family for cross-family accounting; `auto` satisfies nothing, and neither does any `composer-*` except `composer-2.5` / `composer-2.5-fast`, which count as Kimi (owner ruling 2026-10-07; a Kimi derivative, so declare `family: Kimi` on the leg and note the weaker independence). Such a leg and a kimi-k3 leg are ONE family.",
       "Bare -p IS the write posture; --force/--yolo/--approve-mcps are forbidden on both roles. --trust is required -- without it a fresh worktree prints the trust prompt and exits 0."
     ],
     "verified": "review probed 2026-09-08; other roles transcribed",

@@ -40,7 +40,13 @@ Corollaries:
   `opencode/muse-spark-*-contributor-free`. Because these arrive through a
   different CLI, a different provider and a different price list, they are
   easy to book as a third family at accounting time. They are not. Family is
-  the model lineage; the path it came down is irrelevant. (Measured 2026-09-15
+  the model lineage; the path it came down is irrelevant. A fourth look-alike,
+  by the owner's ruling of 2026-10-07: cursor `composer-2.5` / `composer-2.5-fast`
+  is the Kimi family (a derivative of Moonshot's Kimi K2.5 checkpoint, per
+  Cursor's disclosure), so it collides with any `kimi-k3` leg -- cursor's
+  `kimi-k3-*` or `opencode-go/kimi-k3` -- and the two cannot be two cross-family
+  legs together. Its independence from a native Kimi is weaker, which the report
+  should say. (Measured 2026-09-15
   on the opencode go plan, where two of the 22 newly callable models were
   exactly these look-alikes.)
 - **But family is the model you actually DISPATCHED this round — not the

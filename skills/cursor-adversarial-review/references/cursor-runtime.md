@@ -12,7 +12,7 @@ A **paid pool** (Cursor subscription) and the fleet's widest single adapter:
 one CLI serving **nine families** — GPT (Codex/GPT-5.x tiers), Claude (Opus /
 Sonnet / Fable tiers), Grok (4.5/4.6/4.7 at several efforts), **Kimi
 (Moonshot)**, Gemini (3.x Flash), Meta (Muse Spark), GLM, Cursor's in-house
-**Composer**, and `auto` (server-side routing, family unknown at dispatch).
+**Composer** (of which composer-2.5 and composer-2.5-fast count as Kimi, below), and `auto` (server-side routing, family unknown at dispatch).
 Three of those are other adapters' families: a cursor `gemini-*` leg is the
 Gemini family agy fields, and `muse-spark-*` / `glm-*` are the Meta and GLM
 families opencode fields -- a substitution that swaps an adapter keeps the
@@ -29,10 +29,34 @@ cross-family rule reads):
 - **`auto` never satisfies the rule** — the served model is chosen
   server-side and the headless JSON does not name it (measured, below).
   Extra pair of eyes only.
-- **`composer-*` never satisfies the rule either** — Cursor's own model,
-  but its pretraining lineage is undisclosed, which is the same hazard the
-  stealth-model rule exists for: it might share any family's blind spots.
-  Extra eyes; never the accounting leg.
+- **`composer-*` other than composer-2.5 / composer-2.5-fast never satisfies the
+  rule either** — Cursor's own model, but its pretraining lineage is
+  undisclosed, which is the same hazard the stealth-model rule exists for: it
+  might share any family's blind spots. Extra eyes; never the accounting leg.
+- **`composer-2.5` and `composer-2.5-fast` count as Kimi** (owner ruling,
+  2026-10-07). Cursor disclosed (announcement 2026-05-18, and the Composer 2
+  technical report -- relayed by peers, not re-read here) that Composer 2.5 is
+  built on Moonshot's Kimi K2.5 open checkpoint, with continued pretraining and
+  RL. Book the leg as family Kimi (`family: Kimi` on the roster leg), and say in
+  the round's report that it is a Kimi DERIVATIVE: weaker independence than a
+  native Kimi. It is ONE family with every kimi-k3 leg (cursor `kimi-k3-*`,
+  `opencode-go/kimi-k3`), so a composer-2.5 leg and a kimi-k3 leg cannot be two
+  cross-family legs together.
+
+## stdin: close it for a hand-run leg (peer-measured, not reproduced here)
+
+A peer measured on 2026-10-07 (another host) that `cursor-agent -p --mode ask
+--trust --model composer-2.5-fast --output-format json <prompt>` with stdin
+INHERITED printed its result and then ran to a 180 s timeout, while the same
+command with stdin closed exited rc 0 in 31 s (API 5.6 s). A leg started under
+systemd-run has stdin on /dev/null and is unaffected; a hand run, or a
+`leg-cmd.sh` eval from an interactive shell, is not. **Append `< /dev/null`
+when running a cursor leg by hand.** Recorded as a gotcha, not folded into
+`leg-cmd.sh`: on this host a probe with stdin closed returned nothing in 30-60 s
+(no stderr either), so the claim could not be reproduced here and the template
+was left alone until it can be. The silent hang also contradicts "quota failure
+is loud" below -- an exhausted pool may look like this; judge it with a
+different model before blaming stdin.
 
 ## Resolving the CLI, the account, and the catalogue
 
@@ -139,7 +163,7 @@ from the CLI**. What IS probeable is exhaustion, because quota failure is loud
 (below): a cheap one-liner against the pool you intend to bill is the dispatch
 probe. Corollary worth planning around: when the API pool runs dry, `auto` and
 `composer-*` still spend the other meter — a legitimate extra-eyes fallback
-(never the accounting leg; families.json).
+(an extra-eyes fallback unless it is composer-2.5 / composer-2.5-fast, which count as Kimi; families.json).
 
 ## Quota: how this leg fails (measured 2026-08-13)
 

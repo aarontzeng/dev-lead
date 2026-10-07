@@ -10,8 +10,9 @@ per round and the same CLI can be a GPT, Claude, Grok, Kimi, Gemini, Meta or
 GLM reviewer — whichever family the cross-family accounting still allows.
 Three of those are other adapters' families (Gemini is agy's, Meta and GLM are
 opencode's): a swap to cursor keeps the family (runtime file). The model flag IS
-the accounting decision; `auto` and `composer-*` never satisfy the rule
-(runtime file, accounting rules).
+the accounting decision; `auto` and every `composer-*` except `composer-2.5` /
+`composer-2.5-fast` never satisfy the rule, and those two count as Kimi by the
+owner's ruling of 2026-10-07 (runtime file, accounting rules).
 
 ## Before the first run of a session
 
@@ -97,8 +98,8 @@ Role-specific choices:
   model (`gpt-…`, `claude-…`, `cursor-grok-…`, `kimi-…`, `gemini-…`,
   `muse-spark-…`, `glm-…`) chosen for the
   round's cross-family needs; record adapter, flag, and the `request_id`
-  returned in `$RUN_DIR/review.json` in the run log. `auto`/`composer-*` are
-  extra eyes only.
+  returned in `$RUN_DIR/review.json` in the run log. `auto` and the other
+  `composer-*` ids are extra eyes only; composer-2.5(-fast) is booked as Kimi.
 - **JSON audit output is mandatory.** On success, preserve the whole
   `review.json`: `result` is the review text, while `session_id` and
   `request_id` make the run traceable. Do not reconstruct an identifier from

@@ -37,7 +37,7 @@
     "cursor": {
       "cli": "cursor-agent (Cursor CLI)",
       "serves": ["GPT", "Claude", "Grok", "Kimi", "Gemini", "Meta", "GLM", "Composer", "unknown"],
-      "note": "paid pool, the widest adapter -- the pinned model decides the family; `auto` routes server-side and lands in unknown. Collisions to check when substituting: cursor gemini-* is the Gemini family (agy's), muse-spark is Meta and glm is GLM (opencode's), claude-* and gpt-* are the claude and codex adapters' families"
+      "note": "paid pool, the widest adapter -- the pinned model decides the family; `auto` routes server-side and lands in unknown. Collisions to check when substituting: cursor gemini-* is the Gemini family (agy's), muse-spark is Meta and glm is GLM (opencode's), claude-* and gpt-* are the claude and codex adapters' families, and composer-2.5 / composer-2.5-fast are the Kimi family (owner ruling 2026-10-07) -- one family with any kimi-k3 leg, cursor's or opencode-go's, so the two cannot be two cross-family legs together"
     }
   },
   "families": {
@@ -54,13 +54,13 @@
     "Tencent": {"accounting_valid": true, "note": "Hunyuan, marketed as Hy3; native opencode free pool, e.g. opencode/hy3-free"},
     "Meta": {"accounting_valid": true, "note": "marketed as Muse Spark; native opencode free pool, e.g. opencode/muse-spark-1.2-contributor-free"},
     "Grok": {"accounting_valid": true},
-    "Kimi": {"accounting_valid": true},
+    "Kimi": {"accounting_valid": true, "note": "Moonshot. Cursor composer-2.5 and composer-2.5-fast count as Kimi by the owner's ruling (2026-10-07): Cursor discloses that Composer 2.5 is built on Moonshot's Kimi K2.5 open checkpoint (continued pretraining plus RL; relayed by peers, not re-read here), so it is a DERIVATIVE -- weaker independence than a native Kimi -- and one family with every kimi-k3 leg (cursor kimi-k3-*, opencode-go/kimi-k3)"},
     "Qwen": {"accounting_valid": true, "note": "Alibaba; opencode-go paid pool, e.g. opencode-go/qwen3.8-max (the review skill's top-tier judgement leg). Added 2026-09-25: the skill routed to it while this file did not know the family, so the accounting rule could not be applied to that leg"},
     "MiniMax": {"accounting_valid": true, "note": "opencode-go paid pool, e.g. opencode-go/minimax-m3"},
     "Meituan": {"accounting_valid": true, "note": "LongCat; opencode-go paid pool, e.g. opencode-go/longcat-2.0"},
     "Composer": {
       "accounting_valid": false,
-      "why": "Cursor's in-house model; its pretraining lineage is undisclosed, which is the stealth-model hazard again -- it might share any family's blind spots. Extra eyes, never the accounting leg"
+      "why": "Cursor's in-house models OTHER than composer-2.5 and composer-2.5-fast (those two count as Kimi, see the Kimi family); the lineage of the rest is undisclosed, which is the stealth-model hazard again -- it might share any family's blind spots. Extra eyes, never the accounting leg"
     },
     "unknown": {
       "accounting_valid": false,
