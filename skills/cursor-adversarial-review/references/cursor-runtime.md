@@ -43,20 +43,23 @@ cross-family rule reads):
   `opencode-go/kimi-k3`), so a composer-2.5 leg and a kimi-k3 leg cannot be two
   cross-family legs together.
 
-## stdin: close it for a hand-run leg (peer-measured, not reproduced here)
+## Latency: a one-word probe can take most of a minute (measured 2026-10-07)
 
-A peer measured on 2026-10-07 (another host) that `cursor-agent -p --mode ask
---trust --model composer-2.5-fast --output-format json <prompt>` with stdin
-INHERITED printed its result and then ran to a 180 s timeout, while the same
-command with stdin closed exited rc 0 in 31 s (API 5.6 s). A leg started under
-systemd-run has stdin on /dev/null and is unaffected; a hand run, or a
-`leg-cmd.sh` eval from an interactive shell, is not. **Append `< /dev/null`
-when running a cursor leg by hand.** Recorded as a gotcha, not folded into
-`leg-cmd.sh`: on this host a probe with stdin closed returned nothing in 30-60 s
-(no stderr either), so the claim could not be reproduced here and the template
-was left alone until it can be. The silent hang also contradicts "quota failure
-is loud" below -- an exhausted pool may look like this; judge it with a
-different model before blaming stdin.
+A peer's controlled A/B on another host, same command each time (`cursor-agent -p
+--mode ask --trust --model composer-2.5-fast --output-format json "Reply with
+exactly: PROBE-OK"`, timeout 150), stdin inherited vs `</dev/null` alternating:
+rc 0 every time, output after 11.4-46.1 s, exit about 1.4 s later. **stdin does
+not matter** -- an earlier "open stdin makes it wait" reading was latency seen
+through a pipe, and was withdrawn. What the runs do show is per-call latency of
+13-47 s for a one-word prompt, so **a probe needs a timeout well above that**
+(150 s was enough there).
+
+The owner's host is a different case: three probes of the same command there
+(timeouts 30, 60 and 170 s, stdin closed) printed NOTHING and left stderr empty,
+while `cursor-agent status` showed the account logged in. That is not latency --
+it is an exhausted pool or a hung session, and it contradicts "quota failure is
+loud" below. Before blaming the CLI, probe a model on the other pool (see the
+two meters below) and read the dashboard.
 
 ## Resolving the CLI, the account, and the catalogue
 
