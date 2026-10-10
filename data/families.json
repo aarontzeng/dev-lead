@@ -43,7 +43,7 @@
   "families": {
     "Claude": {"accounting_valid": true},
     "GPT": {"accounting_valid": true},
-    "Gemini": {"accounting_valid": true},
+    "Gemini": {"accounting_valid": true, "note": "Google. Gemma (e.g. openrouter/google/gemma-4-31b-it:free) is the same vendor's training and counts as Gemini: it adds no family and cannot stand in for a missing Gemini leg as a different one"},
     "DeepSeek": {"accounting_valid": true},
     "Nemotron": {"accounting_valid": true},
     "GLM": {"accounting_valid": true, "note": "Z-AI; OpenRouter :free carve-out"},

@@ -24,11 +24,11 @@ spend paid quota.
   bill the user's own API key. They are NOT the free pool; do not spend them
   without asking.
   - **Carve-out — OpenRouter's own `:free`-tagged models** (`openrouter/*:free`,
-    e.g. `openrouter/nvidia/nemotron-3-ultra-550b-a55b:free`,
-    `openrouter/z-ai/glm-5.2:free`): zero monetary cost like the native pool,
+    e.g. `openrouter/nvidia/nemotron-3-ultra-550b-a55b:free`; the GLM one,
+    `openrouter/z-ai/glm-5.2:free`, was gone by 2026-10-10): zero monetary cost like the native pool,
     but DO need the OpenRouter API key configured in opencode's auth first —
     so treat them as free-to-spend once that key exists, not as a
-    no-credential-at-all model. Confirmed live 2026-08-22: 19 models across
+    no-credential-at-all model. Confirmed live 2026-08-22 (2026-10-10: 15, see the inventory below): 19 models across
     vendors the native pool doesn't otherwise reach (NVIDIA Nemotron variants,
     Z-AI GLM, Google Gemma, Cohere, Liquid, Poolside, ThinkingMachines,
     Dots-Studio). **Enumerate live, don't trust this count** —
@@ -59,6 +59,75 @@ the `verify()` call site.
 Run each of the three hits again before treating them as reliable — a single
 correct answer on one hand-picked probe is exactly the "n=1" trap this file
 already warns about.
+
+## OpenRouter `:free` inventory — reachability and tool use (2026-10-10)
+
+The whole `:free` list as OpenRouter served it on 2026-10-10 (15 models; the
+2026-08-22 count was 19, and GLM has left the list). Two probes per model (one,
+for the model with no tool endpoint), both cheap and both real: (1) the raw API,
+one plain reply and one request carrying a `read_file` tool definition (did it
+emit a tool call?); (2) `opencode run -m <id>` in a scratch repo with
+`bash`/`edit` denied, asked to read a file and reply with a word only that file
+holds. Context sizes are OpenRouter's catalogue (`/api/v1/models`), not
+measured. This is **reachability, not review quality** -- only North, Inkling
+and Laguna have a review probe (the 2026-08-25 table above); the rest are n=0
+for judgement, and a reachable model is not a review leg.
+
+| model | family | context (catalogue) | API plain / tool call | opencode read-a-file | note |
+|---|---|---|---|---|---|
+| `openrouter/nvidia/nemotron-3-ultra-550b-a55b:free` | Nemotron | 1M | ok 1.0 s / ok 1.9 s | ok 27 s | |
+| `openrouter/nvidia/nemotron-3.5-lightning:free` | Nemotron | 1M | ok 2.1 s / ok 1.7 s | ok 15 s | |
+| `openrouter/nvidia/nemotron-3-super-120b-a12b:free` | Nemotron | 262K | ok 1.0 s / ok 1.0 s | ok 11 s | |
+| `openrouter/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free` | Nemotron | 256K | upstream ResourceExhausted / ok 2.6 s | ok 65 s | slow |
+| `openrouter/nvidia/nemotron-3.5-content-safety:free` | Nemotron | 128K | ok / **no tool endpoint** | not run (no tools) | a safety classifier: never a review leg |
+| `openrouter/cohere/north-mini-code:free` | North | 256K | ok 0.8 s / ok 1.2 s | ok 11 s | |
+| `openrouter/dots-studio/dots-3-note-preview:free` | (Dots Studio; not registered) | 512K | ok 1.5 s / ok 2.0 s | ok 13 s | new vendor, no review probe |
+| `openrouter/apodex/apodex-1.1-mini:free` | (Apodex; not registered) | 262K | ok 1.2 s / ok 1.4 s | ok 12 s | new vendor, no review probe |
+| `openrouter/poolside/laguna-s-2.1:free` | Laguna | 262K | 429 upstream / ok 3.6 s | ok 34 s | |
+| `openrouter/poolside/laguna-xs-2.1:free` | Laguna | 262K | 429 / 429 | ok 38 s | |
+| `openrouter/thinkingmachines/inkling:free` | Inkling | 1M | **403** / 403 | ok 26 s | see below |
+| `openrouter/thinkingmachines/inkling-small:free` | Inkling | 1M | **403** / 403 | ok 17 s | see below |
+| `openrouter/liquid/lfm-2.5-2.6b:free` | (Liquid AI; not registered) | 65K | ok 18 s / ok 11 s, once 504 | ok 14 s | 2.6B; OpenRouter's description says Liquid advises against agentic coding: not a review leg |
+| `openrouter/google/gemma-4-31b-it:free` | **Gemini** | 262K | 429 / 429 | 429 after 85 s | Google's training: adds no family |
+| `openrouter/google/gemma-4-26b-a4b-it:free` | **Gemini** | 262K | 429 / 429 | 429 after 84 s | as above |
+
+What the probes established:
+
+- **Inkling answers only "agentic harnesses."** The raw API returns 403
+  `...is only available on agentic harnesses`; through opencode it read the
+  file and answered. Probe it with opencode, never with curl.
+- **Gemma is Google's** and counts as Gemini ([families.json](../../../data/families.json)): it
+  cannot fill a missing Gemini leg as another family. Both were
+  rate-limited upstream all morning, so no Gemini route through opencode is
+  measured working here, and the opencode adapter does not list Gemini.
+- **A credit balance near zero did not stop the free models -- one
+  observation, not a guarantee.** On 2026-10-10 the account had $0.13 left of
+  $20 bought (`/api/v1/credits`), and the free calls that answered did so on
+  it; the one whose usage was read reported cost 0. Not
+  measured here, from OpenRouter's documentation: the daily cap on `:free`
+  calls is per ACCOUNT (1000 once $10 or more was ever bought), shared by
+  every job on that key.
+- **Free endpoints may train on prompts** (OpenRouter's privacy setting for
+  free models). That is the disclosure question the contributor tiers raise,
+  and the same rules apply ([SKILL.md](../SKILL.md): a disclosure class per
+  repository, the stop classes, the frozen target screened before the first
+  dispatch). The owner's 2026-09-16 acceptance named the contributor tiers;
+  it is not ruled here that it extends to OpenRouter's free vendors -- ask
+  before the first dispatch of a repository's code to one.
+- **Reachable with tool use through opencode on this date (not a list of
+  review legs):** every row but the two Gemma models (throttled) and the
+  content-safety model (no tools) -- Laguna included, whose raw API calls were
+  throttled while the opencode route answered. Only three MODELS have a review
+  probe, one each (2026-08-25): `north-mini-code`, `inkling` (not
+  `inkling-small`) and `laguna-s-2.1` (not `laguna-xs-2.1`); every other row
+  is n=0 for judgement, and one hit is not reliability either ("n=1 proves
+  nothing" below).
+- **Registered families stay the ones with evidence.** families.json gains
+  no family from this inventory: Dots Studio, Apodex and Liquid AI are left
+  unregistered until a model of theirs passes golden-answer reviews, so a
+  roster that declares one of those families fails the check. (roster.py
+  checks the declared family, not the model id: a roster that names one of
+  these models under another family's name is not caught -- a known gap.)
 
 ## Native `opencode/*` pool — first-probe results (2026-08-28)
 
