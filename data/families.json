@@ -8,7 +8,15 @@
     "adapters = which CLI you drive. families = whose training produced the",
     "output. They are not the same axis, and one adapter can serve several",
     "families; the reviewer-pairing rule reads the FAMILY of the verified",
-    "served model, never the adapter."
+    "served model, never the adapter.",
+    "",
+    "families[].models = lowercase substrings of a model id that name its",
+    "family (roster.py): a leg whose model id names another family than the",
+    "one it declares, or a vendor in `unregistered`, is refused. An id that",
+    "names no family (a placeholder, a new model) passes, with a warning when",
+    "the declared family could be the accounting leg. A marker",
+    "inside another family's longer marker, both in the id, yields to it",
+    "(composer-2.5-fast is Kimi, not Composer)."
   ],
   "adapters": {
     "claude": {
@@ -40,31 +48,39 @@
       "note": "paid pool, the widest adapter -- the pinned model decides the family; `auto` routes server-side and lands in unknown. Collisions to check when substituting: cursor gemini-* is the Gemini family (agy's), muse-spark is Meta and glm is GLM (opencode's), claude-* and gpt-* are the claude and codex adapters' families, and composer-2.5 / composer-2.5-fast are the Kimi family (owner ruling 2026-10-07) -- one family with any kimi-k3 leg, cursor's or opencode-go's, so the two cannot be two cross-family legs together"
     }
   },
+  "unregistered": {
+    "_comment": "vendors whose models were seen (opencode-runtime.md, 2026-10-10) but whose family is not registered: a roster leg whose model id names one is refused, whatever family it declares or when it declares none",
+    "Liquid AI": ["liquid/", "lfm-"],
+    "Dots Studio": ["dots-studio/", "dots-3", "dots3"],
+    "Apodex": ["apodex"]
+  },
   "families": {
-    "Claude": {"accounting_valid": true},
-    "GPT": {"accounting_valid": true},
-    "Gemini": {"accounting_valid": true, "note": "Google. Gemma (e.g. openrouter/google/gemma-4-31b-it:free) is the same vendor's training and counts as Gemini: it adds no family and cannot stand in for a missing Gemini leg as a different one"},
-    "DeepSeek": {"accounting_valid": true},
-    "Nemotron": {"accounting_valid": true},
-    "GLM": {"accounting_valid": true, "note": "Z-AI; OpenRouter :free carve-out"},
-    "North": {"accounting_valid": true, "note": "Cohere; OpenRouter :free carve-out"},
-    "Inkling": {"accounting_valid": true, "note": "Thinking Machines Lab; OpenRouter :free carve-out"},
-    "Laguna": {"accounting_valid": true, "note": "Poolside; OpenRouter :free carve-out"},
-    "Xiaomi": {"accounting_valid": true, "note": "MiMo; native opencode free pool, e.g. opencode/mimo-v2.5-free"},
-    "Tencent": {"accounting_valid": true, "note": "Hunyuan, marketed as Hy3; native opencode free pool, e.g. opencode/hy3-free"},
-    "Meta": {"accounting_valid": true, "note": "marketed as Muse Spark; native opencode free pool, e.g. opencode/muse-spark-1.2-contributor-free"},
-    "Grok": {"accounting_valid": true},
-    "Kimi": {"accounting_valid": true, "note": "Moonshot. Cursor composer-2.5 and composer-2.5-fast count as Kimi by the owner's ruling (2026-10-07): Cursor discloses that Composer 2.5 is built on Moonshot's Kimi K2.5 open checkpoint (continued pretraining plus RL; relayed by peers, not re-read here), so it is a DERIVATIVE -- weaker independence than a native Kimi -- and one family with every kimi-k3 leg (cursor kimi-k3-*, opencode-go/kimi-k3)"},
-    "Qwen": {"accounting_valid": true, "note": "Alibaba; opencode-go paid pool, e.g. opencode-go/qwen3.8-max (the review skill's top-tier judgement leg). Added 2026-09-25: the skill routed to it while this file did not know the family, so the accounting rule could not be applied to that leg"},
-    "MiniMax": {"accounting_valid": true, "note": "opencode-go paid pool, e.g. opencode-go/minimax-m3"},
-    "Meituan": {"accounting_valid": true, "note": "LongCat; opencode-go paid pool, e.g. opencode-go/longcat-2.0"},
+    "Claude": {"accounting_valid": true, "models": ["claude", "opus", "sonnet", "haiku"]},
+    "GPT": {"accounting_valid": true, "models": ["gpt-"]},
+    "Gemini": {"accounting_valid": true, "note": "Google. Gemma (e.g. openrouter/google/gemma-4-31b-it:free) is the same vendor's training and counts as Gemini: it adds no family and cannot stand in for a missing Gemini leg as a different one", "models": ["gemini", "gemma"]},
+    "DeepSeek": {"accounting_valid": true, "models": ["deepseek"]},
+    "Nemotron": {"accounting_valid": true, "models": ["nemotron"]},
+    "GLM": {"accounting_valid": true, "note": "Z-AI; OpenRouter :free carve-out", "models": ["glm", "z-ai/"]},
+    "North": {"accounting_valid": true, "note": "Cohere; OpenRouter :free carve-out", "models": ["north-", "cohere/"]},
+    "Inkling": {"accounting_valid": true, "note": "Thinking Machines Lab; OpenRouter :free carve-out", "models": ["inkling", "thinkingmachines/"]},
+    "Laguna": {"accounting_valid": true, "note": "Poolside; OpenRouter :free carve-out", "models": ["laguna", "poolside/"]},
+    "Xiaomi": {"accounting_valid": true, "note": "MiMo; native opencode free pool, e.g. opencode/mimo-v2.5-free", "models": ["mimo"]},
+    "Tencent": {"accounting_valid": true, "note": "Hunyuan, marketed as Hy3; native opencode free pool, e.g. opencode/hy3-free", "models": ["hy3", "hy4", "hunyuan"]},
+    "Meta": {"accounting_valid": true, "note": "marketed as Muse Spark; native opencode free pool, e.g. opencode/muse-spark-1.2-contributor-free", "models": ["muse-spark", "llama"]},
+    "Grok": {"accounting_valid": true, "models": ["grok", "x-ai/"]},
+    "Kimi": {"accounting_valid": true, "note": "Moonshot. Cursor composer-2.5 and composer-2.5-fast count as Kimi by the owner's ruling (2026-10-07): Cursor discloses that Composer 2.5 is built on Moonshot's Kimi K2.5 open checkpoint (continued pretraining plus RL; relayed by peers, not re-read here), so it is a DERIVATIVE -- weaker independence than a native Kimi -- and one family with every kimi-k3 leg (cursor kimi-k3-*, opencode-go/kimi-k3)", "models": ["kimi", "composer-2.5"]},
+    "Qwen": {"accounting_valid": true, "note": "Alibaba; opencode-go paid pool, e.g. opencode-go/qwen3.8-max (the review skill's top-tier judgement leg). Added 2026-09-25: the skill routed to it while this file did not know the family, so the accounting rule could not be applied to that leg", "models": ["qwen"]},
+    "MiniMax": {"accounting_valid": true, "note": "opencode-go paid pool, e.g. opencode-go/minimax-m3", "models": ["minimax"]},
+    "Meituan": {"accounting_valid": true, "note": "LongCat; opencode-go paid pool, e.g. opencode-go/longcat-2.0", "models": ["longcat"]},
     "Composer": {
       "accounting_valid": false,
-      "why": "Cursor's in-house models OTHER than composer-2.5 and composer-2.5-fast (those two count as Kimi, see the Kimi family); the lineage of the rest is undisclosed, which is the stealth-model hazard again -- it might share any family's blind spots. Extra eyes, never the accounting leg"
+      "why": "Cursor's in-house models OTHER than composer-2.5 and composer-2.5-fast (those two count as Kimi, see the Kimi family); the lineage of the rest is undisclosed, which is the stealth-model hazard again -- it might share any family's blind spots. Extra eyes, never the accounting leg",
+      "models": ["composer"]
     },
     "unknown": {
       "accounting_valid": false,
-      "why": "stealth models whose family is undisclosed by design; they might secretly share any family, so they can never SATISFY the cross-family rule -- fine as an additional pair of eyes, never the accounting leg"
+      "why": "stealth models whose family is undisclosed by design; they might secretly share any family, so they can never SATISFY the cross-family rule -- fine as an additional pair of eyes, never the accounting leg",
+      "models": ["space-bunny", "big-pickle"]
     }
   },
   "rules": {

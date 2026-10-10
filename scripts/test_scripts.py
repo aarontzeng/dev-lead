@@ -4632,6 +4632,78 @@ def test_roster(tmp):
     check("roster: opencode/kimi-k3 with family Kimi passes check",
           got.returncode == 0 and got.stdout == "", got.stdout + got.stderr)
 
+    # GPT review, 2026-10-10: the declared family was never compared with the model id, so a
+    # Gemma model declared as North counted as a second family beside a Gemini leg.
+    def _family_doc(name, model, family):
+        path = tmp / ("model-family-%s.json" % name)
+        _write_doc(path, _roster_doc({"opencode": {"model": model, "effort": "high",
+                                                   "effort_in": "flag", "family": family}}))
+        return _checked(path)
+    got = _family_doc("gemma", "openrouter/google/gemma-4-31b-it:free", "North")
+    check("roster: a model id naming another family than the declared one fails check",
+          got.returncode != 0 and "is Gemini by its id, not North" in got.stdout, got.stdout + got.stderr)
+    got = _family_doc("liquid", "openrouter/liquid/lfm-2.5-2.6b:free", "North")
+    check("roster: a model from an unregistered vendor fails check, whatever family it declares",
+          got.returncode != 0 and "Liquid AI, whose family is not registered" in got.stdout, got.stdout + got.stderr)
+    got = _family_doc("stealth", "opencode-go/space-bunny", "Meta")
+    check("roster: a stealth model cannot be declared a named family",
+          got.returncode != 0 and "is unknown by its id, not Meta" in got.stdout, got.stdout + got.stderr)
+    got = _family_doc("upper", "openrouter/google/Gemma-4-31B-it:free", "North")
+    check("roster: the model id is matched case-insensitively",
+          got.returncode != 0 and "is Gemini by its id, not North" in got.stdout, got.stdout + got.stderr)
+    got = _family_doc("muse", "opencode-go/muse-spark-1.3-contributor", "Meta")
+    check("roster: a model id that names its declared family passes",
+          got.returncode == 0 and got.stdout == "", got.stdout + got.stderr)
+    got = _family_doc("unnamed", "opencode/x", "Meta")
+    check("roster: an id that names no family passes, with a warning that the family is the roster's word",
+          got.returncode == 0 and "'opencode/x' names no family in families.json; Meta is the roster's word"
+          in got.stdout, got.stdout + got.stderr)
+    # GPT review, 2026-10-10: every case above declared its family on a review leg, so a
+    # check that skipped inferred families or by-lens entries passed them all.
+    inferred = tmp / "model-family-inferred.json"
+    _write_doc(inferred, _roster_doc({"codex": {"model": "claude-opus-5-5", "effort": "medium",
+                                                "effort_in": "flag"}}))
+    got = _checked(inferred)
+    check("roster: a leg with no family is checked against the family its adapter implies",
+          got.returncode != 0 and "is Claude by its id, not GPT" in got.stdout, got.stdout + got.stderr)
+    lensed = tmp / "model-family-lens.json"
+    _write_doc(lensed, _roster_doc({"opencode": {"by_lens": {"mechanical": {
+        "model": "openrouter/google/gemma-4-31b-it:free", "effort": "high", "effort_in": "flag",
+        "family": "North"}}}}))
+    got = _checked(lensed)
+    check("roster: a by-lens entry's model id is checked against its family",
+          got.returncode != 0 and "by_lens.mechanical.model" in got.stdout
+          and "is Gemini by its id, not North" in got.stdout, got.stdout + got.stderr)
+    cursor_kimi = tmp / "model-family-composer.json"
+    _write_doc(cursor_kimi, _roster_doc({"cursor": {"model": "composer-2.5-fast", "effort_in": "model_name",
+                                                    "family": "Kimi"}}))
+    got = _checked(cursor_kimi)
+    check("roster: composer-2.5 declared Kimi passes",
+          got.returncode == 0 and "by its id" not in got.stdout, got.stdout + got.stderr)
+    # Meta review (muse), 2026-10-10: Composer's "composer" also matched, so the same id
+    # declared Composer passed too -- the owner's ruling makes it Kimi only.
+    _write_doc(cursor_kimi, _roster_doc({"cursor": {"model": "composer-2.5-fast", "effort_in": "model_name",
+                                                    "family": "Composer"}}))
+    got = _checked(cursor_kimi)
+    check("roster: composer-2.5 declared Composer fails (the longer Kimi marker wins)",
+          got.returncode != 0 and "is Kimi by its id, not Composer" in got.stdout, got.stdout + got.stderr)
+    got = _family_doc("hy4", "opencode-go/hy4-preview", "Meta")
+    check("roster: Tencent's hy4-preview is Tencent by its id",
+          got.returncode != 0 and "is Tencent by its id, not Meta" in got.stdout, got.stdout + got.stderr)
+    no_family = tmp / "model-family-implement.json"
+    _write_doc(no_family, _roster_doc({}, implement={"opencode": {
+        "model": "openrouter/liquid/lfm-2.5-2.6b:free", "effort": "high", "effort_in": "flag"}}))
+    got = _checked(no_family)
+    check("roster: an unregistered vendor fails check on a leg that declares no family",
+          got.returncode != 0 and "Liquid AI, whose family is not registered" in got.stdout, got.stdout + got.stderr)
+    fallback = tmp / "model-family-fallback.json"
+    _write_doc(fallback, _roster_doc({"agy": {"model": "gemini-3.8-flash-high", "family": "Gemini",
+                                              "fallback": {"model": "opencode-go/muse-spark-1.3-contributor",
+                                                           "family": "Gemini"}}}))
+    got = _checked(fallback)
+    check("roster: a fallback's model id is checked against its family too",
+          got.returncode != 0 and "is Meta by its id, not Gemini" in got.stdout, got.stdout + got.stderr)
+
     # Found by review (codex): the badge fix (F9) had no test at all.
     readme = SCRIPTS.parent / "README.md"
     readme_text = readme.read_text(encoding="utf-8")
@@ -4874,6 +4946,28 @@ def test_roster(tmp):
     check("roster plan: the claude implement override carries the roster entry's effort",
           g35.returncode == 0 and "implement claude model=claude-opus-5-5 family=Claude effort=flag high override "
           "args=--model claude-opus-5-5 --effort high" in g35.stdout.splitlines(), g35.stdout + g35.stderr)
+    g35 = run(roster, "plan", "--round", "r1", "--implement", "agy=claude-opus-5-5:Gemini", "--review", "codex",
+              env=_roster_env(tmp, DEV_LEAD_ROSTER=path_ok))
+    check("roster plan: an implement override whose model id names another family is refused",
+          g35.returncode != 0 and "is Claude by its id, not Gemini" in g35.stdout
+          and not any(line.startswith("implement ") for line in g35.stdout.splitlines()), g35.stdout + g35.stderr)
+    g35 = run(roster, "plan", "--round", "r1", "--implement", "opencode=openrouter/liquid/lfm-2.5-2.6b:free",
+              "--review", "codex", env=_roster_env(tmp, DEV_LEAD_ROSTER=path_ok))
+    check("roster plan: an implement override from an unregistered vendor is refused with no family given",
+          g35.returncode != 0 and "Liquid AI, whose family is not registered" in g35.stdout, g35.stdout + g35.stderr)
+    g35 = run(roster, "plan", "--round", "r1", "--implement", "agy=brand-new-model:Gemini", "--review", "codex",
+              env=_roster_env(tmp, DEV_LEAD_ROSTER=path_ok))
+    check("roster plan: an override whose id names no family is planned with the warning shown",
+          g35.returncode == 0 and "'brand-new-model' names no family in families.json; Gemini is the roster's word"
+          in g35.stdout and any(line.startswith("implement agy ") for line in g35.stdout.splitlines()),
+          g35.stdout + g35.stderr)
+    unmarked_impl = tmp / "unmarked-implement.json"
+    _write_doc(unmarked_impl, _roster_doc({"codex": _codex_leg()}, implement={
+        "agy": {"model": "brand-new-model", "family": "Gemini", "effort_in": "model_name"}}))
+    g35 = run(roster, "plan", "--round", "r1", "--implement", "agy", "--review", "codex",
+              env=_roster_env(tmp, DEV_LEAD_ROSTER=unmarked_impl))
+    check("roster plan: the roster's own unmarked implement model warns once, not twice",
+          g35.returncode == 0 and g35.stdout.count("names no family in families.json") == 1, g35.stdout + g35.stderr)
     no_impl = tmp / "claude-implement-unset.json"
     _write_doc(no_impl, _roster_doc({"codex": _codex_leg()}))
     g56 = run(roster, "plan", "--round", "r1", "--implement", "claude=claude-opus-5-5", "--review", "codex",

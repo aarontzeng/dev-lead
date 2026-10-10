@@ -272,6 +272,47 @@ def _check_family(family, adapter, path, problems):
         problems.warn(path, "%s cannot be the accounting leg" % family)
 
 
+def model_families(model):
+    """(families whose `models` markers the id contains, unregistered vendors it names).
+    Lowercase substring markers from families.json; an id naming none gives two empty sets.
+    A marker that sits inside another family's longer marker, both in the id, yields to
+    it: composer-2.5-fast is Kimi (composer-2.5), not Composer (composer)."""
+    _, families = data()
+    mid = str(model or "").lower()
+    hits = [(fam, m) for fam, spec in (families.get("families") or {}).items()
+            for m in (spec.get("models") or []) if m in mid]
+    named = {fam for fam, m in hits
+             if not any(other != fam and m != longer and m in longer for other, longer in hits)}
+    vendors = {vendor for vendor, marks in (families.get("unregistered") or {}).items()
+               if not str(vendor).startswith("_") and any(m in mid for m in marks)}
+    return named, vendors
+
+
+def _check_model_family(model, family, path, problems):
+    """A declared family the model id contradicts is an error: the roster states the
+    family, and only the id can contradict it (GPT review, 2026-10-10: a Gemma model
+    declared as another family passed, so two Google legs could count as two families)."""
+    if not model:
+        return
+    named, vendors = model_families(model)
+    if vendors:
+        # Whatever the leg declares, or when it declares nothing (an implement leg on a
+        # multi-family adapter need not): the vendor is refused either way.
+        problems.error(path, "model %r is from %s, whose family is not registered in families.json"
+                       % (model, " / ".join(sorted(vendors))))
+    elif family and named and family not in named:
+        problems.error(path, "model %r is %s by its id, not %s"
+                       % (model, " or ".join(sorted(named)), family))
+    elif family and not named:
+        # GPT review, 2026-10-10: an id no marker names could carry any family's label
+        # and be counted as that family. Fail-closed would make every new model wait for
+        # a marker, which is the owner's call; until then the gap is visible.
+        spec = ((data()[1].get("families") or {}).get(family)) or {}
+        if spec.get("accounting_valid") is not False:
+            problems.warn(path, "model %r names no family in families.json; %s is the roster's word"
+                          % (model, family))
+
+
 _TRIPLE_QUOTES = (chr(39) * 3, chr(34) * 3)
 # what a config_only effort may be before it is written into a TOML file
 _EFFORT_WORD = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
@@ -505,6 +546,8 @@ def _check_leg(leg, adapter, role, path, problems, *, fallback=False, opencode_r
             problems.error(path + ".model", "model required")
         _check_effort(leg, adapter, role, path, problems)
         serves = _serves(adapter)
+        if "model" in leg:
+            _check_model_family(leg["model"], infer_family(serves, leg), path + ".model", problems)
         if "family" in leg:
             _check_family(leg["family"], adapter, path + ".family", problems)
         elif role == "review" and len(serves) > 1:
@@ -1244,6 +1287,7 @@ def cmd_plan(path, round_name, implement, review, lens):
     problems = validate(doc)
     for line in problems.warnings:
         print(line)
+    shown = len(problems.warnings)
     rounds = doc.get("rounds") if isinstance(doc.get("rounds"), dict) else {}
     rnd, _inherited = _resolved_round(rounds, round_name)
     if not isinstance(rnd, dict):
@@ -1293,6 +1337,11 @@ def cmd_plan(path, round_name, implement, review, lens):
                 impl_family, fam_err = _family_of(adapter, family_override, roster_impl)
                 if fam_err:
                     problems.error(impl_path, fam_err)
+        if impl_model:
+            # The override is the one implement model validate() never saw (GPT review,
+            # 2026-10-10: `--implement cursor=cursor-grok-4.6-medium:Claude` planned).
+            # With no family it still refuses an unregistered vendor.
+            _check_model_family(impl_model, impl_family, impl_path + ".model", problems)
         if impl_model:
             # A flag adapter with no stored effort cannot be launched. Other
             # refusals (an effort key on model_suffix / none, a word outside a
@@ -1354,6 +1403,11 @@ def cmd_plan(path, round_name, implement, review, lens):
         problems.error("rounds.%s.review" % round_name,
                        "%s and %s share family %s" % (label_a, label_b, fam))
 
+    # Warnings raised while resolving the plan (an override's unmarked model id): the
+    # validate() ones were printed above (GPT review, 2026-10-10: these never were).
+    for line in problems.warnings[shown:]:
+        if line not in problems.warnings[:shown]:     # the roster's own model, checked twice
+            print(line)
     if problems.errors:
         for line in problems.errors:
             print(line)

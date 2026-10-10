@@ -91,7 +91,14 @@ DEV_LEAD=${DEV_LEAD_ROOT:-$(ls -d "$HOME"/.claude/plugins/cache/dev-lead/dev-lea
 5. **Check.** `"$DEV_LEAD/scripts/roster.py" check`. A family that cannot
    be the accounting leg is a warning: it prints and does not fail. Any
    error does. `set` refuses to write a roster that fails, so a failure
-   here means the file was changed outside this skill.
+   here means the file was changed outside this skill. A model id that names
+   another family than the leg declares (`is Gemini by its id, not North`),
+   or a vendor listed in families.json `unregistered`, is an error: the markers are
+   each family's `models` in [`data/families.json`](../../data/families.json),
+   and a marker inside another family's longer marker yields to it
+   (`composer-2.5-fast` is Kimi, not Composer). An id that names no family
+   passes with a warning that its family is the roster's word (none when the
+   declared family cannot be the accounting leg anyway).
 
 6. **Report.** For each slot this session changed, say old → new: model,
    effort, family, whether the fix round inherits, or the merge gate.

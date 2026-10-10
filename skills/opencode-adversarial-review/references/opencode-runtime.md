@@ -125,9 +125,10 @@ What the probes established:
 - **Registered families stay the ones with evidence.** families.json gains
   no family from this inventory: Dots Studio, Apodex and Liquid AI are left
   unregistered until a model of theirs passes golden-answer reviews, so a
-  roster that declares one of those families fails the check. (roster.py
-  checks the declared family, not the model id: a roster that names one of
-  these models under another family's name is not caught -- a known gap.)
+  roster that declares one of those families fails the check. Since 0.6.65
+  the check also reads the model id: a roster that names one of these
+  models fails whatever family it declares, or when it declares none
+  (families.json `unregistered`).
 
 ## Native `opencode/*` pool — first-probe results (2026-08-28)
 

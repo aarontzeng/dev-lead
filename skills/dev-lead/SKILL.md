@@ -168,7 +168,10 @@ is not written back. A fix round passes `--round fix`.
 A collision `plan` reports — the implementer's family equal to a reviewer's,
 or two reviewers sharing a family — is a stop. Substitute a leg and report
 which leg changed and why. Never drop a leg silently. An unset leg is the
-same stop: ask, do not invent a model.
+same stop: ask, do not invent a model. So is an override whose model id
+names another family than the one given (`agy=claude-opus-5-5:Gemini`) --
+name the model's real family -- or a vendor families.json lists as
+unregistered, which no family clears: pick a registered model.
 
 **A fix round's cross-family requirement is relative to who implemented THAT
 round, not to r1** (owner ruling, 2026-09-22). `fix.review` inheriting r1's full leg
