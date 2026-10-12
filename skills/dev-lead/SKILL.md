@@ -658,10 +658,32 @@ two rounds and would have run a third on no principle at all.
    | within `small_delta_lines`, and every fixed finding has a test that failed before the fix and a mutation the lead killed, stated as `--fix-tested '<which tests, which mutations>'` | tested | one cross-family leg |
    | anything else, or a delta a `delta_triggers` rule raises to HIGH | full | the range's minimum (at least HIGH's for a trigger) |
 
-   A comment inside a code file is not detected as wording: telling a
-   comment from code per language is a guess, so such a fix is at least the
-   tested rung; a binary, mode or move change has no lines to size and is the
-   full rung. `--fix-tested` and `--blocker` are your statements: the record
+   A comment inside a code file is not detected as wording (it stays at least
+   the tested rung), but since 0.6.66 it no longer counts toward
+   `small_delta_lines` (Aaron, 2026-10-12: a fix of 77 lines, about 35 of them
+   logic, took the full rung because docstrings and help text counted like
+   code): blank lines and comment-only lines of Python and C-like files (the
+   suffixes in `triage.py`'s `_C_LIKE_SUFFIXES`: C, C++, Java, JS, TS, Go,
+   Rust, Kotlin, Swift, Scala, Groovy; and `Jenkinsfile*`, read as Groovy),
+   Python docstrings and the lines of documentation files (the wording
+   rung's own definition) are explanation, and `scope` reports them apart as
+   `delta_text_lines`. Lowering a review must not rest on a guess, so they
+   are read from the file at the line's own revision with a tokenizer
+   (Python) or a scanner (C-like); a file the scan cannot read to its end,
+   one git cannot show, and a diff whose lines do not line up with the
+   numbered rows count whole (documentation excepted); shell, YAML, Makefile,
+   SQL and every other kind count whole (a heredoc or a block scalar makes
+   its comment lines data). Strings (help text, log messages, prompts), a
+   shebang, a comment a tool reads (`# noqa`, `# type:`, `//go:build`,
+   `# syntax=`...), a line right after a backslash continuation, and a docstring
+   the program reads at run time (a file that mentions `__doc__`, `getdoc`,
+   `cleandoc`, `help(`, `update_wrapper`, click, typer, docopt, doctest, pydoc
+   or `wraps`) are code and count. So is a whole C-like file whose block
+   comment opens after code and runs on to a later line (a JavaScript regex
+   such as `/[/*]/` looks like one), or that holds a raw string the scanner
+   does not read (Groovy `$/`, C++ `R"`, a quote after `#`). `change`'s own-read decision (no review at
+   all) keeps counting every line: it has no file contents. A binary, mode or
+   move change has no lines to size and is the full rung. `--fix-tested` and `--blocker` are your statements: the record
    and `round-check` carry them verbatim, and nothing checks them. The delta is taken between the two reviewed patches, the way
    `change` compares patch sets, so an amended or rebased fix is sized by
    what it changed and not by the base it moved to. From the third fix round

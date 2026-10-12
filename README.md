@@ -314,7 +314,7 @@ anything else -- a binary, mode or move change included -- keeps the range's
 minimum, and a delta a trigger raises to HIGH takes at least HIGH's. The
 evidence and blocker are the lead's statements, recorded and reported, not
 checked. The record gains a `fix` block (`of`, `root`, `round`, `rung`, `why`,
-`delta_files`, `delta_lines`, `evidence`, `blocker`, `range_min_review_legs`);
+`delta_files`, `delta_lines`, `delta_text_lines`, `evidence`, `blocker`, `range_min_review_legs`; `delta_lines` is the behaviour lines the small-delta rule is held against and `delta_text_lines` the explanation not counted since 0.6.66: blank lines and comment-only lines of Python and C-like files (Jenkinsfile* is read as Groovy; read with a tokenizer and a scanner, in the file at the line's own revision), Python docstrings and the lines of documentation files; strings, a shebang, a comment a tool reads, a line right after a backslash continuation, a docstring read at run time, every other kind and anything unreadable (a scan that gives up included) count whole, and so does `change`'s own-read decision -- see the SKILL's fix-round paragraph);
 `round-check` reports its `of`, `root`, `round`, `rung`, `why`, `evidence` and
 `blocker`, and `leg-cmd.sh` prints the round and rung. From the third fix round on, a
 `full` rung is refused without `--blocker`: after two fix rounds, non-blockers

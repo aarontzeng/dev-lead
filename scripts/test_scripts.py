@@ -6421,6 +6421,12 @@ def test_triage(tmp):
     _write_doc(config_file, config)
     result = changed(128, [patch(1, trigger_old, base, approvals=[approval("+1")]), patch(2, small, trigger_old)])
     check("triage legs: delta equal to threshold is own-read", result.get("legs") == "own-read", result)
+    # ...and one line over it is not: every changed line counts here (own-read means no review at all, and this
+    # view has no file contents to tell a comment from a string; 0.6.66 left it alone on purpose)
+    config["small_delta_lines"] = 1
+    _write_doc(config_file, config)
+    result = changed(1281, [patch(1, trigger_old, base, approvals=[approval("+1")]), patch(2, small, trigger_old)])
+    check("triage legs: a delta one line over the threshold takes the roster", result.get("legs") == "roster", result)
     config["small_delta_lines"] = old_limit
     _write_doc(config_file, config)
 
@@ -8202,6 +8208,262 @@ def test_triage_fix_round(tmp):
 # ------------------------------------------------ line-ending renormalization ----
 
 
+def _load_triage_module():
+    import importlib.util as _ilu
+    sys.path.insert(0, str(SCRIPTS))
+    try:
+        spec = _ilu.spec_from_file_location("triage_text_lines_under_test", SCRIPTS / "triage.py")
+        module = _ilu.module_from_spec(spec)
+        spec.loader.exec_module(module)
+    finally:
+        sys.path.remove(str(SCRIPTS))
+    return module
+
+
+def test_triage_text_lines(tmp):
+    """Comment, docstring and blank lines, and the lines of documentation files,
+    do not count toward small_delta_lines when a fix round is sized (Aaron,
+    2026-10-12) -- only where the file's own syntax says so (a tokenizer for
+    Python, a scanner for C-like code, Jenkinsfile* read as Groovy); anything
+    it cannot read, a line right after a backslash continuation, every other
+    language, and the `change` own-read decision count whole. Position: after
+    test_triage_fix_round."""
+    t = _load_triage_module()
+
+    # --- Python: what is explanation, by tokens
+    py = '#!/usr/bin/env python3\n"""Module doc.\n\nmore\n"""\nimport os  # a trailing comment\n\n# a comment\n#\n' \
+         'x = """\n# inside a string\n\nstill the string\n"""\n# noqa: E501\n# type: ignore\n\ndef f():\n    """Doc."""\n' \
+         '    # indented note\n    return 1\n'
+    got = t._py_text_lines(py)
+    check("python text: comments and blank lines that stand alone, and docstrings, are explanation",
+          got == {2, 3, 4, 5, 7, 8, 9, 17, 19, 20}, str(sorted(got)))
+    check("python text: a shebang, a trailing comment, a string with comment-looking and blank lines, and a tool "
+          "directive are code",
+          not ({1, 6, 10, 11, 12, 13, 14, 15, 16, 18, 21} & got), str(sorted(got)))
+    check("python text: a lone carriage return or a source that does not tokenize has none",
+          t._py_text_lines("# a\rx = 1\n") == set() and t._py_text_lines('x = """open\n# never closed\n') == set()
+          and t._py_text_lines("# a\nx = (\n# b\n") == set())          # a token error after tokens: nothing is trusted
+    with_doc = '"""Usage: tool [-h]."""\nimport sys\n# note\nprint(__doc__)\n'
+    got = t._py_text_lines(with_doc)
+    check("python text: a file that reads its docstring at run time keeps it as code, its comments stay text",
+          1 not in got and 3 in got, str(sorted(got)))
+    check("python text: click, typer, docopt, getdoc, cleandoc, doctest, pydoc and functools.wraps make docstrings "
+          "behaviour too",
+          all(1 not in t._py_text_lines('"""Help."""\n%s\n' % use)
+              for use in ("import click", "from typer import Typer", "import docopt", "import inspect; inspect.getdoc(f)",
+                          "import inspect; inspect.cleandoc(s)", "import doctest; doctest.testmod()",
+                          "import pydoc; pydoc.render_doc(f)", "from functools import wraps",
+                          "help(f)", "functools.update_wrapper(g, f)")))
+    check("python text: a reader late in the file counts, and a word that only contains a reader's name does not",
+          1 not in t._py_text_lines('"""Help."""\n' + "x = 1\n" * 30 + "import click\n")
+          and 1 in t._py_text_lines('"""Help."""\nx = "clickhouse"\n'),
+          str(sorted(t._py_text_lines('"""Help."""\nx = "clickhouse"\n'))))
+    # a blank or comment line right after a backslash is part of the logical line: removing it joins the lines
+    check("python text: a comment or blank line after a backslash continuation is code, one after a plain line is not",
+          t._py_text_lines("x = 1 \\\n# note\n+2\n") == set() and t._py_text_lines("x = 1 \\\n\n+2\n") == set()
+          and t._py_text_lines("x = 1 \\\n  # note\n") == set()
+          and t._py_text_lines("x = 1\n# note\n\ny = 2\n") == {2, 3}
+          and t._py_text_lines("def f(): \\\n    '''d'''\n") == set()
+          and t._py_text_lines('x = "a\\\\b"\n# note\n') == {2}
+          and t._py_text_lines("x = 1 \\\r\n# note\r\n+2\r\n") == set()
+          and t._py_text_lines("x = 1\r\n# note\r\n") == {2},
+          str([sorted(t._py_text_lines(s)) for s in ("x = 1 \\\n# note\n+2\n", "x = 1\n# note\n\ny = 2\n")]))
+    doc = t._py_docstring_lines
+    source = ('"""Module doc.\n\nmore\n"""\nimport os\n\n\nclass C:\n    """Class doc."""\n\n    def m(self):\n'
+              '        """Method.\n\n        Longer.\n        """\n        return 1\n\n\ndef f(): """one line def"""\n\n\n'
+              'def g():\n    x = 1\n    """not a docstring: not first"""\n    return x\n\n\n'
+              'def h():\n    """semi"""; y = 2\n    return y\n').replace("\\n", "\n")
+    got = doc(source)
+    check("docstrings: module, class and method docstrings are found by their lines",
+          {1, 2, 3, 4, 9, 12, 13, 14, 15} <= got, str(sorted(got)))
+    check("docstrings: a one-line def, a string that is not first and a docstring with code after it are not",
+          not ({19, 23, 24, 25, 29} & got), str(sorted(got)))
+    check("docstrings: a source that does not parse has none", doc("def broken(:\n    '''x'''\n") == set())
+
+    # --- C-like: what is explanation, by a scanner
+    c = ('// note\n/* block\n * more\n */\n\nint a; // trailing\n/* x */ int b;\n*p = 1;\n* ptr = value;\n'
+         'const char *u = "http://x/*y*/";\n// NOLINT(x)\n//go:build linux\n/* it\'s */\nchar c = \'a\';\n')
+    got = t._c_text_lines(c)
+    check("c text: a // line, a block comment's lines, a blank line and a one-line /* */ are explanation",
+          {1, 2, 3, 4, 5, 13} <= got, str(sorted(got)))
+    check("c text: code before or after a comment, a dereference (even '* ptr'), a string holding // or /* "
+          "and a tool directive or build tag are code",
+          not ({6, 7, 8, 9, 10, 11, 12, 14} & got), str(sorted(got)))
+    check("c text: a block comment that opens after code and closes on that line leaves the next lines readable",
+          t._c_text_lines("int a; /* x */\n// note\n/* b\n */\n") == {2, 3, 4}, str(sorted(t._c_text_lines("int a; /* x */\n// note\n/* b\n */\n"))))
+    for name, bad in (("a template literal", "a = `x\n// y\n`;\n"), ("a triple quote", 'a = """x\n// y\n"""\n'),
+                      ("a regex literal holding /* (the comment would swallow code lines)",
+                       "const r = /[/*]/;\nvoid 0;\nlet x = 1;\n/* comment\n */\n"),
+                      ("a block comment that opens after code and runs on to a later line", "x = 1; /* start\n more */\n// n\n"),
+                      ("a Groovy dollar-slashy string", "def s = $/\n// data\n/$\n"),
+                      # in the next three every line holds an even number of quotes, so the scanner alone would
+                      # read the payload line as a comment
+                      ("a Rust raw string", 'let s = r#"x"y\n// payload\nz" "#;\n'),
+                      ("a C++ raw string", 'auto s = R"x(a"b\n// payload\nd" )x";\n'),
+                      ("a Swift extended-delimiter string", 'let s = #"x"y\n// payload\nz" "#\n'),
+                      ("an unterminated comment", "/* open\nint a;\n"), ("a string over its line", 'a = "x\n";\n// note\n'),
+                      ("a backslash at the end", 'a = "x\\\n'), ("an apostrophe lifetime", "fn f<'a>(x: &u8) {}\n// n\n")):
+        check("c text: %s is not read, so nothing in the file is explanation" % name,
+              t._c_text_lines(bad) == set(), str(sorted(t._c_text_lines(bad))))
+
+    # --- which files are read at all
+    check("lexers: Python, every C-like suffix and the Jenkinsfile pipelines are read",
+          t._lexer_of("a/b.py") == "py"
+          and set(t._C_LIKE_SUFFIXES) == {".c", ".h", ".cc", ".cpp", ".cxx", ".hpp", ".hxx", ".java", ".js", ".mjs",
+                                          ".cjs", ".ts", ".tsx", ".jsx", ".go", ".rs", ".kt", ".swift", ".scala",
+                                          ".groovy"}
+          and all(t._lexer_of("src/x" + suffix) == "c" for suffix in t._C_LIKE_SUFFIXES)
+          and t._lexer_of("ci/Jenkinsfile") == "c" and t._lexer_of("Jenkinsfile.poll") == "c"
+          and t._lexer_of("ci/Jenkinsfile.review") == "c")
+    check("lexers: shell, YAML, Makefile (any case), SQL, JSON, Markdown, Dockerfile and a name that only ends like "
+          "a pipeline's are not read",
+          all(t._lexer_of(name) is None for name in ("run.sh", "ci.yml", "Makefile", "makefile", "GNUmakefile",
+                                                       "a.sql", "a.json", "a.md", "Dockerfile", "NotJenkinsfile",
+                                                       "x.cs", "x.php", "x.pyc")))
+
+    # --- numbered lines of a --unified=0 patch
+    patch = ("diff --git a/x.py b/x.py\n--- a/x.py\n+++ b/x.py\n@@ -3,2 +3,3 @@\n-old3\n-old4\n+new3\n+new4\n+new5\n"
+             "@@ -10,0 +12,1 @@\n+added12\n@@ -20 +23,0 @@\n-gone20\n\\ No newline at end of file\n")
+    check("numbered lines: removed lines count in the old file, added in the new, hunk by hunk",
+          t._numbered_lines(patch) == [("-", 3, "old3"), ("-", 4, "old4"), ("+", 3, "new3"), ("+", 4, "new4"),
+                                       ("+", 5, "new5"), ("+", 12, "added12"), ("-", 20, "gone20")],
+          str(t._numbered_lines(patch)))
+
+    # --- a file that cannot be read at its revision counts
+    counted, texted = t._sizing_lines(tmp, "HEAD", "HEAD", {"x.py": (["# note"], [])}, {"x.py": [("+", 1, "# note")]})
+    check("text lines: a line of a file git cannot show at its revision counts", (counted, texted) == (1, 0),
+          str((counted, texted)))
+
+    # --- the fallback when the numbered rows and the line data differ in size: everything counts but documents
+    counted, texted = t._sizing_lines(tmp, "a", "b", {"x.py": (["# note", "y = 1"], [])}, {"x.py": [("+", 1, "# note")]})
+    check("text lines: when the numbered rows and the line data differ in size, every line counts",
+          (counted, texted) == (2, 0), str((counted, texted)))
+    counted, texted = t._sizing_lines(tmp, "a", "b", {"x.py": (["y = 1"], []), "README.md": (["words"] * 4, [])},
+                                      {"x.py": [("+", 1, "y = 1")]}, {"README.md"})
+    check("text lines: ...but a documentation path stays out of that count",
+          (counted, texted) == (1, 4), str((counted, texted)))
+
+    # --- the whole thing through scope --fix-of, in a real repository
+    triage = SCRIPTS / "triage.py"
+    home = tmp / "text-lines-home"
+    home.mkdir()
+    roster_file, rules_file = home / "roster.json", home / "triage.json"
+    _write_doc(roster_file, _live_roster())
+    rules = {
+        "version": 1, "me": ["alice"], "lens_classes": {"mechanical": "mechanical", "judgment": "judgment"},
+        "lenses": [{"glob": "**", "lenses": ["mechanical"], "why": "everything"}],
+        "delta_triggers": [], "risk_default": "MEDIUM", "move_check": {"naming": []},
+        "small_delta_lines": 4, "order": [],
+    }
+    _write_doc(rules_file, rules)
+    env = _roster_env(home, DEV_LEAD_ROSTER=roster_file, DEV_LEAD_TRIAGE=rules_file)
+    app = ('"""Module doc.\n"""\n\n\ndef run(x):\n    """Run x."""\n    # a comment\n    y = x + 1\n    return y\n')
+    evidence = "test_run failed before the fix; mutation +1 -> +2 killed"
+
+    def scenario(name, fix_files, *, evidence_given=True, r1_app=None):
+        repo = tmp / ("text-lines-repo-" + name)
+        repo.mkdir()
+        git(repo, "init", "-q")
+        git(repo, "config", "user.email", "test@example.invalid")
+        git(repo, "config", "user.name", "Test")
+
+        def commit(message, files):
+            for path, body in files.items():
+                (repo / path).parent.mkdir(parents=True, exist_ok=True)
+                (repo / path).write_text(body, encoding="utf-8")
+            git(repo, "add", "-A")
+            git(repo, "commit", "-qm", message)
+            return git(repo, "rev-parse", "HEAD").stdout.strip()
+
+        # the scenario's name is in the tree: two scenarios with the same files and the same second would
+        # share their commit ids, and so their triage records
+        base = commit("base", {"src/app.py": app, "src/lib.c": "int a;\n", "ci.yml": "a: |\n  one\n",
+                               "run.sh": "echo a\n", "scenario": name})
+        r1 = commit("the change", {"src/app.py": (r1_app or app) + "extra = 1\n"})
+        first = run(triage, "scope", "--base", base, "--target", repo, env=env)       # the reviewed head's record
+        assert first.returncode == 0, first.stdout + first.stderr
+        commit("fix", fix_files)
+        args = ["--fix-of", r1] + (["--fix-tested", evidence] if evidence_given else [])
+        got = run(triage, "scope", "--base", base, "--target", repo, *args, env=env)
+        return got, (json.loads(got.stdout)["fix"] if got.returncode == 0 else {})
+
+    explained = app.replace('"""Module doc.\n"""', '"""Module doc.\n\nMore about it,\nin several lines,\nthat explain.\n"""')
+    explained = explained.replace("    # a comment\n", "    # a comment\n    # and another\n    #\n\n")
+    got, fix = scenario("explanation", {"src/app.py": explained + "extra = 1\n"})
+    check("text lines fix: a fix of docstring, comment and blank lines only counts 0 lines, and is the tested rung",
+          got.returncode == 0 and fix.get("delta_lines") == 0 and fix.get("delta_text_lines", 0) >= 7
+          and fix.get("rung") == "tested" and "not counted" in fix.get("why", ""), got.stdout + got.stderr)
+    got, fix = scenario("explanation-untested", {"src/app.py": explained + "extra = 1\n"}, evidence_given=False)
+    check("text lines fix: ...but it is not wording: without --fix-tested it is still the full rung",
+          got.returncode == 0 and fix.get("rung") == "full" and "--fix-tested" in fix.get("why", "")
+          and fix.get("delta_lines") == 0, got.stdout + got.stderr)
+
+    mixed = explained.replace("    y = x + 1\n", "    y = x + 2\n    z = y\n    w = z\n") + "extra = 1\n"
+    got, fix = scenario("mixed", {"src/app.py": mixed})
+    check("text lines fix: four logic lines (one removed, three added) among a dozen explanation lines are within a limit of 4",
+          got.returncode == 0 and fix.get("delta_lines") == 4 and fix.get("delta_text_lines", 0) >= 7
+          and fix.get("rung") == "tested", got.stdout + got.stderr)
+    bigger = mixed.replace("    w = z\n", "    w = z\n    v = w\n    u = v\n")
+    got, fix = scenario("over", {"src/app.py": bigger})
+    check("text lines fix: six logic lines (one removed, five added) exceed the limit of 4 whatever the explanation around them",
+          got.returncode == 0 and fix.get("delta_lines") == 6 and fix.get("rung") == "full"
+          and "exceeds small_delta_lines=4" in fix.get("why", "") and "not counted" in fix.get("why", ""),
+          got.stdout + got.stderr)
+
+    strings = app.replace('    return y\n', '    log("first message")\n    log("second message")\n    log("third")\n    return y\n')
+    got, fix = scenario("strings", {"src/app.py": strings + "extra = 1\n"})
+    check("text lines fix: log strings are code, they count",
+          got.returncode == 0 and fix.get("delta_lines") == 3 and fix.get("delta_text_lines") == 0, got.stdout + got.stderr)
+
+    in_string = app + 'SCRIPT = """\n# not a comment\n\necho hi\n"""\n'
+    got, fix = scenario("in-string", {"src/app.py": in_string + "extra = 1\n"})
+    check("text lines fix: comment-looking and blank lines inside a multi-line string are code, they count",
+          got.returncode == 0 and fix.get("delta_lines") == 5 and fix.get("delta_text_lines") == 0, got.stdout + got.stderr)
+
+    runtime = app + 'print(__doc__)\n'
+    got, fix = scenario("runtime-doc", {"src/app.py": (runtime.replace('"""Module doc.\n"""', '"""Module doc.\n\nMore.\n"""')
+                                                          + "extra = 1\n")}, r1_app=runtime)
+    check("text lines fix: a docstring the program reads at run time is behaviour, it counts",
+          got.returncode == 0 and fix.get("delta_lines") == 2 and fix.get("delta_text_lines") == 0, got.stdout + got.stderr)
+
+    removed = app.replace('"""Module doc.\n"""\n\n\n', "").replace('    """Run x."""\n', "")
+    got, fix = scenario("removed-docstrings", {"src/app.py": removed + "extra = 1\n"})
+    check("text lines fix: a docstring REMOVED is text too (found in the file as it was)",
+          got.returncode == 0 and fix.get("delta_lines") == 0 and fix.get("delta_text_lines") == 5
+          and fix.get("rung") == "tested", got.stdout + got.stderr)
+
+    cfile = "// note\n/* block\n * more\n */\nint b;\n"
+    got, fix = scenario("c", {"src/lib.c": cfile})
+    check("text lines fix: C comments are text, the code lines (the one removed, the one added) count",
+          got.returncode == 0 and fix.get("delta_lines") == 2 and fix.get("delta_text_lines") == 4, got.stdout + got.stderr)
+    got, fix = scenario("c-deref", {"src/lib.c": "int a;\n* ptr = value;\n*q = 2;\n"})
+    check("text lines fix: a dereference is code even when it starts with '* '",
+          got.returncode == 0 and fix.get("delta_lines") == 2 and fix.get("delta_text_lines") == 0, got.stdout + got.stderr)
+
+    for name, files in (("yaml", {"ci.yml": "a: |\n  one\n\n  two\n# note\n"}),
+                        ("shell", {"run.sh": "echo a\n# note\n\n# another\n"})):
+        got, fix = scenario(name, files)
+        check("text lines fix: %s is not read, its comment and blank lines count whole" % name,
+              got.returncode == 0 and fix.get("delta_text_lines") == 0 and fix.get("delta_lines", 0) >= 3,
+              got.stdout + got.stderr)
+    got, fix = scenario("directive", {"src/app.py": app + "extra = 1\n# noqa: E501\n#!/bin/sh\n# plain note\n"})
+    check("text lines fix: a tool directive and a shebang line count, a plain note does not",
+          got.returncode == 0 and fix.get("delta_lines") == 2 and fix.get("delta_text_lines") == 1, got.stdout + got.stderr)
+
+    # documentation files are explanation too: a fix of code and its README is sized by the code
+    got, fix = scenario("with-docs", {"src/app.py": app + "extra = 1\nmore = 2\n",
+                                      "docs/guide.md": "".join("# line %d\n" % i for i in range(30))})
+    check("text lines fix: thirty lines of documentation next to a line of code count 1 and the rest is text",
+          got.returncode == 0 and fix.get("delta_lines") == 1 and fix.get("delta_text_lines") == 30
+          and fix.get("rung") == "tested" and "documentation lines" in fix.get("why", ""), got.stdout + got.stderr)
+    got, fix = scenario("with-instructions", {"src/app.py": app + "extra = 1\nmore = 2\n",
+                                              "docs/team-instructions.md": "".join("line %d\n" % i for i in range(30))})
+    check("text lines fix: an agent instruction file is behaviour for an agent, so it counts whole",
+          got.returncode == 0 and fix.get("delta_lines") == 31 and fix.get("delta_text_lines") == 0
+          and fix.get("rung") == "full", got.stdout + got.stderr)
+    # (an *instructions* file, not AGENTS.md: a global gitignore may hide the latter from `git add -A`)
+
+
 def _crlf_repo(path):
     """A repo that committed CRLF files and LATER added `eol=lf`: every fresh
     checkout shows them ` M` with bytes identical to the commit (a peer session,
@@ -8520,6 +8782,10 @@ def main():
         test_triage_gate(Path(td))
     with tempfile.TemporaryDirectory() as td:
         test_triage_fix_round(Path(td))
+
+    print("triage.py text lines (comment, docstring and blank lines are not counted toward small_delta_lines)")
+    with tempfile.TemporaryDirectory() as td:
+        test_triage_text_lines(Path(td))
 
     print("lint.py check_version")
     with tempfile.TemporaryDirectory() as td:

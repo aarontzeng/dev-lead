@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Rule-based Gerrit review triage for dev-lead (standard library only)."""
 import argparse
+import ast
 import hashlib
 import json
 import math
@@ -748,7 +749,7 @@ def _delta_lines(pairs):
     return data
 
 
-def _between_lines(repo, before_revision, after_revision, entries, moves=()):
+def _between_lines(repo, before_revision, after_revision, entries, moves=(), numbered=None):
     """Actual hunk lines between two patch sets, limited to their delta files.
 
     Comparing each patch-set's *patch* identifies the files that matter, but a
@@ -756,7 +757,8 @@ def _between_lines(repo, before_revision, after_revision, entries, moves=()):
     It is not thereby removed from the review delta.  Diffing the two resulting
     trees gives the hunk lines that actually changed between those reviews.
     A file moved between the two trees is diffed as its rename pair: removed
-    lines belong to the old path, added lines to the new one.
+    lines belong to the old path, added lines to the new one. With a
+    `numbered` dict, each path also gets its (sign, line number, text) rows.
     """
     moved = {}
     for pair in moves:
@@ -776,6 +778,9 @@ def _between_lines(repo, before_revision, after_revision, entries, moves=()):
         _useful, added, removed = _patch_lines(patch)
         _add_line_data(data, removed_at, [], removed)
         _add_line_data(data, added_at, added, [])
+        if numbered is not None:
+            for sign, number, text in _numbered_lines(patch):
+                numbered.setdefault(removed_at if sign == "-" else added_at, []).append((sign, number, text))
     return data
 
 
@@ -1518,6 +1523,220 @@ def _line_count(line_data):
     return sum(len(added) + len(removed) for added, removed in line_data.values())
 
 
+# Explanation is not behaviour. Blank lines, comment-only lines and Python docstrings do not count toward
+# small_delta_lines when a fix round is sized (Aaron, 2026-10-12: a 77-line fix, about 35 of them logic, took the
+# full rung because docstrings and help text counted like code), and neither do the lines of a documentation file
+# (_is_wording: .md, .rst, ... that is not an agent instruction file). Only the SIZE changes: a fix of such lines is
+# still in a code file, so the rung stays tested or above (the SKILL's ladder), delta_triggers see every line,
+# and `change`'s own-read decision (no review at all) keeps counting every line: it has no file contents.
+#
+# Lowering a review must not rest on a guess, so a line is explanation only where the file's own syntax says
+# so, read from the file at the revision the line belongs to (the new one for an added line, the old one for a
+# removed one): Python is tokenized (a "#" inside a string is a string, a blank line inside a multi-line string is
+# content), C-like languages are scanned (comments, strings), and a file the scan cannot read to its end counts
+# whole. Every other language -- shell, YAML, Makefile, SQL, ... -- counts whole: a heredoc or a block scalar
+# makes its comment lines data. Strings are code: help text, log messages, prompts. So are a shebang and a
+# comment a tool reads (_TOOL_DIRECTIVE). A docstring the program reads at run time (_RUNTIME_DOC) is behaviour,
+# and the file's docstrings count.
+_C_LIKE_SUFFIXES = (".c", ".h", ".cc", ".cpp", ".cxx", ".hpp", ".hxx", ".java", ".js", ".mjs", ".cjs", ".ts", ".tsx",
+                    ".jsx", ".go", ".rs", ".kt", ".swift", ".scala", ".groovy")
+# a comment a tool reads: lint and type suppressions, formatter switches, encodings, build tags, parser directives
+_TOOL_DIRECTIVE = re.compile(
+    r"noqa|type:|pragma|pylint|nosec|shellcheck|fmt:|isort|mypy|coding[:=]|yapf|nolint|clang-format|eslint|"
+    r"prettier|istanbul|lgtm|go:|\+build|syntax=|escape=|@ts-|@flow|@jsx|sourceMappingURL|jshint|tslint",
+    re.IGNORECASE)
+# a file whose docstrings are read while it runs: __doc__, inspect.getdoc and cleandoc, help(), click and typer
+# help, docopt, doctest examples, pydoc, functools.wraps and update_wrapper (they copy the wrapped docstring)
+_RUNTIME_DOC = re.compile(r"__doc__|getdoc|cleandoc|update_wrapper|\bhelp\(|\b(?:click|typer|docopt|doctest|pydoc|wraps)\b")
+# string syntaxes the scanner does not read, whose lines may look like comments: Groovy dollar-slashy, C++ raw
+# strings, and a quote after "#" (Swift extended delimiters, Rust r#"..."#): a file holding one counts whole
+_RAW_STRING = re.compile(r'\$/|\b(?:u8|[uUL])?R"|#+"')
+
+
+def _lexer_of(path):
+    name = path.rsplit("/", 1)[-1]
+    if name.endswith(".py"):
+        return "py"
+    # Jenkinsfile and Jenkinsfile.<name> are Groovy pipelines
+    if name.endswith(_C_LIKE_SUFFIXES) or name.startswith("Jenkinsfile"):
+        return "c"
+    return None
+
+
+_HUNK_HEAD = re.compile(r"^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@")
+
+
+def _numbered_lines(patch):
+    """[(sign, line number, text)] of a --unified=0 patch: the number is in the old file for "-" and in the new
+    one for "+"."""
+    out, old, new, in_hunk = [], 0, 0, False
+    for raw in patch.split("\n"):
+        if raw.startswith("diff --git "):
+            in_hunk = False
+            continue
+        head = _HUNK_HEAD.match(raw)
+        if head:
+            in_hunk, old, new = True, int(head.group(1)), int(head.group(2))
+            continue
+        if not in_hunk or raw.startswith("\\ No newline"):
+            continue
+        if raw.startswith("+"):
+            out.append(("+", new, raw[1:]))
+            new += 1
+        elif raw.startswith("-"):
+            out.append(("-", old, raw[1:]))
+            old += 1
+    return out
+
+
+def _py_docstring_lines(source):
+    """Line numbers a docstring statement occupies ALONE (nothing else on its first or last line) in Python
+    `source`; empty when it does not parse."""
+    try:
+        tree = ast.parse(source)
+    except (SyntaxError, ValueError):
+        return set()
+    lines = source.split("\n")
+    found = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)) or not node.body:
+            continue
+        first = node.body[0]
+        if not (isinstance(first, ast.Expr) and isinstance(first.value, ast.Constant)
+                and isinstance(first.value.value, str)) or getattr(first, "end_lineno", None) is None:
+            continue
+        head, tail = lines[first.lineno - 1].encode("utf-8"), lines[first.end_lineno - 1].encode("utf-8")
+        if first.col_offset == len(head) - len(head.lstrip()) and first.end_col_offset == len(tail.rstrip()):
+            found.update(range(first.lineno, first.end_lineno + 1))
+    return found
+
+
+def _py_text_lines(source):
+    """The line numbers of Python `source` that are explanation: blank lines and comments that stand alone on
+    their line, both outside any string (a blank or "#" line inside a multi-line string is content), and the
+    docstrings alone on their lines (none of them when the file reads its docstrings at run time, _RUNTIME_DOC).
+    A shebang and a tool directive are code, and so is a line that follows a backslash continuation (it is part
+    of the logical line: removing it joins the neighbours). Empty when the source does not tokenize, or has a
+    lone carriage return (the line numbers would not agree)."""
+    import io
+    import tokenize
+    if "\r" in source.replace("\r\n", "\n"):
+        return set()
+    code, comments = set(), {}
+    try:
+        for token in tokenize.generate_tokens(io.StringIO(source).readline):
+            if token.type == tokenize.COMMENT:
+                if token.line[:token.start[1]].strip():
+                    code.add(token.start[0])                   # a trailing comment: the line is code
+                else:
+                    comments[token.start[0]] = token.string
+            elif token.type not in (tokenize.NL, tokenize.NEWLINE, tokenize.INDENT, tokenize.DEDENT,
+                                    tokenize.ENDMARKER, getattr(tokenize, "ENCODING", -1)):
+                code.update(range(token.start[0], token.end[0] + 1))
+    except (tokenize.TokenError, SyntaxError):
+        return set()
+    lines = source.split("\n")
+    count = len(lines) - 1 if source.endswith("\n") else len(lines)         # not the empty piece after the last "\n"
+    found = {number for number, text in comments.items()
+             if number not in code and not text.startswith("#!") and not _TOOL_DIRECTIVE.search(text)}
+    found.update(number for number in range(1, count + 1)
+                 if number not in code and number not in comments and not lines[number - 1].strip())
+    if not _RUNTIME_DOC.search(source):
+        found |= _py_docstring_lines(source)
+    # a line after a backslash joins the logical line (also when that line is itself a comment ending in one:
+    # counting it is the safe side)
+    return {number for number in found if number < 2 or not lines[number - 2].rstrip("\r").endswith("\\")}
+
+
+def _c_text_lines(source):
+    """The line numbers of C-like `source` that hold nothing but comments and whitespace (a tool directive such
+    as // NOLINT or //go:build is code). Empty when the scan meets what it does not read: a string that runs past
+    its line, a template literal (a backtick), a triple quote, a comment or string open at the end, or a block
+    comment that opens after code and runs on to a later line (a JavaScript regex such as /[/*]/ looks like one,
+    and the lines it would swallow are code), or a raw string (_RAW_STRING)."""
+    if _RAW_STRING.search(source):
+        return set()
+    lines = source.split("\n")
+    code = [False] * (len(lines) + 2)
+    commented = [False] * (len(lines) + 2)
+    state, quote, line, i, size = "code", "", 1, 0, len(source)
+    block_from, block_after_code = 0, False
+    while i < size:
+        char = source[i]
+        if char == "\n":
+            if state == "string":
+                return set()
+            if state == "line":
+                state = "code"
+            line += 1
+            i += 1
+            continue
+        if state == "line":
+            commented[line] = True
+        elif state == "block":
+            commented[line] = True
+            if source.startswith("*/", i):
+                if block_after_code and line != block_from:
+                    return set()
+                state = "code"
+                i += 1
+        elif state == "string":
+            code[line] = True
+            if char == "\\":
+                if source[i + 1:i + 2] in ("", "\n"):
+                    return set()
+                i += 1
+            elif char == quote:
+                state = "code"
+        elif source.startswith("//", i):
+            state, commented[line] = "line", True
+            i += 1
+        elif source.startswith("/*", i):
+            state, commented[line] = "block", True
+            block_from, block_after_code = line, code[line]
+            i += 1
+        elif char == "`" or source.startswith('"""', i) or source.startswith("'''", i):
+            return set()
+        elif char in "\"'":
+            state, quote, code[line] = "string", char, True
+        elif not char.isspace():
+            code[line] = True
+        i += 1
+    if state in ("block", "string"):
+        return set()
+    count = len(lines) - 1 if source.endswith("\n") else len(lines)         # not the empty piece after the last "\n"
+    return {number for number in range(1, count + 1)
+            if not code[number] and not (commented[number] and _TOOL_DIRECTIVE.search(lines[number - 1]))}
+
+
+def _sizing_lines(repo, before, after, line_data, numbered, documents=frozenset()):
+    """(counted, text): the lines of a delta that count toward small_delta_lines, and the lines of explanation
+    that do not (see the comment above _C_LIKE_SUFFIXES: each line is judged in the file at its own revision;
+    the lines of the paths in `documents` are all explanation). Anything that cannot be read counts."""
+    total = _line_count(line_data)
+    if sum(len(rows) for rows in numbered.values()) != total:      # the two views do not line up
+        text = sum(len(added) + len(removed) for path, (added, removed) in line_data.items() if path in documents)
+        return total - text, text
+    explanation, counted = {}, 0
+    for path, rows in numbered.items():
+        if path in documents:
+            continue
+        lexer = _lexer_of(path)
+        for sign, number, _text in rows:
+            if lexer is not None:
+                revision = after if sign == "+" else before
+                if (revision, path) not in explanation:
+                    try:
+                        source = _git(repo, "show", "%s:%s" % (revision, path))
+                        explanation[(revision, path)] = (_py_text_lines if lexer == "py" else _c_text_lines)(source)
+                    except InputError:
+                        explanation[(revision, path)] = set()
+                if number in explanation[(revision, path)]:
+                    continue
+            counted += 1
+    return counted, total - counted
+
+
 def triage_change(config, raw, path, number, query_json, include_wip, as_of=None):
     missing = [key for key in CHANGE_KEYS if key not in config]
     if missing:
@@ -1696,6 +1915,9 @@ def triage_change(config, raw, path, number, query_json, include_wip, as_of=None
     else:
         lenses, risk_floor, trigger_flags = _lenses_and_triggers(config, files, delta_line_data, fired)
         flags.extend(trigger_flags)
+    # own-read means NO review: it is held against every changed line, not only the logic ones (this view has no
+    # file contents to tell a comment from a string; see the comment above _C_LIKE_SUFFIXES)
+    total_lines = _line_count(delta_line_data)
     if owner_fix:
         review_legs, selected_lens = _review_legs({lens["class"] for lens in lenses}, config, risk_floor)
         legs = "roster"
@@ -1703,14 +1925,14 @@ def triage_change(config, raw, path, number, query_json, include_wip, as_of=None
     elif ps_kind in ("carry-over", "move-only"):
         legs, review_legs = "none", []
         _fired(fired, "legs", "no legs for carry-over or move-only")
-    elif prior and risk_floor != "HIGH" and _line_count(delta_line_data) <= config["small_delta_lines"]:
+    elif prior and risk_floor != "HIGH" and total_lines <= config["small_delta_lines"]:
         legs, review_legs = "own-read", []
-        _fired(fired, "legs", "small delta (%s lines) after my vote uses own-read" % _line_count(delta_line_data))
+        _fired(fired, "legs", "small delta (%s lines) after my vote uses own-read" % total_lines)
     else:
         review_legs, selected_lens = _review_legs({lens["class"] for lens in lenses}, config, risk_floor)
         legs = "roster"
         _fired(fired, "legs", "roster review legs selected (opencode %s; delta %s lines)"
-               % (selected_lens, _line_count(delta_line_data)))
+               % (selected_lens, total_lines))
     common.update({
         "ps_kind": ps_kind, "delta_files": files, "lenses": lenses, "risk_floor": risk_floor,
         "legs": legs, "review_legs": review_legs,
@@ -1884,7 +2106,20 @@ def fix_sizing(config, target, base, head, fix_of, *, evidence=None, blocker=Non
                rule raises the fix itself to HIGH.
 
     Documentation is the wording suffixes minus the agent instruction files,
-    or the rules file's wording_globs. ``fix_of`` must name the head of the
+    or the rules file's wording_globs.
+
+    The delta that small_delta_lines is held against is its BEHAVIOUR lines
+    (0.6.66, Aaron 2026-10-12): blank lines and comment-only lines of Python
+    and C-like files (Jenkinsfile* is read as Groovy; read with a tokenizer
+    and a scanner, in the file at the line's own revision), Python docstrings
+    and the lines of documentation files are explanation and are reported
+    apart as ``delta_text_lines``; ``delta_lines`` is the counted rest.
+    Strings, a shebang, a comment a tool reads, a line right after a
+    backslash continuation, a docstring the program reads at run time, every other file kind
+    and anything that cannot be read (a scan that gives up, a file git cannot
+    show, a diff whose lines do not line up with the numbered rows: only the
+    documentation lines are still left out) count whole. Only the size
+    changes, not the rungs. ``fix_of`` must name the head of the
     latest round recorded since the change's first reviewed head (the root).
     From the third fix round on, a full round needs ``blocker``: after two
     fix rounds non-blocker findings are fixed under the lower rungs or
@@ -1931,9 +2166,14 @@ def fix_sizing(config, target, base, head, fix_of, *, evidence=None, blocker=Non
     current_entries = _diff_entries(repo, base, head)
     delta_entries, pairs = _delta(previous_entries, current_entries)
     moves, _only_moves = _tree_renames(repo, reviewed, head, delta_entries)
-    delta_lines = _between_lines(repo, reviewed, head, delta_entries, moves)
+    numbered = {}
+    delta_lines = _between_lines(repo, reviewed, head, delta_entries, moves, numbered)
     delta_files = sorted({path for entry in delta_entries for path in _paths_for(entry)})
-    delta_count = _line_count(delta_lines)
+    documents = {path for path in delta_lines if _is_wording(config, path)}
+    delta_count, text_count = _sizing_lines(repo, reviewed, head, delta_lines, numbered, documents)
+    counted_text = ("%d line%s" % (delta_count, "" if delta_count == 1 else "s")
+                    + (" (+%d of comment, docstring, blank or documentation lines, not counted)" % text_count
+                       if text_count else ""))
     # Only a trigger may lift the fix to the full rung here: a risk_default of
     # MEDIUM or HIGH is the range's floor, already in range_min.
     _lenses, raised, _flags = _lenses_and_triggers(dict(config, risk_default="LOW"), delta_files,
@@ -1960,13 +2200,13 @@ def fix_sizing(config, target, base, head, fix_of, *, evidence=None, blocker=Non
         rung, why = "wording", ("only the commit message changed" if not delta_files
                                 else "every changed path is documentation")
     elif delta_count <= config["small_delta_lines"] and evidence:
-        rung, why = "tested", "%s lines, within small_delta_lines=%s, with tests and killed mutations stated" % (
-            delta_count, config["small_delta_lines"])
+        rung, why = "tested", "%s, within small_delta_lines=%s, with tests and killed mutations stated" % (
+            counted_text, config["small_delta_lines"])
     elif delta_count <= config["small_delta_lines"]:
-        rung, why = "full", ("%s lines is small, but no --fix-tested evidence was given; with it this fix "
-                             "takes one leg" % delta_count)
+        rung, why = "full", ("%s is small, but no --fix-tested evidence was given; with it this fix "
+                             "takes one leg" % counted_text)
     else:
-        rung, why = "full", "%s lines exceeds small_delta_lines=%s" % (delta_count, config["small_delta_lines"])
+        rung, why = "full", "%s exceeds small_delta_lines=%s" % (counted_text, config["small_delta_lines"])
     if rung == "full" and round_number >= CONVERGENCE_ROUND and not blocker:
         raise InputError(
             "triage scope: fix round %d: after two fix rounds a full round opens only for a blocker (%s). "
@@ -1982,7 +2222,7 @@ def fix_sizing(config, target, base, head, fix_of, *, evidence=None, blocker=Non
            % (round_number, reviewed[:12], rung, why, minimum))
     return {
         "of": reviewed, "root": root, "round": round_number, "rung": rung, "why": why,
-        "delta_files": delta_files, "delta_lines": delta_count,
+        "delta_files": delta_files, "delta_lines": delta_count, "delta_text_lines": text_count,
         "evidence": evidence or None, "blocker": blocker or None,
         "range_min_review_legs": range_min,
     }, minimum
