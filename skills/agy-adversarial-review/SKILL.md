@@ -53,7 +53,8 @@ git worktree.** Measured (2026-08-26): `freeze-target.sh` creates a worktree,
 whose `.git` is a one-line pointer FILE into the main repo's `.git/worktrees/`
 — which sits outside `--add-dir`. agy's first `read_file` on that pointer is
 auto-denied (`permission check failed for read_file ".../.git"`) and the whole
-run dies with that single line as its output. Every other family in this
+run dies with that single line as its output (no agy version was recorded; 1.4.2
+fails differently, see the note below). Every other family in this
 suite reads worktrees fine; agy's sandbox is the one that cannot. Freeze for
 agy with a local clone instead, then verify and bracket exactly as the helper
 flow would.

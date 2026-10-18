@@ -222,7 +222,8 @@ if a == "agy" and role == "review" and os.environ.get("TARGET") \
     sys.exit("leg-cmd: --target %s is a git worktree (its .git is a pointer file outside "
              "the directories agy may read), so agy cannot run git there.\n"
              "  freeze a self-contained clone instead: "
-             "freeze-target.sh <repo> <sha> <dest> --clone" % os.environ["TARGET"])
+             "%s <repo> <sha> <dest> --clone"
+             % (os.environ["TARGET"], os.path.join(os.environ["HERE"], "freeze-target.sh")))
 for flag, ph in (("target", "{TARGET}"), ("base", "{BASE}"),
                  ("prompt-file", "{PROMPT_FILE}")):
     val = os.environ.get(flag.replace("-", "_").upper(), "")

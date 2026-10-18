@@ -274,6 +274,9 @@ the worktree rather than the home directory:
 "write_file(/abs/path/to/worktree/**)"
 ```
 
+(agy 1.4.2 with `--sandbox` rejects a `**` glob rule for `run_command`; see "agy 1.4.2: why a leg
+returns an empty answer" below before using these forms there.)
+
 **Scope the READ rule to every directory the role will ever see, not to
 today's one.** A review role reads a FROZEN target, and freezing creates a new
 directory each round — so a rule naming one worktree works until the first
@@ -518,7 +521,7 @@ step, one fixed read-only prompt, run in parallel against a `freeze-target.sh` w
 |---|---|
 | one tool call auto-denied (`ls -la`, or a `git` command without its allow rule) | the whole answer is **empty**: result `status: SUCCESS`, `response: ""`, `denied_actions: [{action: command}]`, exit 0. stderr carries one line, `jetski: no output produced — a tool required the "command" permission that headless mode cannot prompt for …`; stdout is empty |
 | `git log` with only `unsandboxed(git log)` allowed | denied, answer empty (as above). Allowed with `command(git log)` **and** `unsandboxed(git log)` together; whether `command(...)` alone is enough was not tested |
-| a `read_file(<dir>/**)` allow rule together with `--sandbox` | every `run_command` fails with `sandbox configuration error: readonly <dir>/**: globs not supported`. A tool error, not a denial: the answer survives, but its git steps are lost. A directory already given with `--add-dir` needs no `read_file` rule: `view_file` on it worked with none |
+| a `read_file(<dir>/**)` allow rule together with `--sandbox` (measured in the review profile; `write_file` globs and the implement role were not tried) | every `run_command` fails with `sandbox configuration error: readonly <dir>/**: globs not supported`. A tool error, not a denial: the answer survives, but its git steps are lost. A directory already given with `--add-dir` needs no `read_file` rule: `view_file` on it worked with none |
 | `git log` / `git show` in a **worktree** target | `fatal: not a git repository: <main repo>/.git/worktrees/<name>`: the target's `.git` is a pointer file to a directory outside `--add-dir`. A model that goes on to read that path is denied, which empties the answer |
 | the same commands in a **clone** target | work: `.git` is a directory inside `--add-dir` |
 

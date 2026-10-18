@@ -8691,24 +8691,35 @@ def test_freeze_clone(tmp):
           r.returncode != 0 and "alternates" in r.stderr, r.stdout + r.stderr)
     check("freeze --clone: ...and nothing is left behind", not dest4.exists())
 
-    # The user's own git config must not run anything in the frozen tree: a template hook
-    # (init.templateDir) and a global hooks path both fire on `git checkout`.
-    tpl_hooks, glob_hooks = tmp / "clone-tpl" / "hooks", tmp / "clone-hooks"
-    tpl_hooks.mkdir(parents=True)
-    glob_hooks.mkdir()
-    for hook_dir, marker in ((tpl_hooks, "TEMPLATE-HOOK-RAN"), (glob_hooks, "GLOBAL-HOOK-RAN")):
-        hook = hook_dir / "post-checkout"
+    # The user's own git config must not run anything in the frozen tree. Two sources, two
+    # configs, so that each marker can only come from its own source: a template hook
+    # (init.templateDir, copied into the clone's .git/hooks) and a global hooks path. With both
+    # set at once the hooks path shadows .git/hooks and the template marker could never appear.
+    def hook_dir(name, marker):
+        d = tmp / name
+        (d / "hooks").mkdir(parents=True)
+        hook = d / "hooks" / "post-checkout"
         hook.write_text("#!/bin/sh\ntouch '%s'\n" % (tmp / marker))
         hook.chmod(0o755)
-    hconf = tmp / "clone-hook-gitconfig"
-    hconf.write_text("[init]\n\ttemplateDir = %s\n[core]\n\thooksPath = %s\n" % (tmp / "clone-tpl", glob_hooks))
-    dest5 = tmp / "clone-hooks-off"
-    r = run(freeze, repo, "HEAD", dest5, "--clone", env=dict(os.environ, GIT_CONFIG_GLOBAL=str(hconf)))
-    check("freeze --clone: succeeds under a global template and hooks path", r.returncode == 0, r.stdout + r.stderr)
+        return d
+
+    tpl = hook_dir("clone-tpl", "TEMPLATE-HOOK-RAN")
+    tconf = tmp / "clone-template-gitconfig"
+    tconf.write_text("[init]\n\ttemplateDir = %s\n" % tpl)
+    dest5 = tmp / "clone-template-off"
+    r = run(freeze, repo, "HEAD", dest5, "--clone", env=dict(os.environ, GIT_CONFIG_GLOBAL=str(tconf)))
+    check("freeze --clone: succeeds under a global template dir", r.returncode == 0, r.stdout + r.stderr)
     check("freeze --clone: the template's hook was not copied into the clone",
           not (dest5 / ".git" / "hooks" / "post-checkout").exists())
-    check("freeze --clone: no template hook ran", not (tmp / "TEMPLATE-HOOK-RAN").exists())
-    check("freeze --clone: no global-hooks-path hook ran", not (tmp / "GLOBAL-HOOK-RAN").exists())
+    check("freeze --clone: ...and no template hook ran", not (tmp / "TEMPLATE-HOOK-RAN").exists())
+
+    ghooks = hook_dir("clone-global", "GLOBAL-HOOK-RAN")
+    gconf2 = tmp / "clone-hookspath-gitconfig"
+    gconf2.write_text("[core]\n\thooksPath = %s\n" % (ghooks / "hooks"))
+    dest5b = tmp / "clone-hookspath-off"
+    r = run(freeze, repo, "HEAD", dest5b, "--clone", env=dict(os.environ, GIT_CONFIG_GLOBAL=str(gconf2)))
+    check("freeze --clone: succeeds under a global hooks path", r.returncode == 0, r.stdout + r.stderr)
+    check("freeze --clone: ...and no global-hooks-path hook ran", not (tmp / "GLOBAL-HOOK-RAN").exists())
 
     # A `git clone` that fails after the destination was made leaves nothing behind.
     shim = tmp / "clone-fail-bin"
@@ -8775,6 +8786,8 @@ def test_agy_review_refuses_worktree_target(tmp):
     check("agy guard: a worktree target is refused before launch",
           got.returncode != 0 and not got.stdout.strip() and "git worktree" in got.stderr, got.stdout + got.stderr)
     check("agy guard: ...and the message names the fix", "--clone" in got.stderr, got.stderr)
+    check("agy guard: ...as a path that runs from any cwd (the suite's own freeze-target.sh)",
+          str(SCRIPTS / "freeze-target.sh") in got.stderr, got.stderr)
     got = leg("agy", "gemini-3.8-flash-medium", cl)
     check("agy guard: a clone target launches", got.returncode == 0 and got.stdout.strip(), got.stdout + got.stderr)
     got = leg("opencode", "opencode/x", wt, "--effort", "high")
