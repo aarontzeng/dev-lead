@@ -98,8 +98,10 @@ What the probes established:
   file and answered. Probe it with opencode, never with curl.
 - **Gemma is Google's** and counts as Gemini ([families.json](../../../data/families.json)): it
   cannot fill a missing Gemini leg as another family. Both were
-  rate-limited upstream all morning, so no Gemini route through opencode is
-  measured working here, and the opencode adapter does not list Gemini.
+  rate-limited upstream all morning, so no Gemini route through opencode was
+  measured working on 2026-10-10; the adapter did not list Gemini then.
+  **Update 2026-10-18:** Go Argon passed a real tool probe and Gemini is now
+  registered for opencode; see [the Go Gemini route](#opencode-go-gemini-route-2026-10-18).
 - **A credit balance near zero did not stop the free models -- one
   observation, not a guarantee.** On 2026-10-10 the account had $0.13 left of
   $20 bought (`/api/v1/credits`), and the free calls that answered did so on
