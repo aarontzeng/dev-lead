@@ -83,6 +83,10 @@ if [ "$mode" = clone ]; then
   # on its own it is check-then-act (a concurrent freeze to the same path passes it too).
   mkdir -p -- "$(dirname -- "$dest")" && mkdir -- "$dest" \
     || die "cannot create $dest (nothing was removed: the path may belong to someone else)"
+  # git removes a directory it created itself when interrupted, but leaves one that already
+  # existed, so the interrupted freeze would leave an empty target and the retry would say
+  # "already exists" (measured with SIGINT mid-clone). Same cleanup as any other refusal.
+  trap 'refuse "interrupted by a signal"' INT TERM HUP
   # --template= and core.hooksPath off: the user's init.templateDir / global hooks must not run
   # in, or write into, a tree whose point is to be exactly the commit.
   git clone --quiet --template= --local --no-hardlinks --no-checkout -- "$repo" "$dest" >/dev/null \
@@ -118,6 +122,7 @@ dirty=$(printf '%s\n' "$status" | "$here/renorm-only.sh" --filter "$dest") \
 [ -z "$dirty" ] \
   || refuse "freshly created $mode is not clean -- refusing to call it frozen:
 $dirty"
+trap - INT TERM HUP
 # From here on only output remains. SIGPIPE ignored so a closed stdout or
 # stderr is an EPIPE error the lines below handle, not a silent kill that
 # skips cleanup (review, 2026-09-22).

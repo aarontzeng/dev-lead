@@ -10,6 +10,7 @@ import json
 import os
 import shlex
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -8720,6 +8721,26 @@ def test_freeze_clone(tmp):
     check("freeze --clone: a failing git clone is reported", r.returncode != 0 and "git clone failed" in r.stderr,
           r.stdout + r.stderr)
     check("freeze --clone: ...and the directory made for it is removed again", not dest6.exists())
+
+    # An interrupt while the clone runs removes the directory this run made (git itself leaves
+    # a pre-existing one behind). The shim announces itself, idles, then exits 0 so that only
+    # the signal trap, not the failed-clone path, can account for "interrupted".
+    marker = tmp / "clone-started"
+    (shim / "git").write_text('#!/bin/sh\nfor a in "$@"; do [ "$a" = clone ] && { touch %s; sleep 2; exit 0; }; done\nexec %s "$@"\n' % (marker, real_git))
+    dest7 = tmp / "clone-interrupted"
+    proc = subprocess.Popen([str(freeze), str(repo), "HEAD", str(dest7), "--clone"], stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE, text=True,
+                            env=dict(os.environ, PATH=str(shim) + os.pathsep + os.environ["PATH"]))
+    for _ in range(100):
+        if marker.exists():
+            break
+        time.sleep(0.1)
+    check("freeze --clone: fixture reached the clone step", marker.exists())
+    proc.send_signal(signal.SIGTERM)
+    _out, _err = proc.communicate(timeout=60)
+    check("freeze --clone: a SIGTERM during the clone ends the freeze as a refusal",
+          proc.returncode != 0 and "interrupted" in _err, "rc=%s err=%r" % (proc.returncode, _err))
+    check("freeze --clone: ...and the directory made for it is removed", not dest7.exists())
 
     # A destination whose parent cannot be created is refused without removing what is there.
     blocker = tmp / "clone-parent-is-a-file"
