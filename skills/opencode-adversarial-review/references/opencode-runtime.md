@@ -633,6 +633,24 @@ preconditions travel with it that did NOT apply to the old default:
 Family accounting is unchanged: Nemotron is NVIDIA, so the leg still counts as
 cross-family against GPT, Gemini and Claude on either route.
 
+## OpenCode Go Gemini route (2026-10-18)
+
+`opencode-go/gemini-4-argon-contributor` is a **Gemini** route, not a new
+family alongside agy Gemini or `google/*` Gemini. The CLI 1.19.3 catalogue
+lists `low`, `medium`, and `high`; pass one explicitly, not `xhigh` from
+another model's roster. A real `--variant high` probe read a public marker
+file and ran `git rev-parse --short HEAD`, returning both correctly. This
+establishes reachability and basic tool use; it does not establish
+implementation or review quality.
+
+[`families.json`](../../../data/families.json) now permits Gemini through the opencode adapter, so an
+explicit per-run model override can validate without relabelling it unknown.
+It does not change anyone's roster or the cross-family collision check.
+Contributor prompts/completions may train future Google models (Not ZDR);
+use only a screened eligible target. The live Aequa tree includes a private
+broker workbook, so this probe/trial used an isolated public-source subset
+without its history or credentials; do not hand the complete repo to it.
+
 ## `--variant` is write-only: unverifiable, and an invalid value is not refused
 
 Measured 2026-09-15, six arms, `openrouter/nvidia/nemotron-3.5-lightning:free`
