@@ -274,6 +274,9 @@ the worktree rather than the home directory:
 "write_file(/abs/path/to/worktree/**)"
 ```
 
+(agy 1.4.2 with `--sandbox` rejects a `**` glob rule for `run_command`; see "agy 1.4.2: why a leg
+returns an empty answer" below before using these forms there.)
+
 **Scope the READ rule to every directory the role will ever see, not to
 today's one.** A review role reads a FROZEN target, and freezing creates a new
 directory each round — so a rule naming one worktree works until the first
@@ -284,7 +287,8 @@ read_file permission" after the naming changed. The intermittency is the trap;
 a rule that never worked is easier to diagnose than one that stops.
 
 A sibling glob over the repo family covers it — `read_file(/abs/path/repo-*/**)`
-— and note that WRITE should stay narrow. A review role has no reason to write
+(but on agy 1.4.2 with `--sandbox` a `**` glob breaks `run_command`; see the
+2026-10-18 section below) — and note that WRITE should stay narrow. A review role has no reason to write
 anywhere, and widening both together silently hands the read fix to the write
 rule as well.
 
@@ -505,6 +509,34 @@ Catalogue facts to re-verify on YOUR account (all measured on at least one):
 - A new flash generation is a calibration point, not an automatic reason to
   retire an older tier or change the review gate. Compare local verified
   outcomes after the first runs, not release branding or prose style.
+
+## agy 1.4.2: why a leg returns an empty answer (measured 2026-10-18)
+
+All rows are agy 1.4.2, a review-only profile (the `HOME` profile above), `--mode plan
+--sandbox --add-dir <target> --add-dir <evidence>`, `--output-format stream-json` to see each
+step, one fixed read-only prompt, run in parallel against a `freeze-target.sh` worktree and a
+`--clone` of the same SHA. Re-measure on another version before relying on a row.
+
+| probe | result |
+|---|---|
+| one tool call auto-denied (`ls -la`, or a `git` command without its allow rule) | the whole answer is **empty**: result `status: SUCCESS`, `response: ""`, `denied_actions: [{action: command}]`, exit 0. stderr carries one line, `jetski: no output produced — a tool required the "command" permission that headless mode cannot prompt for …`; stdout is empty |
+| `git log` with only `unsandboxed(git log)` allowed | denied, answer empty (as above). Allowed with `command(git log)` **and** `unsandboxed(git log)` together; whether `command(...)` alone is enough was not tested |
+| a `read_file(<dir>/**)` allow rule together with `--sandbox` (measured in the review profile; `write_file` globs and the implement role were not tried) | every `run_command` fails with `sandbox configuration error: readonly <dir>/**: globs not supported`. A tool error, not a denial: the answer survives, but its git steps are lost. A directory already given with `--add-dir` needs no `read_file` rule: `view_file` on it worked with none |
+| `git log` / `git show` in a **worktree** target | `fatal: not a git repository: <main repo>/.git/worktrees/<name>`: the target's `.git` is a pointer file to a directory outside `--add-dir`. A model that goes on to read that path is denied, which empties the answer |
+| the same commands in a **clone** target | work: `.git` is a directory inside `--add-dir` |
+
+What to do with it:
+
+- **An empty answer is a failed leg, never "no findings".** Capture the leg with `2>&1` so the
+  `jetski:` line lands in the log; `leg-log-check.sh agy <log>` fails a log that holds that line and
+  no verdict, naming the line as the cause, and fails a completely empty log too (0.6.68). In stream-json the same event is `denied_actions` on the result.
+- **Freeze an agy review target with `freeze-target.sh <repo> <sha> <dest> --clone`.** `leg-cmd.sh`
+  refuses an agy review whose `--target` is a worktree (its `.git` is a file).
+- **Do not put `**` globs in `permissions.allow` for a `--sandbox` run** (the sibling-glob advice
+  above predates this). Review legs framed with the evidence pack do not need git, but the model
+  tries it, and a glob turns each try into an error.
+- This is one account's observation of one CLI version. The 2026-09-15 note in the skill (a worktree
+  target that ran clean) names no agy version, so the two do not contradict each other.
 
 ## Long briefs time out; a short read list does not (measured 2026-09-23)
 

@@ -636,6 +636,12 @@ two rounds and would have run a third on no principle at all.
    "$DEV_LEAD/scripts/verify-target.sh" "$FROZEN_DIR" "$REVIEW_HEAD"   # before AND after
    ```
 
+   **An agy leg needs a self-contained clone, not the worktree:** add `--clone` as
+   the fourth argument (`"$DEV_LEAD/scripts/freeze-target.sh" "$REPO" "$SHA" "$FROZEN_DIR" --clone`).
+   A worktree's `.git` is a pointer file outside the directories agy may read,
+   and `leg-cmd.sh agy review` refuses such a target. Every other adapter reads
+   the default worktree. Tear a clone down with `rm -rf`, not `git worktree remove`.
+
    **Triage the immutable target before launching every review round,
    including fix rounds.** Run
    `"$DEV_LEAD/scripts/triage.py" scope --base "$BASE" --target "$FROZEN_DIR"`
