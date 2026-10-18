@@ -58,64 +58,41 @@ suite reads worktrees fine; agy's sandbox is the one that cannot. Freeze for
 agy with a local clone instead, then verify and bracket exactly as the helper
 flow would.
 
-> [!note] That rule did not reproduce on 2026-09-15, and the original record is
-> missing the field that would settle it.
+> [!note] The 2026-09-15 non-reproduction, and what 2026-10-18 added.
 >
-> A four-leg round that day ran the agy leg against a `freeze-target.sh`
-> WORKTREE on the first host — `.git` a 79-byte pointer file, exactly the shape above —
-> and the leg completed normally: 15 KB of report, an evidence table with line
-> counts and verbatim last lines for seven files, and **zero** occurrences of
-> `permission check failed`, `auto-denied`, or any `.git` read in its log.
+> A four-leg round on 2026-09-15 ran the agy leg against a `freeze-target.sh`
+> WORKTREE (`.git` a 79-byte pointer file) and it completed normally, with no
+> `permission check failed` and no `.git` read in its log. The 2026-08-26 record
+> and that one both name no agy version, so they could not be reconciled.
 >
-> Settings do not explain the difference, and this is the part that makes it
-> worth recording: the first host is STRICTER on the axis that would matter — its
-> `toolPermission` key is absent (deny by default) and `read_file` is scoped to
-> one project glob, so a `.git` pointer read should have been denied there.
-> It was never attempted. If the mechanism above still held, that leg should
-> have died; it did not.
->
-> The remaining variable is the agy version at the time of the original
-> measurement, and **the 2026-08-26 entry does not state one** — so there is no
-> way to tell "the behaviour changed" from "it was never general". Treat that
-> as the lesson for this file: a measurement record of a CLI's behaviour needs
-> the version it was taken on, or it cannot be retired later.
->
-> The clone remains the documented path until someone deliberately tests this.
-> One counter-observation, from a run set up for something else, is not a
-> decision. What it does mean is that anyone paying the cost of a full clone
-> per review has grounds to check whether they still need to.
+> On **agy 1.4.2** (2026-10-18) the same probe against a worktree and a clone of
+> one SHA settled it for that version: in the worktree every `git` call failed
+> with `fatal: not a git repository: <main repo>/.git/worktrees/<name>`, in the
+> clone they worked
+> ([agy-runtime.md](references/agy-runtime.md#agy-142-why-a-leg-returns-an-empty-answer-measured-2026-10-18)).
+> The lesson stands: a measurement of a CLI's behaviour needs the version it was
+> taken on.
 
-Then:
+Freeze it with the helper's `--clone` mode (the `freeze-target.sh` call in
+[dev-lead Phase 2](../dev-lead/SKILL.md) with `--clone` appended as a fourth
+argument), then verify and bracket exactly as the worktree flow does:
 
 ```bash
-git clone --quiet "$REPO" "$REVIEW_TARGET_DIR"
-git -C "$REVIEW_TARGET_DIR" checkout --quiet "$SHA"
-[ "$(git -C "$REVIEW_TARGET_DIR" rev-parse HEAD)" = "$SHA" ] || exit 1
-[ -z "$(git -C "$REVIEW_TARGET_DIR" status --porcelain=v1)" ] || exit 1
+freeze-target.sh <repo> <sha> "$REVIEW_TARGET_DIR" --clone   # prints the SHA: REVIEW_HEAD
+verify-target.sh "$REVIEW_TARGET_DIR" "$REVIEW_HEAD"          # before AND after
 ```
 
-A clone's `.git` is a real directory inside `--add-dir`, so nothing escapes
-the sandbox. The same before/after HEAD + porcelain bracket still applies.
+`--clone` is `git clone --local --no-hardlinks --no-checkout` and a detached
+checkout of the SHA, verified clean the same way. The clone's `.git` is a real
+directory inside `--add-dir`, so nothing escapes the sandbox, and no inode is
+shared with the source repo, so making the target read-only cannot touch it.
+Tear it down with `rm -rf` (`chmod -R u+w` first if it was made read-only), not
+`git worktree remove`. `leg-cmd.sh agy review` refuses a worktree `--target`.
 
-**One guarantee on this path is not ours, and nothing here used to say so.**
-The bracket proves the target did not CHANGE; it cannot prove the target is the
-one this round created. What prevents a half-deleted leftover from being
-adopted as a fresh frozen target is a refusal — and the refusal lives in a
-different place on each path:
-
-| freeze path | what refuses a polluted destination |
-|---|---|
-| `freeze-target.sh` (worktree) | its own check: `destination already exists … (refusing to touch it)`, rc 1 |
-| the clone above | **`git clone` itself**: `destination path … already exists and is not an empty directory`, rc 128 |
-| the before/after bracket | nothing — it compares the target to itself |
-
-The second row is the one to notice: that guarantee is git's behaviour, not
-this suite's. No test here covers it, no review would flag its loss, and
-rewriting the line as `git init && git fetch` — a reasonable-looking change for
-a shallow or sparse setup — removes it while every bracket keeps passing.
-If you change how the target is created, re-establish the refusal explicitly.
-(Raised and measured by a session whose agy targets are clones, 2026-09-15;
-both refusals confirmed, both leaving the leftover untouched.)
+The refusal of a polluted destination is the helper's own check on both paths
+(`destination already exists … (refusing to touch it)`, rc 1) and the clone
+leaves an existing destination untouched; the before/after bracket proves the
+target did not CHANGE, not that it is the one this round created.
 
 ## Run it
 

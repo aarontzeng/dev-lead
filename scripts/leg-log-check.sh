@@ -109,7 +109,11 @@ if adapter == "cursor":
 REFUSAL = {
     "opencode": (r"^Error: The user rejected permission to use this specific tool call",
                  r"permission requested: .*; auto-rejecting\s*$"),
-    "agy": (r"^permission check failed for (command|unsandboxed)",),
+    # agy 1.4.2 writes the second line to STDERR when a headless run had a tool call
+    # auto-denied: the whole answer is then empty (response "", status SUCCESS,
+    # exit 0), so this line is the only trace in a log captured with 2>&1.
+    "agy": (r"^permission check failed for (command|unsandboxed)",
+            r"^jetski: no output produced"),
 }
 refused = None
 for pat in REFUSAL.get(adapter, ()):

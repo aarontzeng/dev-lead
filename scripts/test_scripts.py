@@ -2764,6 +2764,13 @@ def test_leg_cmd():
     os.environ.update(gate_env)
     # opencode review is framed since 0.6.30: every render names base and target.
     gate_target = str(SCRIPTS.parent)
+    if (SCRIPTS.parent / ".git").is_file():
+        # The suite is running from a git WORKTREE checkout. leg-cmd.sh refuses an agy
+        # review whose target is a worktree, so render against a clone of the same HEAD.
+        _clone = gate_home / "gate-clone"
+        _made = run(SCRIPTS / "freeze-target.sh", SCRIPTS.parent, gate_head, _clone, "--clone")
+        check("leg-cmd: fixture clone of the worktree checkout", _made.returncode == 0, _made.stderr)
+        gate_target = str(_clone)
     OC = ["--base", "abc", "--target", gate_target, "--no-triage", "test fixture", "--head", "HEAD"]
     check("leg-cmd: script exists", script.is_file())
     if not script.is_file():
@@ -2846,7 +2853,7 @@ def test_leg_cmd():
     hostile_parent = gate_home / 'a";touch ' / "tmp"
     hostile_parent.mkdir(parents=True)
     hostile_target = hostile_parent / 'PWNED;"b'
-    hostile_target.symlink_to(SCRIPTS.parent, target_is_directory=True)
+    hostile_target.symlink_to(gate_target, target_is_directory=True)
     for argv, needle in (
         (["cursor", "review", "--model", "x`id`y"], "'x`id`y'"),
         (["agy", "review", "--model", "gemini-3.8-flash-medium", "--base", "abc",
@@ -8598,6 +8605,122 @@ def test_freeze_refusal_cleans_up(tmp):
     check("freeze: ...and leaves the other registration alone", str(other) in listed, listed)
 
 
+def test_freeze_clone(tmp):
+    """freeze-target.sh --clone (agy 1.4.2, measured 2026-10-18): agy runs git sandboxed
+    inside --add-dir, and a worktree's .git is a pointer file OUTSIDE it, so every git call
+    of the review failed with "not a git repository". The clone's .git is a real
+    directory inside the target."""
+    freeze, verify = SCRIPTS / "freeze-target.sh", SCRIPTS / "verify-target.sh"
+    repo = tmp / "clone-src"
+    shas = make_repo(repo, commits=2)
+    sha = git(repo, "rev-parse", "HEAD").stdout.strip()
+    dest = tmp / "clone-frozen"
+    r = run(freeze, repo, "HEAD", dest, "--clone")
+    check("freeze --clone: succeeds and prints the resolved SHA", r.returncode == 0 and r.stdout.strip() == sha,
+          r.stdout + r.stderr)
+    check("freeze --clone: .git is a directory inside the target (not a pointer file)", (dest / ".git").is_dir())
+    check("freeze --clone: the objects do not point back out (no alternates)",
+          not (dest / ".git" / "objects" / "info" / "alternates").exists())
+    check("freeze --clone: HEAD is the SHA, detached",
+          git(dest, "rev-parse", "HEAD").stdout.strip() == sha
+          and run("git", "-C", dest, "symbolic-ref", "-q", "HEAD").returncode != 0)
+    check("freeze --clone: git history is readable inside the clone",
+          len(git(dest, "log", "--oneline").stdout.strip().splitlines()) == 2)
+    listed = git(repo, "worktree", "list", "--porcelain").stdout
+    check("freeze --clone: nothing is registered in the source repo's worktree list", str(dest) not in listed, listed)
+    # No inode shared with the source: a later chmod -R a-w on the target must not reach the repo.
+    loose = next((p for p in (repo / ".git" / "objects").glob("??/*") if p.is_file()), None)
+    check("freeze --clone: fixture has a loose object to compare", loose is not None)
+    if loose is not None:
+        twin = dest / ".git" / "objects" / loose.parent.name / loose.name
+        check("freeze --clone: ...and the clone does not hardlink the source's objects",
+              twin.exists() and os.stat(twin).st_ino != os.stat(loose).st_ino)
+    r = run(verify, dest, sha)
+    check("freeze --clone: verify-target.sh accepts the clone", r.returncode == 0, r.stdout + r.stderr)
+
+    # a commit no ref of the source reaches (a detached HEAD's) is still frozen
+    git(repo, "checkout", "-q", "--detach")
+    git(repo, "commit", "-q", "--allow-empty", "-m", "orphan")
+    orphan = git(repo, "rev-parse", "HEAD").stdout.strip()
+    git(repo, "checkout", "-q", "-")
+    dest2 = tmp / "clone-orphan"
+    r = run(freeze, repo, orphan, dest2, "--clone")
+    check("freeze --clone: a commit on no ref is fetched into the clone",
+          r.returncode == 0 and r.stdout.strip() == orphan and git(dest2, "rev-parse", "HEAD").stdout.strip() == orphan,
+          r.stdout + r.stderr)
+
+    r = run(freeze, repo, "HEAD", dest, "--clone")
+    check("freeze --clone: an existing destination is refused", r.returncode != 0 and "already exists" in r.stderr,
+          r.stderr)
+    check("freeze --clone: ...and left alone", (dest / ".git").is_dir() and git(dest, "rev-parse", "HEAD").stdout.strip() == sha)
+    r = run(freeze, repo, "HEAD", tmp / "clone-bad-flag", "--bogus")
+    check("freeze: an unknown fourth argument is refused", r.returncode != 0 and "--clone" in r.stderr, r.stderr)
+    check("freeze: ...and creates nothing", not (tmp / "clone-bad-flag").exists())
+    r = run(freeze, repo, "HEAD", tmp / "wt-default")
+    check("freeze: without --clone it is still a worktree (.git is a file)",
+          r.returncode == 0 and (tmp / "wt-default" / ".git").is_file(), r.stdout + r.stderr)
+
+    # A fresh clone that is dirty for real is refused and REMOVED. The source repo's own filter
+    # config is not inherited by a clone, so the smudge filter comes from a global config.
+    dirty = tmp / "clone-dirty-src"
+    dirty.mkdir()
+    git(dirty, "init", "-q")
+    git(dirty, "config", "user.email", "test@example.invalid")
+    git(dirty, "config", "user.name", "Test")
+    (dirty / "f.txt").write_text("a\n")
+    (dirty / ".gitattributes").write_text("f.txt filter=mangle\n")
+    git(dirty, "add", "-A")
+    git(dirty, "commit", "-qm", "c")
+    gconf = tmp / "clone-gitconfig"
+    gconf.write_text('[filter "mangle"]\n\tsmudge = sed s/a/b/\n\tclean = cat\n')
+    env = dict(os.environ, GIT_CONFIG_GLOBAL=str(gconf))
+    dest3 = tmp / "clone-dirty"
+    r = run(freeze, dirty, "HEAD", dest3, "--clone", env=env)
+    check("freeze --clone: a really dirty fresh clone is refused", r.returncode != 0 and "f.txt" in r.stderr,
+          r.stdout + r.stderr)
+    check("freeze --clone: ...and the refused clone is gone from disk", not dest3.exists())
+
+    # A source that borrows its objects (git clone --shared) hands its alternates link to the
+    # clone, which would then read objects from outside the target: refused and removed.
+    borrower = tmp / "clone-borrower"
+    run("git", "clone", "-q", "--shared", str(repo), str(borrower), check=True)
+    dest4 = tmp / "clone-of-borrower"
+    r = run(freeze, borrower, "HEAD", dest4, "--clone")
+    check("freeze --clone: a source that borrows objects is refused, naming the cause",
+          r.returncode != 0 and "alternates" in r.stderr, r.stdout + r.stderr)
+    check("freeze --clone: ...and nothing is left behind", not dest4.exists())
+
+
+def test_agy_review_refuses_worktree_target(tmp):
+    """leg-cmd.sh agy review --target <worktree>: agy cannot run git there (see test_freeze_clone)."""
+    script = SCRIPTS / "leg-cmd.sh"
+    repo = tmp / "agy-guard-src"
+    make_repo(repo, commits=2)
+    base = git(repo, "rev-parse", "HEAD~1").stdout.strip()
+    wt, cl = tmp / "agy-guard-wt", tmp / "agy-guard-clone"
+    check("agy guard: fixture worktree", run(SCRIPTS / "freeze-target.sh", repo, "HEAD", wt).returncode == 0)
+    check("agy guard: fixture clone", run(SCRIPTS / "freeze-target.sh", repo, "HEAD", cl, "--clone").returncode == 0)
+    home = tmp / "agy-guard-home"
+    home.mkdir()
+    roster_file, rules_file = home / "roster.json", home / "triage.json"
+    _write_doc(roster_file, _live_roster())
+    rules_file.write_bytes((SCRIPTS.parent / "templates" / "triage.example.json").read_bytes())
+    env = _roster_env(home, DEV_LEAD_ROSTER=roster_file, DEV_LEAD_TRIAGE=rules_file)
+
+    def leg(adapter, model, target, *extra):
+        return run(script, adapter, "review", "--model", model, *extra, "--base", base,
+                   "--target", target, "--no-triage", "test fixture", env=env)
+
+    got = leg("agy", "gemini-3.8-flash-medium", wt)
+    check("agy guard: a worktree target is refused before launch",
+          got.returncode != 0 and not got.stdout.strip() and "git worktree" in got.stderr, got.stdout + got.stderr)
+    check("agy guard: ...and the message names the fix", "--clone" in got.stderr, got.stderr)
+    got = leg("agy", "gemini-3.8-flash-medium", cl)
+    check("agy guard: a clone target launches", got.returncode == 0 and got.stdout.strip(), got.stdout + got.stderr)
+    got = leg("opencode", "opencode/x", wt, "--effort", "high")
+    check("agy guard: other adapters still take a worktree target", got.returncode == 0, got.stdout + got.stderr)
+
+
 # ---------------------------------------------------------- leg-log-check ----
 def test_leg_log_check(tmp):
     """Silent failed legs (a peer session, 2026-09-22): a refused read or a timeout
@@ -8616,6 +8739,10 @@ def test_leg_log_check(tmp):
         ("refused read, nothing after", "opencode",
          "timestamp=1 INFO x\nError: The user rejected permission to use this specific tool call.\nexit=0\n", 1),
         ("a long error dump is not a review (agy quota)", "agy", long_err, 1),
+        ("agy 1.4.2's empty-answer line (a denied tool call)", "agy",
+         'jetski: no output produced \u2014 a tool required the "command" permission that headless mode cannot prompt for\n', 1),
+        ("agy: the empty-answer line does not outvote a real report", "agy",
+         'jetski: no output produced \u2014 x\n## Claim 1 -- HOLDS\n', 0),
         ("agy's own denial line", "agy",
          'permission check failed for command "node -e 1": user denied permission to run command\n' * 8, 1),
         ("a real report", "opencode", "timestamp=1 INFO x\n" + report + "exit=0\n", 0),
@@ -8653,6 +8780,12 @@ def test_leg_log_check(tmp):
     check("leg-log-check: ...but mentioning the words draws no warning", "WARNING" not in r.stderr, r.stderr)
     r = run(script, "agy", logs["agy's own denial line"])
     check("leg-log-check: the agy denial is named as the cause", "refused" in r.stderr, r.stderr)
+    r = run(script, "agy", logs["agy 1.4.2's empty-answer line (a denied tool call)"])
+    check("leg-log-check: agy's empty-answer line is named as the cause", "refused" in r.stderr and "jetski" in r.stderr,
+          r.stderr)
+    r = run(script, "agy", logs["agy: the empty-answer line does not outvote a real report"])
+    check("leg-log-check: ...and next to a real report it is a warning, not a failure",
+          r.returncode == 0 and "WARNING" in r.stderr, r.stderr)
     # cursor: result objects, a banner, two objects, and an error object
     ok = {"type": "result", "subtype": "success", "is_error": False, "request_id": "r1"}
     for label, body, want in (
@@ -8716,6 +8849,8 @@ def main():
         print("renorm-only.sh (freeze/verify line-ending renormalization)")
         test_renorm(tmp)
         test_freeze_refusal_cleans_up(tmp)
+        test_freeze_clone(tmp)
+        test_agy_review_refuses_worktree_target(tmp)
         print("leg-log-check.sh")
         test_leg_log_check(tmp)
 

@@ -212,6 +212,17 @@ if r.get("prompt_frame"):
         if _rd == _tg or _rd.startswith(_tg.rstrip(os.sep) + os.sep):
             sys.exit("leg-cmd: --run-dir %s is inside --target %s; the review would "
                      "write into the frozen tree -- use a run directory outside it" % (_rd, _tg))
+# agy runs git sandboxed and can see only the --add-dir trees. A git WORKTREE target has
+# a one-line `.git` pointer file into the main repo's .git/worktrees/, outside them, so
+# every git call of the review fails with "not a git repository" (agy 1.4.2, measured
+# 2026-10-18) and the leg reviews without its history -- or, once a read is denied,
+# returns nothing. A self-contained clone is what it can read.
+if a == "agy" and role == "review" and os.environ.get("TARGET") \
+        and os.path.isfile(os.path.join(os.environ["TARGET"], ".git")):
+    sys.exit("leg-cmd: --target %s is a git worktree (its .git is a pointer file outside "
+             "the directories agy may read), so agy cannot run git there.\n"
+             "  freeze a self-contained clone instead: "
+             "freeze-target.sh <repo> <sha> <dest> --clone" % os.environ["TARGET"])
 for flag, ph in (("target", "{TARGET}"), ("base", "{BASE}"),
                  ("prompt-file", "{PROMPT_FILE}")):
     val = os.environ.get(flag.replace("-", "_").upper(), "")
