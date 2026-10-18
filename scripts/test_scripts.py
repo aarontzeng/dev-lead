@@ -8690,6 +8690,33 @@ def test_freeze_clone(tmp):
           r.returncode != 0 and "alternates" in r.stderr, r.stdout + r.stderr)
     check("freeze --clone: ...and nothing is left behind", not dest4.exists())
 
+    # The user's own git config must not run anything in the frozen tree: a template hook
+    # (init.templateDir) and a global hooks path both fire on `git checkout`.
+    tpl_hooks, glob_hooks = tmp / "clone-tpl" / "hooks", tmp / "clone-hooks"
+    tpl_hooks.mkdir(parents=True)
+    glob_hooks.mkdir()
+    for hook_dir, marker in ((tpl_hooks, "TEMPLATE-HOOK-RAN"), (glob_hooks, "GLOBAL-HOOK-RAN")):
+        hook = hook_dir / "post-checkout"
+        hook.write_text("#!/bin/sh\ntouch '%s'\n" % (tmp / marker))
+        hook.chmod(0o755)
+    hconf = tmp / "clone-hook-gitconfig"
+    hconf.write_text("[init]\n\ttemplateDir = %s\n[core]\n\thooksPath = %s\n" % (tmp / "clone-tpl", glob_hooks))
+    dest5 = tmp / "clone-hooks-off"
+    r = run(freeze, repo, "HEAD", dest5, "--clone", env=dict(os.environ, GIT_CONFIG_GLOBAL=str(hconf)))
+    check("freeze --clone: succeeds under a global template and hooks path", r.returncode == 0, r.stdout + r.stderr)
+    check("freeze --clone: the template's hook was not copied into the clone",
+          not (dest5 / ".git" / "hooks" / "post-checkout").exists())
+    check("freeze --clone: no template hook ran", not (tmp / "TEMPLATE-HOOK-RAN").exists())
+    check("freeze --clone: no global-hooks-path hook ran", not (tmp / "GLOBAL-HOOK-RAN").exists())
+
+    # A destination whose parent cannot be created is refused without removing what is there.
+    blocker = tmp / "clone-parent-is-a-file"
+    blocker.write_text("keep me\n")
+    r = run(freeze, repo, "HEAD", blocker / "child", "--clone")
+    check("freeze --clone: an uncreatable destination is refused", r.returncode != 0 and "cannot create" in r.stderr,
+          r.stdout + r.stderr)
+    check("freeze --clone: ...and what occupies the path is untouched", blocker.read_text() == "keep me\n")
+
 
 def test_agy_review_refuses_worktree_target(tmp):
     """leg-cmd.sh agy review --target <worktree>: agy cannot run git there (see test_freeze_clone)."""

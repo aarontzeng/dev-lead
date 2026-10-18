@@ -64,9 +64,10 @@ esac
 # session, on an SDK repository). Every command after a SUCCESSFUL creation
 # that can fail is guarded with `|| refuse` -- a bare failure under `set -e`
 # exits WITHOUT cleaning up (found by two review legs, 2026-09-22). Only after
-# the creation succeeded is the checkout provably ours: a failed one may be
-# failing BECAUSE something else holds that path (a concurrent freeze, a stale
-# registration), so it dies without touching it.
+# the creation succeeded is the checkout provably ours (clone mode: the mkdir above;
+# worktree mode: a successful add): a failed creation may be failing BECAUSE something
+# else holds that path (a concurrent freeze, a stale registration), so it dies without
+# touching it.
 refuse() {
   if [ "$mode" = clone ]; then
     rm -rf -- "$dest" >/dev/null 2>&1 || true
@@ -77,17 +78,22 @@ refuse() {
 }
 
 if [ "$mode" = clone ]; then
-  # The -e guard above is what refuses a polluted destination on this path too
-  # (git clone would refuse a non-empty one itself; do not rely on that alone).
-  git clone --quiet --local --no-hardlinks --no-checkout -- "$repo" "$dest" >/dev/null \
-    || die "git clone failed (nothing was removed: the path may belong to someone else)"
+  # `mkdir` (the leaf, no -p) is atomic: it succeeds only for a path this run creates, which is
+  # what makes the rm -rf in refuse() safe. The -e guard above is the early, friendly refusal;
+  # on its own it is check-then-act (a concurrent freeze to the same path passes it too).
+  mkdir -p -- "$(dirname -- "$dest")" && mkdir -- "$dest" \
+    || die "cannot create $dest (nothing was removed: the path may belong to someone else)"
+  # --template= and core.hooksPath off: the user's init.templateDir / global hooks must not run
+  # in, or write into, a tree whose point is to be exactly the commit.
+  git clone --quiet --template= --local --no-hardlinks --no-checkout -- "$repo" "$dest" >/dev/null \
+    || refuse "git clone failed"
   # A local clone copies every object of the source, reachable from a ref or not, so a
   # commit no ref reaches (a detached HEAD's) is in it too. It also copies the source's
   # alternates link, which would point the clone's object reads back OUT of the target:
   # not self-contained, so refused.
   [ ! -e "$dest/.git/objects/info/alternates" ] \
     || refuse "$repo borrows its objects from another repository (objects/info/alternates), so the clone would read outside itself; run 'git repack -a -d' there first"
-  git -C "$dest" checkout --quiet --detach "$sha" \
+  git -C "$dest" -c core.hooksPath=/dev/null checkout --quiet --detach "$sha" \
     || refuse "cannot check out $sha in the clone"
 else
   # --detach: no branch, so nothing can advance this worktree under the reviewer.
