@@ -34,8 +34,8 @@
     },
     "opencode": {
       "cli": "opencode",
-      "serves": ["DeepSeek", "Nemotron", "GLM", "North", "Inkling", "Laguna", "Xiaomi", "Tencent", "Meta", "Kimi", "Qwen", "MiniMax", "Meituan", "unknown"],
-      "note": "free pool; catalogue changes, verify with `opencode models`. Kimi is reachable via the paid opencode-go/kimi-k3 pool, not the free one (opencode-runtime.md)"
+      "serves": ["DeepSeek", "Nemotron", "GLM", "North", "Inkling", "Laguna", "Xiaomi", "Tencent", "Meta", "Kimi", "Qwen", "MiniMax", "Meituan", "Gemini", "unknown"],
+      "note": "free and Go pools; catalogue changes, verify with `opencode models` and a real tool call. Kimi is reachable via opencode-go/kimi-k3; Gemini via opencode-go/gemini-4-argon-contributor (same family as agy Gemini; opencode-runtime.md)"
     },
     "grok": {
       "cli": "grok (Grok Build)",

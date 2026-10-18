@@ -98,8 +98,10 @@ What the probes established:
   file and answered. Probe it with opencode, never with curl.
 - **Gemma is Google's** and counts as Gemini ([families.json](../../../data/families.json)): it
   cannot fill a missing Gemini leg as another family. Both were
-  rate-limited upstream all morning, so no Gemini route through opencode is
-  measured working here, and the opencode adapter does not list Gemini.
+  rate-limited upstream all morning, so no Gemini route through opencode was
+  measured working on 2026-10-10; the adapter did not list Gemini then.
+  **Update 2026-10-18:** Go Argon passed a real tool probe and Gemini is now
+  registered for opencode; see [the Go Gemini route](#opencode-go-gemini-route-2026-10-18).
 - **A credit balance near zero did not stop the free models -- one
   observation, not a guarantee.** On 2026-10-10 the account had $0.13 left of
   $20 bought (`/api/v1/credits`), and the free calls that answered did so on
@@ -632,6 +634,24 @@ preconditions travel with it that did NOT apply to the old default:
 
 Family accounting is unchanged: Nemotron is NVIDIA, so the leg still counts as
 cross-family against GPT, Gemini and Claude on either route.
+
+## OpenCode Go Gemini route (2026-10-18)
+
+`opencode-go/gemini-4-argon-contributor` is a **Gemini** route, not a new
+family alongside agy Gemini or `google/*` Gemini. The CLI 1.19.3 catalogue
+lists `low`, `medium`, and `high`; pass one explicitly, not `xhigh` from
+another model's roster. A real `--variant high` probe read a public marker
+file and ran `git rev-parse --short HEAD`, returning both correctly. This
+establishes reachability and basic tool use; it does not establish
+implementation or review quality.
+
+[`families.json`](../../../data/families.json) now permits Gemini through the opencode adapter, so an
+explicit per-run model override can validate without relabelling it unknown.
+It does not change anyone's roster or the cross-family collision check.
+Contributor prompts/completions may train future Google models (Not ZDR);
+use only a screened eligible target. The live Aequa tree includes a private
+broker workbook, so this probe/trial used an isolated public-source subset
+without its history or credentials; do not hand the complete repo to it.
 
 ## `--variant` is write-only: unverifiable, and an invalid value is not refused
 
