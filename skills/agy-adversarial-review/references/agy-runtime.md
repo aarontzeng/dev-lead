@@ -525,8 +525,8 @@ step, one fixed read-only prompt, run in parallel against a `freeze-target.sh` w
 What to do with it:
 
 - **An empty answer is a failed leg, never "no findings".** Capture the leg with `2>&1` so the
-  `jetski:` line lands in the log; `leg-log-check.sh agy <log>` fails an empty log and names that
-  line as the cause (0.6.68). In stream-json the same event is `denied_actions` on the result.
+  `jetski:` line lands in the log; `leg-log-check.sh agy <log>` fails a log that holds that line and
+  no verdict, naming the line as the cause, and fails a completely empty log too (0.6.68). In stream-json the same event is `denied_actions` on the result.
 - **Freeze an agy review target with `freeze-target.sh <repo> <sha> <dest> --clone`.** `leg-cmd.sh`
   refuses an agy review whose `--target` is a worktree (its `.git` is a file).
 - **Do not put `**` globs in `permissions.allow` for a `--sandbox` run** (the sibling-glob advice

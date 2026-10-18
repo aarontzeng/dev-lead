@@ -8709,6 +8709,18 @@ def test_freeze_clone(tmp):
     check("freeze --clone: no template hook ran", not (tmp / "TEMPLATE-HOOK-RAN").exists())
     check("freeze --clone: no global-hooks-path hook ran", not (tmp / "GLOBAL-HOOK-RAN").exists())
 
+    # A `git clone` that fails after the destination was made leaves nothing behind.
+    shim = tmp / "clone-fail-bin"
+    shim.mkdir()
+    real_git = shutil.which("git")
+    (shim / "git").write_text('#!/bin/sh\nfor a in "$@"; do [ "$a" = clone ] && { echo "shim: clone refused" >&2; exit 1; }; done\nexec %s "$@"\n' % real_git)
+    (shim / "git").chmod(0o755)
+    dest6 = tmp / "clone-fails"
+    r = run(freeze, repo, "HEAD", dest6, "--clone", env=dict(os.environ, PATH=str(shim) + os.pathsep + os.environ["PATH"]))
+    check("freeze --clone: a failing git clone is reported", r.returncode != 0 and "git clone failed" in r.stderr,
+          r.stdout + r.stderr)
+    check("freeze --clone: ...and the directory made for it is removed again", not dest6.exists())
+
     # A destination whose parent cannot be created is refused without removing what is there.
     blocker = tmp / "clone-parent-is-a-file"
     blocker.write_text("keep me\n")
@@ -8746,6 +8758,13 @@ def test_agy_review_refuses_worktree_target(tmp):
     check("agy guard: a clone target launches", got.returncode == 0 and got.stdout.strip(), got.stdout + got.stderr)
     got = leg("opencode", "opencode/x", wt, "--effort", "high")
     check("agy guard: other adapters still take a worktree target", got.returncode == 0, got.stdout + got.stderr)
+    run_dir = tmp / "agy-guard-run"
+    run_dir.mkdir()
+    (run_dir / "task.md").write_text("task\n")
+    got = run(script, "agy", "implement", "--model", "gemini-3.8-flash-high", "--target", wt,
+              "--run-dir", run_dir, env=env)
+    check("agy guard: the implement role still takes a worktree target (its target IS a worktree)",
+          got.returncode == 0 and str(wt) in got.stdout, got.stdout + got.stderr)
 
 
 # ---------------------------------------------------------- leg-log-check ----

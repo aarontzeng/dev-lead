@@ -217,7 +217,7 @@ git diff --stat "$BASE" HEAD          # file list must match the change under re
 ```
 
 Any changed `HEAD` or unexpected dirty-state delta is a **failed safety
-check** — preserve the worktree and inspect before trusting or relaying a
+check** — preserve the frozen target and inspect before trusting or relaying a
 single line of the review output.
 
 ## Writing the prompt

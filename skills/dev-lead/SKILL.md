@@ -637,7 +637,7 @@ two rounds and would have run a third on no principle at all.
    ```
 
    **An agy leg needs a self-contained clone, not the worktree:** add `--clone` as
-   the fourth argument (`freeze-target.sh "$REPO" "$SHA" "$FROZEN_DIR" --clone`).
+   the fourth argument (`"$DEV_LEAD/scripts/freeze-target.sh" "$REPO" "$SHA" "$FROZEN_DIR" --clone`).
    A worktree's `.git` is a pointer file outside the directories agy may read,
    and `leg-cmd.sh agy review` refuses such a target. Every other adapter reads
    the default worktree. Tear a clone down with `rm -rf`, not `git worktree remove`.
