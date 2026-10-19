@@ -228,13 +228,13 @@ clock is read, so a rewritten cache is not "in the future" of its record. It
 never types a key, and never touches the person's own tmux server or a TUI
 they have open.
 
-- **The working directory must be a real, empty directory the user owns.**
+- **The working directory is a real, empty directory the user owns.**
   `cursor-agent --trust` trusts it, so a link (which would trust its target)
-  or anything placed in it is refused, and its mode is set to 0700 before the
-  check. agy writes nothing there, but on macOS cursor-agent runs the user's
+  is refused, anything found in it is set aside first (see below), and its
+  mode is set to 0700 before the check. agy writes nothing there, but on macOS cursor-agent runs the user's
   Claude Code session hooks in its workspace, and a memory plugin's
   SessionStart hook made `.remember/` there (measured 2026-10-19); left in
-  place it would block every later refresh. So once the private server is
+  place it would stop the CLI from starting in an empty directory. So once the private server is
   confirmed stopped (a `kill-server` that succeeded; a timed-out one proves
   nothing) the directory is MOVED aside (`quota-tui.gone.<pid>.<random>`, one rename of
   the final path component, which moves a link rather than following it), a
@@ -247,7 +247,29 @@ they have open.
   if that rename fails as well, see the known limits). When the server could not
   be stopped, the working directory is not moved or emptied and the socket is
   kept. Separately, at the start of every run, leftovers an earlier run could not
-  delete (`quota-tui.gone.*`) are swept.
+  delete (`quota-tui.gone.*`) are swept. The reset can still be too early: the
+  cursor-agent worker outlives the server, and a hook can write into the
+  workspace by name after the reset (measured 2026-10-19 on a second host:
+  `.remember/` 0.3 s after the cache was written). So a working directory that is
+  not empty at the start is not a refusal any more: it is set aside the same way
+  (moved, a fresh empty one made, the old one emptied if it is still the directory
+  that was checked), and the CLI starts in the fresh one. Only when that does not
+  leave an empty directory is the run refused (`its working directory is not
+  empty`), and nothing is started. Not while a private server of an earlier run may
+  still be running: a run that could not stop its server keeps its socket
+  (`dev-lead-quota-<pid>-<cli>` in tmux's socket directory) and so does a collector
+  that died during the wait, and the CLI may still be writing into that directory;
+  then nothing is moved or started, and the problem line names the socket
+  (`its working directory is not empty and a private tmux server of an earlier run
+  may still be running (dev-lead-quota-<pid>-<cli>)`) so the operator can stop it
+  (`tmux -L <name> kill-server`) and remove the socket file. A socket directory
+  that exists but cannot be read refuses the same way (`... and tmux's socket
+  directory cannot be read (EACCES)`); only one that is not there, or that can be
+  read and holds no entry of that naming, allows the clean-up. The scan reads the directory this process would use (`TMUX_TMPDIR`, else
+  `/tmp`): a run under a different `TMUX_TMPDIR` than the one that left the socket
+  does not see it, and an empty working directory is not checked at all (a run that
+  could not stop its server and left nothing behind does not stop the next one from
+  starting a second CLI, as before 0.6.73).
 - **One refresh at a time.** An exclusive `flock` on
   `~/.cache/dev-lead/quota-tui.lock` is held for the whole run (that directory
   is set to 0700, and a lock file replaced after it was opened is refused); a
@@ -282,8 +304,11 @@ they have open.
   in the working directory). tmux 3.2a leaves the private socket file behind
   after `kill-server`; the collector removes it once the kill worked. A
   collector killed during the wait skips its cleanup and leaves its private
-  server running; the socket is named by pid, so the next run with that pid
-  kills it. A residue tree deeper than Python's recursion limit cannot be
+  server running; the socket is named by pid, so a later run with that pid
+  kills it if it gets as far as starting tmux (it does not with a crowded working
+  directory), and otherwise it is stopped by hand (`tmux -L <name> kill-server`).
+  A socket file left after a reboot (a persistent `TMUX_TMPDIR`) or by an
+  `_remove_socket` that could not unlink it refuses the same way and is removed by hand. A residue tree deeper than Python's recursion limit cannot be
   deleted by `shutil.rmtree`: it stays under its `quota-tui.gone.<pid>.<random>`
   name, every later run tries again and fails the same way, and it blocks
   nothing (delete it by hand). A rejected directory (one swapped in during the

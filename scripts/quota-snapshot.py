@@ -31,11 +31,14 @@ Contract:
     not a usable time, detached in a tmux
     server of its own, until the CLI rewrites its cache, then kills that
     server (see refresh_tui). It never types a key, and never touches the
-    person's own tmux server or a TUI they have open. It starts in
-    ~/.cache/dev-lead/quota-tui, which must be empty; afterwards that
-    directory is moved aside and emptied (a directory that is not the one
-    checked is put back untouched, or renamed quota-tui.foreign.*), and a
-    fresh one takes its place. One refresh runs at a time (a lock); a process
+    person's own tmux server or a TUI they have open. It starts in an
+    empty ~/.cache/dev-lead/quota-tui (anything found there is set aside
+    first, since --trust would trust it; but while a private server of an
+    earlier run may still be running, a directory that is not empty is left
+    alone and the run is refused); afterwards that directory is moved
+    aside and emptied (a directory that is not the one checked is put back
+    untouched, or renamed quota-tui.foreign.*), and a fresh one takes its
+    place. One refresh runs at a time (a lock); a process
     of the same user interfering is out of scope.
   * Output is a whitelist. A field of a source document that is not named in
     the record shape (account ids, plan names, balances, raw error bodies) is
@@ -535,6 +538,29 @@ def refresh_tui(ctx, kind, path):
         os.close(lock)                            # closing releases the lock
 
 
+def _inspect_workdir(label, workdir):
+    """(identity, crowded, problem) for the working directory as it is now.
+
+    Makes it if it is missing and sets its mode to 0700, so that a directory made earlier with
+    a looser mode (or one the reset could not recreate) is usable. `problem` is the record line
+    when it is not a plain directory of the user's or cannot be listed."""
+    try:
+        os.makedirs(workdir, mode=0o700, exist_ok=True)
+        st = os.lstat(workdir)
+    except OSError as exc:
+        return None, False, "%s refresh failed: cannot create its working directory (%s)" % (
+            label, errno_name(exc))
+    if not stat.S_ISDIR(st.st_mode) or st.st_uid != os.geteuid():
+        return None, False, "%s refresh skipped: its working directory is not a plain directory of the user's" % label
+    try:
+        os.chmod(workdir, 0o700)                  # an older, looser mode would let someone else add to it
+        crowded = bool(os.listdir(workdir))
+    except OSError as exc:
+        return None, False, "%s refresh failed: cannot list its working directory (%s)" % (
+            label, errno_name(exc))
+    return (st.st_dev, st.st_ino), crowded, None
+
+
 def _refresh_locked(ctx, kind, path, base):
     """refresh_tui's body, with the lock held.
 
@@ -549,23 +575,27 @@ def _refresh_locked(ctx, kind, path, base):
     label, command = REFRESH_COMMANDS[kind]
     workdir = os.path.join(base, "quota-tui")
     _sweep_leftovers(base)
-    try:
-        os.makedirs(workdir, mode=0o700, exist_ok=True)
-        st = os.lstat(workdir)
-    except OSError as exc:
-        return "%s refresh failed: cannot create its working directory (%s)" % (label, errno_name(exc))
-    if not stat.S_ISDIR(st.st_mode) or st.st_uid != os.geteuid():
-        return "%s refresh skipped: its working directory is not a plain directory of the user's" % label
-    identity = (st.st_dev, st.st_ino)
-    try:
-        os.chmod(workdir, 0o700)                  # an older, looser mode would let someone else add to it
-        crowded = bool(os.listdir(workdir))
-    except OSError as exc:
-        return "%s refresh failed: cannot list its working directory (%s)" % (label, errno_name(exc))
+    identity, crowded, problem = _inspect_workdir(label, workdir)
+    if problem:
+        return problem
     if crowded:
-        # neither CLI writes into it by itself (measured), so anything there was put
-        # there, and --trust would trust it
-        return "%s refresh skipped: its working directory is not empty" % label
+        # neither CLI writes into it by itself (measured), so what is there was put there: by
+        # a hook that wrote after the last reset (measured 2026-10-19: the cursor-agent worker
+        # outlives the server, and a session hook wrote .remember/ 0.3 s after the cache), or by
+        # someone else. --trust would trust it, so it is set aside exactly as after a run and
+        # the CLI starts in a fresh empty directory; if that does not leave an empty one, the
+        # run is refused. Not while an earlier run's private server may still be running
+        stray = _stray_server()
+        if stray:
+            # a run that could not stop its server keeps the directory (the CLI may still be
+            # writing there) and the socket: do not move the directory under it, or start a second CLI
+            return "%s refresh skipped: its working directory is not empty and %s" % (label, stray)
+        _reset_workdir(workdir, identity)
+        identity, crowded, problem = _inspect_workdir(label, workdir)
+        if problem:
+            return problem
+        if crowded:
+            return "%s refresh skipped: its working directory is not empty" % label
     socket = "dev-lead-quota-%d-%s" % (os.getpid(), label)
     before = _mtime_or_none(path)
     started = _tmux(ctx, "-L", socket, "-f", os.devnull, "new-session", "-d", "-s", "quota",
@@ -680,8 +710,9 @@ def _reset_workdir(workdir, identity):
 
     Measured 2026-10-19 on macOS: cursor-agent runs the user's Claude Code session
     hooks in its workspace, and a memory plugin's SessionStart hook made `.remember/`
-    there; left in place, it would make every later refresh refuse the directory as not
-    empty. The directory is first MOVED aside (one rename of the final path component,
+    there; left in place, it would stop the CLI from starting in an empty directory (a
+    refresh also calls this when it finds the directory crowded, for a hook that wrote
+    after the last reset, unless a private server of an earlier run may still be running). The directory is first MOVED aside (one rename of the final path component,
     which moves a link rather than following it), and only emptied if what is there is
     still the directory that was checked before the start (_clear_dir, bound to its
     device and inode): otherwise it is put back untouched. A fresh empty directory takes
@@ -722,9 +753,32 @@ def _reset_workdir(workdir, identity):
             pass
 
 
+def _tmux_socket_dir():
+    return os.path.join(os.environ.get("TMUX_TMPDIR") or "/tmp", "tmux-%d" % os.geteuid())
+
+
+_PRIVATE_SOCKET = re.compile(r"dev-lead-quota-[0-9]{1,10}-(?:agy|cursor)\Z")
+
+
+def _stray_server():
+    """Why an earlier run's private server cannot be ruled out, or None when it can.
+
+    A socket of this collector's naming in tmux's socket directory: the run that could not
+    stop its server keeps it, and so does a collector that died during the wait. A directory
+    that cannot be read is not an answer either; only one that is not there is (no tmux
+    server was ever started under that user and TMUX_TMPDIR)."""
+    try:
+        names = sorted(n for n in os.listdir(_tmux_socket_dir()) if _PRIVATE_SOCKET.match(n))
+    except (FileNotFoundError, NotADirectoryError):
+        return None
+    except OSError as exc:
+        return "tmux's socket directory cannot be read (%s)" % errno_name(exc)
+    return ("a private tmux server of an earlier run may still be running (%s)" % names[0]) if names else None
+
+
 def _remove_socket(name):
     """Unlink the private server's socket file, which tmux 3.2a leaves behind (measured)."""
-    path = os.path.join(os.environ.get("TMUX_TMPDIR") or "/tmp", "tmux-%d" % os.geteuid(), name)
+    path = os.path.join(_tmux_socket_dir(), name)
     try:
         st = os.lstat(path)
         if stat.S_ISSOCK(st.st_mode) and st.st_uid == os.geteuid():
@@ -1160,7 +1214,9 @@ def parse_args(argv):
                              "the cache, then kill that server; it never types a key and never "
                              "touches your own tmux server; one refresh runs at a time, and "
                              "the empty directory it starts in is moved aside and emptied "
-                             "afterwards")
+                             "afterwards (a directory that is not empty at the start is "
+                             "set aside the same way, unless a private server of an earlier "
+                             "run may still be running)")
     parser.add_argument("--tmux-bin", default="tmux", metavar="PATH")
     parser.add_argument("--refresh-wait", type=float, default=15.0, metavar="SECONDS",
                         help="how long a started CLI gets to rewrite its cache (default 15)")
