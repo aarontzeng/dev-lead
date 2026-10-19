@@ -231,7 +231,28 @@ they have open.
 - **The working directory must be a real, empty directory the user owns.**
   `cursor-agent --trust` trusts it, so a link (which would trust its target)
   or anything placed in it is refused, and its mode is set to 0700 before the
-  check. Neither CLI writes into it (measured).
+  check. agy writes nothing there, but on macOS cursor-agent runs the user's
+  Claude Code session hooks in its workspace, and a memory plugin's
+  SessionStart hook made `.remember/` there (measured 2026-10-19); left in
+  place it would block every later refresh. So once the private server is
+  confirmed stopped (a `kill-server` that succeeded; a timed-out one proves
+  nothing) the directory is MOVED aside (`quota-tui.gone.<pid>.<random>`, one rename of
+  the final path component, which moves a link rather than following it), a
+  fresh empty one takes its place, and the moved one is emptied through a
+  descriptor opened without following a link and checked to be the directory
+  that was checked before the start (same device and inode, the user's): if it
+  is not (it was swapped for a link or another directory), it is put back
+  untouched (and if even that cannot be done, renamed
+  `quota-tui.foreign.<pid>.<random>`, which the sweep below does not touch;
+  if that rename fails as well, see the known limits). When the server could not
+  be stopped, the working directory is not moved or emptied and the socket is
+  kept. Separately, at the start of every run, leftovers an earlier run could not
+  delete (`quota-tui.gone.*`) are swept.
+- **One refresh at a time.** An exclusive `flock` on
+  `~/.cache/dev-lead/quota-tui.lock` is held for the whole run (that directory
+  is set to 0700, and a lock file replaced after it was opened is refused); a
+  second refresh, in another process or another source, is refused with `<cli>
+  refresh skipped: another refresh is running` and starts nothing.
 
 - **Two opt-ins.** The caller passes `--refresh`, AND the host's config marks
   the source. The shipped `data/` file never does; a host opts in with its own
@@ -246,8 +267,10 @@ they have open.
   failed: tmux could not start <command>`, `<cli> refresh failed: <command>
   did not rewrite its cache within N s`, or one about the working directory
   (`cannot create`, `cannot list`, `not a plain directory of the user's`, `not
-  empty`), or `<cli> refresh failed: its private tmux server could not be
-  stopped`, and the records stay as stale as the cache was. Two exceptions:
+  empty`), the lock (`another refresh is running`, `cannot create its lock`,
+  `its lock file was replaced`, `~/.cache/dev-lead is not a plain directory
+  of the user's`), or `<cli> refresh failed: its private tmux server could not
+  be stopped`, and the records stay as stale as the cache was. Two exceptions:
   a server that would not stop may still have let the cache be rewritten, so
   that record can be fresh and still carry the problem (which keeps it from
   reading as headroom); and
@@ -257,9 +280,24 @@ they have open.
 - **Known limits.** Starting the CLI is a real start: it may check for an
   update and writes its own logs and state in its own config directories (not
   in the working directory). tmux 3.2a leaves the private socket file behind
-  after `kill-server`; the collector removes it. A collector killed during the wait skips its
-  cleanup and leaves its private server running; the socket is named by pid,
-  so the next run with that pid kills it. Two collectors at once, or a person
+  after `kill-server`; the collector removes it once the kill worked. A
+  collector killed during the wait skips its cleanup and leaves its private
+  server running; the socket is named by pid, so the next run with that pid
+  kills it. A residue tree deeper than Python's recursion limit cannot be
+  deleted by `shutil.rmtree`: it stays under its `quota-tui.gone.<pid>.<random>`
+  name, every later run tries again and fails the same way, and it blocks
+  nothing (delete it by hand). A rejected directory (one swapped in during the
+  run) whose two renames both fail (back to `quota-tui`, then to
+  `quota-tui.foreign.*`) stays under the `quota-tui.gone.*` name, and the next
+  run's sweep empties it; it takes a same-user process replacing the directory
+  during the run (not defended against, see below) and two failing renames in
+  one directory. The lock and the checks guard against another
+  collector and against a directory or lock file replaced by something that
+  runs as another user; a process that runs as the same user and replaces the
+  lock file after it was checked, or the cache itself, is not defended
+  against (it could do anything the collector can). The cwd is changed to
+  the emptied directory for the duration of the cleanup and restored after
+  it (to `~` if it cannot be). Two collectors at once, or a person
   starting the same CLI during the wait, may each take the other's rewrite as
   its own; the cache was still rewritten.
 - **Considered and not used:** typing `/usage` into a TUI the person keeps

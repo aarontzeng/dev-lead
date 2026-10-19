@@ -31,7 +31,12 @@ Contract:
     not a usable time, detached in a tmux
     server of its own, until the CLI rewrites its cache, then kills that
     server (see refresh_tui). It never types a key, and never touches the
-    person's own tmux server or a TUI they have open.
+    person's own tmux server or a TUI they have open. It starts in
+    ~/.cache/dev-lead/quota-tui, which must be empty; afterwards that
+    directory is moved aside and emptied (a directory that is not the one
+    checked is put back untouched, or renamed quota-tui.foreign.*), and a
+    fresh one takes its place. One refresh runs at a time (a lock); a process
+    of the same user interfering is out of scope.
   * Output is a whitelist. A field of a source document that is not named in
     the record shape (account ids, plan names, balances, raw error bodies) is
     never copied, and a problem line says what is wrong with a bad value, not
@@ -47,11 +52,13 @@ from __future__ import annotations
 
 import argparse
 import errno
+import fcntl
 import json
 import math
 import os
 import re
 import selectors
+import shutil
 import stat
 import subprocess
 import sys
@@ -451,8 +458,25 @@ REFRESH_COMMANDS = {
 }
 
 
+class _TimedOut:
+    """tmux did not answer in time: what it was asked to do may or may not have happened."""
+
+
+TMUX_TIMED_OUT = _TimedOut()
+
+
+def _tmux_timeout():
+    # DEV_LEAD_QUOTA_TMUX_TIMEOUT is a test seam, like DEV_LEAD_LAUNCH
+    try:
+        seconds = float(os.environ.get("DEV_LEAD_QUOTA_TMUX_TIMEOUT", ""))
+    except ValueError:
+        return 10.0
+    return seconds if 0 < seconds <= 60 else 10.0
+
+
 def _tmux(ctx, *args):
-    """True when one tmux command ran and succeeded, False when it failed, None if tmux cannot run.
+    """One tmux command: True when it succeeded, False when it ran and failed, None if tmux
+    cannot run, TMUX_TIMED_OUT (which is truthy) when it did not answer in time.
 
     TMUX and TMUX_PANE are dropped from its environment: a collector started
     inside the person's tmux must not hand that server's address to anything
@@ -461,9 +485,11 @@ def _tmux(ctx, *args):
     env = {k: v for k, v in os.environ.items() if k not in ("TMUX", "TMUX_PANE")}
     try:
         done = subprocess.run([ctx.tmux_bin, *args], capture_output=True, text=True,
-                              timeout=10, stdin=subprocess.DEVNULL, env=env)
+                              timeout=_tmux_timeout(), stdin=subprocess.DEVNULL, env=env)
     except FileNotFoundError:
         return None
+    except subprocess.TimeoutExpired:
+        return TMUX_TIMED_OUT
     except (OSError, subprocess.SubprocessError):
         return False
     return done.returncode == 0
@@ -479,6 +505,39 @@ def _mtime_or_none(path):
 def refresh_tui(ctx, kind, path):
     """Start the kind's CLI in a private tmux server until its cache changes; None, or why not.
 
+    One refresh at a time on a host: the working directory is shared and what a run
+    leaves in it is cleared afterwards, so a second collector (or a second source)
+    waits its turn by being refused ("another refresh is running"), never by running
+    beside the first."""
+    label = REFRESH_COMMANDS[kind][0]
+    base = os.path.join(os.path.expanduser("~"), ".cache", "dev-lead")
+    lock_path = os.path.join(base, "quota-tui.lock")
+    try:
+        os.makedirs(base, mode=0o700, exist_ok=True)
+        st = os.lstat(base)
+        if not stat.S_ISDIR(st.st_mode) or st.st_uid != os.geteuid():
+            return "%s refresh skipped: ~/.cache/dev-lead is not a plain directory of the user's" % label
+        os.chmod(base, 0o700)                     # a looser mode would let another user swap the lock file
+        lock = os.open(lock_path, os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    except OSError as exc:
+        return "%s refresh failed: cannot create its lock (%s)" % (label, errno_name(exc))
+    try:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            on_disk = os.lstat(lock_path)
+            held = os.fstat(lock)
+        except OSError:
+            return "%s refresh skipped: another refresh is running" % label
+        if (on_disk.st_dev, on_disk.st_ino) != (held.st_dev, held.st_ino):
+            return "%s refresh skipped: its lock file was replaced" % label    # a lock on a file nobody else sees
+        return _refresh_locked(ctx, kind, path, base)
+    finally:
+        os.close(lock)                            # closing releases the lock
+
+
+def _refresh_locked(ctx, kind, path, base):
+    """refresh_tui's body, with the lock held.
+
     The working directory is a fixed one of dev-lead's own
     (~/.cache/dev-lead/quota-tui), and it must be a real directory the user
     owns, not a link: `cursor-agent --trust` trusts it, so a link would trust
@@ -488,7 +547,8 @@ def refresh_tui(ctx, kind, path):
     after the kill, so a write that lands while the server stops still counts.
     """
     label, command = REFRESH_COMMANDS[kind]
-    workdir = os.path.join(os.path.expanduser("~"), ".cache", "dev-lead", "quota-tui")
+    workdir = os.path.join(base, "quota-tui")
+    _sweep_leftovers(base)
     try:
         os.makedirs(workdir, mode=0o700, exist_ok=True)
         st = os.lstat(workdir)
@@ -496,13 +556,14 @@ def refresh_tui(ctx, kind, path):
         return "%s refresh failed: cannot create its working directory (%s)" % (label, errno_name(exc))
     if not stat.S_ISDIR(st.st_mode) or st.st_uid != os.geteuid():
         return "%s refresh skipped: its working directory is not a plain directory of the user's" % label
+    identity = (st.st_dev, st.st_ino)
     try:
         os.chmod(workdir, 0o700)                  # an older, looser mode would let someone else add to it
         crowded = bool(os.listdir(workdir))
     except OSError as exc:
         return "%s refresh failed: cannot list its working directory (%s)" % (label, errno_name(exc))
     if crowded:
-        # neither CLI writes into it (measured), so anything there was put
+        # neither CLI writes into it by itself (measured), so anything there was put
         # there, and --trust would trust it
         return "%s refresh skipped: its working directory is not empty" % label
     socket = "dev-lead-quota-%d-%s" % (os.getpid(), label)
@@ -522,21 +583,143 @@ def refresh_tui(ctx, kind, path):
         if started is not None:
             # -f here too: kill-server starts no server, so it reads no config
             # (tmux 3.2a), but nothing is left to that
-            stopped = _tmux(ctx, "-L", socket, "-f", os.devnull, "kill-server") or not started
-            if stopped:
-                # only once the server is gone: its socket is the one way to
-                # reach a server that would not stop
+            # `is True`: a kill that timed out (TMUX_TIMED_OUT is truthy) proves nothing
+            killed = _tmux(ctx, "-L", socket, "-f", os.devnull, "kill-server") is True
+            # a start that RAN and failed made no server, so a failed kill is expected; a
+            # start that timed out may have made one, so only a successful kill proves it gone
+            stopped = killed or started is False
+            if killed:
+                # only after a kill that worked: a socket is the one way to reach a server
+                # that would not stop, and a CLI that may still run may still be writing
                 _remove_socket(socket)
+                if started is not False:
+                    _reset_workdir(workdir, identity)
     if started is None:
         return "%s refresh skipped: tmux is not available" % label
-    if not started:
-        return "%s refresh failed: tmux could not start %s" % (label, command[0])
     if not stopped:
         return "%s refresh failed: its private tmux server could not be stopped" % label
+    if not started:
+        return "%s refresh failed: tmux could not start %s" % (label, command[0])
     if _rewritten(path, before):
         return None
     return "%s refresh failed: %s did not rewrite its cache within %g s" % (
         label, command[0], ctx.refresh_wait)
+
+
+_GONE = ".gone."
+
+
+def _clear_dir(path, identity=None):
+    """Empty the directory at `path`, if it is the one meant; True when it was.
+
+    The directory is OPENED without following a link, and what was opened must be a
+    directory of the user's (and, when `identity` is given, that very device and inode).
+    Its entries are then removed with the process standing IN it (fchdir), so every
+    name resolves against the opened inode and not against `path`, which another
+    process could have swapped since. shutil.rmtree does the walking below that point
+    (its descriptor-based walk does not follow links). An entry that cannot be removed
+    (a tree deeper than the recursion limit) is left, never raised."""
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        fd = os.open(path, flags)
+    except OSError:
+        return False
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISDIR(st.st_mode) or st.st_uid != os.geteuid():
+            return False
+        if identity is not None and (st.st_dev, st.st_ino) != identity:
+            return False
+        try:
+            here = os.open(".", os.O_RDONLY)
+        except OSError:
+            return False
+        try:
+            os.fchdir(fd)
+            for name in os.listdir("."):
+                try:
+                    if stat.S_ISDIR(os.lstat(name).st_mode):
+                        shutil.rmtree(name)
+                    else:
+                        os.unlink(name)
+                except (OSError, RecursionError):
+                    pass
+        except OSError:
+            pass
+        finally:
+            try:
+                os.fchdir(here)
+            except OSError:
+                try:
+                    os.chdir(os.path.expanduser("~"))     # the old cwd is gone or unreadable; the
+                except OSError:                           # collector uses absolute paths from here on
+                    pass
+            os.close(here)
+        return True
+    finally:
+        os.close(fd)
+
+
+def _sweep_leftovers(base):
+    """Delete what an earlier run could not (a residue tree too deep to delete in one go)."""
+    try:
+        names = [n for n in os.listdir(base) if n.startswith("quota-tui" + _GONE)]
+    except OSError:
+        return
+    for name in names:
+        entry = os.path.join(base, name)
+        if _clear_dir(entry):
+            try:
+                os.rmdir(entry)
+            except OSError:
+                pass
+
+
+def _reset_workdir(workdir, identity):
+    """Replace the used working directory by a fresh empty one; the old one is deleted.
+
+    Measured 2026-10-19 on macOS: cursor-agent runs the user's Claude Code session
+    hooks in its workspace, and a memory plugin's SessionStart hook made `.remember/`
+    there; left in place, it would make every later refresh refuse the directory as not
+    empty. The directory is first MOVED aside (one rename of the final path component,
+    which moves a link rather than following it), and only emptied if what is there is
+    still the directory that was checked before the start (_clear_dir, bound to its
+    device and inode): otherwise it is put back untouched. A fresh empty directory takes
+    its place first, so a tree too deep to delete (left under its own name for the next
+    run to try) never blocks the next run.
+    """
+    # unique per call: two sources refresh in one process, and a tree the first could not delete
+    # sits under its name, so a name per pid would make the second rename fail and block the next run
+    aside = "%s%s%d.%s" % (workdir, _GONE, os.getpid(), os.urandom(4).hex())
+    try:
+        os.rename(workdir, aside)
+    except OSError:
+        return
+    try:
+        os.mkdir(workdir, 0o700)
+    except OSError:
+        pass                                      # the next run makes it
+    if _clear_dir(aside, identity):
+        try:
+            os.rmdir(aside)
+        except OSError:
+            pass                                  # something is left in it: the next run sweeps it
+        return
+    # not the directory that was checked (swapped for a link or another directory): hand it
+    # back untouched, replacing the fresh empty one made above. If that cannot be done (the
+    # fresh one could not be made, or cannot be removed) it is renamed out of the namespace the
+    # sweep deletes from: it is somebody else's, and the sweep deletes whatever it finds there.
+    try:
+        try:
+            os.rmdir(workdir)
+        except FileNotFoundError:
+            pass
+        os.rename(aside, workdir)
+    except OSError:
+        try:
+            os.rename(aside, "%s.foreign.%d.%s" % (workdir, os.getpid(), os.urandom(4).hex()))
+        except OSError:
+            pass
 
 
 def _remove_socket(name):
@@ -975,7 +1158,9 @@ def parse_args(argv):
                              "in the future or of an unusable mtime, start that CLI (cursor-agent "
                              "with --trust) detached in a private tmux server until it rewrites "
                              "the cache, then kill that server; it never types a key and never "
-                             "touches your own tmux server")
+                             "touches your own tmux server; one refresh runs at a time, and "
+                             "the empty directory it starts in is moved aside and emptied "
+                             "afterwards")
     parser.add_argument("--tmux-bin", default="tmux", metavar="PATH")
     parser.add_argument("--refresh-wait", type=float, default=15.0, metavar="SECONDS",
                         help="how long a started CLI gets to rewrite its cache (default 15)")

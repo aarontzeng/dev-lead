@@ -2908,14 +2908,43 @@ if state.get("fail"):
     sys.exit(1)
 if "kill-server" in args and state.get("fail_kill"):
     sys.exit(1)
+if "kill-server" in args and state.get("sleep_kill"):
+    import time as _t
+    _t.sleep(state["sleep_kill"])
 if "new-session" in args and state.get("socket_dir"):
     import socket as _s
     os.makedirs(state["socket_dir"], exist_ok=True)
     srv = _s.socket(_s.AF_UNIX)
     srv.bind(os.path.join(state["socket_dir"], args[1]))
+if "new-session" in args and state.get("residue"):
+    # what a SessionStart hook did on macOS: a directory tree in the workspace,
+    # plus a link pointing out of it (which must be unlinked, not followed)
+    cwd = args[args.index("-c") + 1]
+    os.makedirs(os.path.join(cwd, ".remember", "logs"), exist_ok=True)
+    open(os.path.join(cwd, ".remember", "logs", "hook.log"), "w").write("x")
+    open(os.path.join(cwd, ".remember", ".install-marker"), "w").write("x")
+    os.symlink(state["residue"], os.path.join(cwd, "outside-link"))
+    os.symlink(state["residue"], os.path.join(cwd, ".remember", "logs", "nested-link"))
+    if state.get("deep"):
+        os.mkdir(os.path.join(cwd, "deep"))
+        here = os.open(".", os.O_RDONLY)
+        os.chdir(os.path.join(cwd, "deep"))
+        for _ in range(1200):                     # relative steps: an absolute path this long exceeds PATH_MAX
+            os.mkdir("d")
+            os.chdir("d")
+        os.fchdir(here)
 if "new-session" in args and state.get("sleep"):
     import time as _t
     _t.sleep(state["sleep"])
+if "new-session" in args and state.get("swap_to"):
+    cwd = args[args.index("-c") + 1]
+    os.rename(cwd, cwd + ".moved" + str(os.getpid()))
+    os.symlink(state["swap_to"], cwd)
+if "new-session" in args and state.get("swap_to_dir"):
+    cwd = args[args.index("-c") + 1]
+    os.rename(cwd, cwd + ".moved" + str(os.getpid()))
+    os.mkdir(cwd)
+    open(os.path.join(cwd, "stranger.txt"), "w").write("mine")
 if "new-session" in args and state.get("rewrite"):
     if state.get("partial"):
         # the agy status line writes with `>`: truncate first, JSON later
@@ -3066,7 +3095,145 @@ def test_quota_snapshot_tui_refresh(tmp):
           len(recs) == 2 and all(x.get("read_status") == "ok" and x.get("freshness") == "fresh"
                                  and x.get("problems") == [] for x in recs), recs)
 
+    outside = tmp / "outside-target"
+    outside.mkdir()
+    (outside / "keep.txt").write_text("keep")
     workdir = home / ".cache" / "dev-lead" / "quota-tui"
+    r, recs, calls = scenario("hook residue", extra_state={"residue": str(outside)})
+    check("tui refresh: what the run left in the working directory (a hook's .remember/, a link) is "
+          "removed once the server is stopped",
+          recs and all(x["problems"] == [] for x in recs) and list(workdir.iterdir()) == [],
+          list(workdir.iterdir()))
+    check("tui refresh: ...a link left there is unlinked, never followed (its target survives)",
+          (outside / "keep.txt").read_text() == "keep", list(outside.iterdir()))
+    r, recs, calls = scenario("after residue")
+    check("tui refresh: ...so the next refresh is not refused as 'not empty'",
+          verbs(calls) == ["new-session", "kill-server"]
+          and all(not any("not empty" in p for p in x["problems"]) for x in recs), (calls, recs))
+    r, recs, calls = scenario("residue kill fails", extra_state={"residue": str(outside), "fail_kill": True})
+    check("tui refresh: when the server could not be stopped nothing is removed from the working directory "
+          "(every seeded file, link and its target are as they were)",
+          (workdir / ".remember" / "logs" / "hook.log").read_text() == "x"
+          and (workdir / ".remember" / ".install-marker").read_text() == "x"
+          and os.readlink(workdir / "outside-link") == str(outside)
+          and os.readlink(workdir / ".remember" / "logs" / "nested-link") == str(outside)
+          and (outside / "keep.txt").read_text() == "keep"
+          and not list(tmp.glob("**/quota-tui.gone.*")), list(workdir.iterdir()))
+    for entry in workdir.iterdir():
+        if entry.is_symlink() or entry.is_file():
+            entry.unlink()
+        else:
+            shutil.rmtree(entry)
+    r, recs, calls = scenario("residue nested link", extra_state={"residue": str(outside)})
+    check("tui refresh: ...a link nested inside a removed directory is unlinked too, its target kept",
+          list(workdir.iterdir()) == [] and (outside / "keep.txt").read_text() == "keep", list(workdir.iterdir()))
+    r, recs, calls = scenario("residue too deep", extra_state={"residue": str(outside), "deep": True})
+    def chain_depth(top):
+        here = os.open(".", os.O_RDONLY)
+        depth = 0
+        try:
+            os.chdir(top)
+            while os.path.isdir("d"):
+                os.chdir("d")
+                depth += 1
+        finally:
+            os.fchdir(here)
+            os.close(here)
+        return depth
+    leftovers = list((home / ".cache" / "dev-lead").glob("quota-tui.gone.*"))
+    check("tui refresh: ...the deep tree was really built (the leftover still holds a chain of 1200 directories)",
+          len(leftovers) == 1 and chain_depth(leftovers[0] / "deep") == 1200,
+          [(p.name, chain_depth(p / "deep")) for p in leftovers])
+    gone = list((home / ".cache" / "dev-lead").glob("quota-tui.gone.*"))
+    check("tui refresh: a residue tree deeper than the recursion limit does not crash the run (records "
+          "printed, exit 0), the run really started and was stopped, and the working directory is a fresh "
+          "EMPTY one, so it does not block the next refresh",
+          r.returncode == 0 and len(recs) == 2 and verbs(calls) == ["new-session", "kill-server"]
+          and workdir.is_dir() and list(workdir.iterdir()) == [] and len(gone) == 1,
+          (r.returncode, r.stderr[-300:], verbs(calls), gone))
+    r, recs, calls = scenario("after a too-deep residue")
+    check("tui refresh: ...and the next refresh starts (not refused as 'not empty')",
+          verbs(calls) == ["new-session", "kill-server"], (calls, recs))
+    subprocess.run(["rm", "-rf", *map(str, gone)], check=True)
+    leftover = home / ".cache" / "dev-lead" / "quota-tui.gone.99999"
+    (leftover / "sub").mkdir(parents=True)
+    (leftover / "sub" / "f.txt").write_text("x")
+    other = home / ".cache" / "dev-lead" / "quota-tui-keep"
+    other.mkdir()
+    r, recs, calls = scenario("sweep")
+    check("tui refresh: a leftover quota-tui.gone.* directory from an earlier run is deleted by the next "
+          "refresh, and a directory that merely starts with the same letters is not",
+          not leftover.exists() and other.is_dir(), (leftover.exists(), other.exists()))
+    other.rmdir()
+
+    # the directory was swapped for a link while the CLI ran: nothing behind the link is deleted
+    swapped = tmp / "swapped-target"
+    swapped.mkdir()
+    (swapped / "precious.txt").write_text("keep")
+    r, recs, calls = scenario("workdir swapped for a link",
+                              extra_state={"residue": str(outside), "swap_to": str(swapped)})
+    check("tui refresh: a working directory swapped for a link during the run is neither followed nor "
+          "deleted through: its target survives and the link is put back",
+          (swapped / "precious.txt").read_text() == "keep" and workdir.is_symlink()
+          and not list((home / ".cache" / "dev-lead").glob("quota-tui.gone.*")), list(swapped.iterdir()))
+    workdir.unlink()
+    workdir.mkdir(mode=0o700)
+    # ... or for a different real directory: it is put back untouched, not deleted
+    r, recs, calls = scenario("workdir swapped for a directory",
+                              extra_state={"residue": str(outside), "swap_to_dir": "1"})
+    check("tui refresh: a working directory replaced by a different directory during the run is put back "
+          "untouched",
+          (workdir / "stranger.txt").read_text() == "mine", list(workdir.iterdir()))
+    for entry in workdir.iterdir():
+        entry.unlink()
+
+    # one refresh at a time
+    import threading
+    holder = {}
+
+    def hold():
+        holder["out"] = scenario("lock holder", extra_state={"sleep": 3}, wait="1")
+    t = threading.Thread(target=hold)
+    t.start()
+    holder_log = tmp / "refresh-lock-holder" / "tmux.log"
+    for _ in range(100):                          # wait until the first run has really started tmux
+        if holder_log.exists() and "new-session" in holder_log.read_text():
+            break
+        time.sleep(0.1)
+    r, recs, calls = scenario("lock second")
+    t.join()
+    check("tui refresh: a second refresh while one is running is refused and runs nothing (exit 0, both "
+          "records, the reason on each)",
+          r.returncode == 0 and len(recs) == 2 and calls == []
+          and all(any("another refresh is running" in p for p in x["problems"]) for x in recs),
+          (r.returncode, calls, recs))
+    check("tui refresh: ...and the first one still finished its own run",
+          holder["out"][2] and verbs(holder["out"][2]) == ["new-session", "kill-server"], holder.get("out"))
+
+    # a start that timed out may have made a server: only a successful kill proves it gone
+    r, recs, calls = scenario("start times out, kill fails", extra_state={"residue": str(outside), "sleep": 3,
+                                                                          "fail_kill": True},
+                              env_extra={"DEV_LEAD_QUOTA_TMUX_TIMEOUT": "1"})
+    check("tui refresh: a start that timed out followed by a kill that failed removes nothing (every seeded "
+          "file and link, and the target) and says the server could not be stopped",
+          (workdir / ".remember" / "logs" / "hook.log").read_text() == "x"
+          and (workdir / ".remember" / ".install-marker").read_text() == "x"
+          and os.readlink(workdir / "outside-link") == str(outside)
+          and os.readlink(workdir / ".remember" / "logs" / "nested-link") == str(outside)
+          and (outside / "keep.txt").read_text() == "keep"
+          and r.returncode == 0 and len(recs) == 2
+          and all(any("could not be stopped" in p for p in x["problems"]) for x in recs), (calls, recs))
+    for entry in workdir.iterdir():
+        if entry.is_symlink() or entry.is_file():
+            entry.unlink()
+        else:
+            shutil.rmtree(entry)
+
+    for entry in workdir.iterdir():
+        if entry.is_symlink() or entry.is_file():
+            entry.unlink()
+        else:
+            shutil.rmtree(entry)
     (workdir / "planted.txt").write_text("x")
     r, recs, calls = scenario("workdir not empty")
     check("tui refresh: a working directory that is not empty -> nothing is started (--trust would "
@@ -3107,7 +3274,8 @@ def test_quota_snapshot_tui_refresh(tmp):
     r, recs, calls = scenario("tmux failing", fail=True)
     check("tui refresh: tmux failing to start the CLI is a problem, and the server is killed anyway",
           verbs(calls) == ["new-session", "kill-server"]
-          and all(any("could not start" in p for p in x["problems"]) for x in recs), (calls, recs))
+          and all(any("could not start" in p for p in x["problems"]) for x in recs)
+          and not any("could not be stopped" in p for x in recs for p in x["problems"]), (calls, recs))
     r, recs, calls = scenario("tmux missing", tmux_bin=tmp / "no-such-tmux")
     check("tui refresh: no tmux binary is a problem, not a crash",
           r.returncode == 0 and all(any("tmux is not available" in p for p in x["problems"]) for x in recs),
@@ -3128,6 +3296,274 @@ def test_quota_snapshot_tui_refresh(tmp):
         r, doc = _qs(["--refresh-wait", wait, "--config", valid])
         check("tui refresh: --refresh-wait %s is a usage error (exit 2, named)" % wait,
               r.returncode == 2 and "--refresh-wait" in r.stderr, r.stderr)
+
+    # in-process: the test's own pid is the collector's pid, so the private socket's name is known
+    import importlib.util as _ilu
+    spec = _ilu.spec_from_file_location("qs_refresh_under_test", QS_SCRIPT)
+    qs = _ilu.module_from_spec(spec)
+    sys.path.insert(0, str(SCRIPTS))
+    try:
+        spec.loader.exec_module(qs)
+    finally:
+        sys.path.pop(0)
+
+    def in_process(label, kind, extra_state, env_extra=None):
+        d = tmp / ("refresh-inproc-" + label.replace(" ", "-"))
+        d.mkdir()
+        cache_file = d / "cache.json"
+        cache_file.write_text(agy_old)
+        os.utime(cache_file, (now_epoch - 3600, now_epoch - 3600))
+        log = d / "tmux.log"
+        tmux_tmp = d / "tmuxtmp"
+        sock_dir = tmux_tmp / ("tmux-%d" % os.geteuid())
+        sock_dir.mkdir(parents=True)
+        sock_name = "dev-lead-quota-%d-agy" % os.getpid()
+        import socket as _sock
+        keep = _sock.socket(_sock.AF_UNIX)
+        keep.bind(str(sock_dir / sock_name))      # a server of ours that would not stop
+        state = {"log": str(log), "cache": str(cache_file), "cache_doc": agy_new, "rewrite": True,
+                 "rewrite_mtime": now_epoch - 1}
+        state.update(extra_state)
+        (d / "state.json").write_text(json.dumps(state))
+        env = {"FAKE_TMUX_STATE": str(d / "state.json"), "HOME": str(d / "home"), "TMUX_TMPDIR": str(tmux_tmp)}
+        env.update(env_extra or {})
+        (d / "home").mkdir()
+        ctx = qs.Context(qs.parse_ts(QS_NOW), "codex", 20.0, "0.0.0", refresh=True, tmux_bin=str(fake),
+                         refresh_wait=1.0)
+        try:
+            saved = dict(os.environ)
+            os.environ.update(env)
+            try:
+                why = qs.refresh_tui(ctx, kind, str(cache_file))
+            finally:
+                os.environ.clear()
+                os.environ.update(saved)
+            workdir_ = d / "home" / ".cache" / "dev-lead" / "quota-tui"
+            return why, (sock_dir / sock_name).exists(), workdir_, log
+        finally:
+            keep.close()
+
+    # _clear_dir directly: the opened directory, not the path, decides
+    clr = tmp / "clear-dir"
+    clr.mkdir()
+    target = clr / "real"
+    target.mkdir()
+    (target / "a.txt").write_text("a")
+    (target / "sub").mkdir()
+    (target / "sub" / "b.txt").write_text("b")
+    link = clr / "link"
+    link.symlink_to(target)
+    cwd_before = os.getcwd()
+    check("tui refresh: _clear_dir given a LINK to a directory of the user's does not follow it (False, "
+          "nothing removed)", qs._clear_dir(str(link)) is False and (target / "a.txt").exists(), list(target.iterdir()))
+    ident = (target.stat().st_dev, target.stat().st_ino)
+    check("tui refresh: _clear_dir given an identity that is not the directory's does nothing",
+          qs._clear_dir(str(target), (ident[0], ident[1] + 1)) is False and (target / "a.txt").exists(),
+          list(target.iterdir()))
+    real_geteuid = os.geteuid
+    try:
+        os.geteuid = lambda: real_geteuid() + 1
+        foreign = qs._clear_dir(str(target), ident)
+    finally:
+        os.geteuid = real_geteuid
+    check("tui refresh: _clear_dir given a directory another user owns does nothing",
+          foreign is False and (target / "a.txt").exists(), list(target.iterdir()))
+    check("tui refresh: _clear_dir given the right directory empties it, nested entries and all, and the "
+          "process is back in the directory it was in",
+          qs._clear_dir(str(target), ident) is True and list(target.iterdir()) == []
+          and os.getcwd() == cwd_before, (list(target.iterdir()), os.getcwd(), cwd_before))
+
+    race = tmp / "clear-race"
+    race.mkdir()
+    victim = race / "victim"
+    victim.mkdir()
+    (victim / "mine.txt").write_text("mine")
+    sentinel = race / "sentinel"
+    sentinel.mkdir()
+    (sentinel / "precious.txt").write_text("keep")
+    real_fstat = os.fstat
+    swapped_once = []
+
+    def fstat_then_swap(fd):
+        result = real_fstat(fd)
+        if not swapped_once and (result.st_mode & 0o170000) == 0o040000:
+            swapped_once.append(1)                # the directory was just validated: now swap its path
+            os.rename(victim, race / "victim.moved")
+            os.symlink(sentinel, victim)
+        return result
+    os.fstat = fstat_then_swap
+    try:
+        done = qs._clear_dir(str(victim))
+    finally:
+        os.fstat = real_fstat
+    check("tui refresh: a path swapped for a link AFTER the directory was validated: the opened directory "
+          "is the one emptied, what the path now points at is untouched",
+          done is True and (sentinel / "precious.txt").read_text() == "keep"
+          and not (race / "victim.moved" / "mine.txt").exists(), (done, list(sentinel.iterdir())))
+    moved = (race / "victim.moved").stat()
+    dev_only = (moved.st_dev + 1, moved.st_ino)          # this directory's own inode, another device
+    check("tui refresh: _clear_dir compares the device as well as the inode",
+          qs._clear_dir(str(race / "victim.moved"), dev_only) is False
+          and qs._clear_dir(str(race / "victim.moved"), (moved.st_dev, moved.st_ino)) is True, dev_only)
+
+    # a restoration of the old cwd that fails must not abort the collector
+    gone_cwd = tmp / "gone-cwd"
+    gone_cwd.mkdir()
+    (gone_cwd / "f").write_text("x")
+    keep_dir = tmp / "gone-cwd-clear"
+    keep_dir.mkdir()
+    (keep_dir / "a").write_text("a")
+    fake_home = tmp / "gone-cwd-home"
+    fake_home.mkdir()
+    real_home = os.environ.get("HOME")
+    os.environ["HOME"] = str(fake_home)
+    before_cwd = os.getcwd()
+    os.chdir(gone_cwd)
+    real_fchdir = os.fchdir
+    calls_fchdir = []
+
+    def failing_restore(fd):
+        calls_fchdir.append(fd)
+        if len(calls_fchdir) == 2:                # the second fchdir is the restoration
+            raise PermissionError("cannot go back")
+        return real_fchdir(fd)
+    os.fchdir = failing_restore
+    try:
+        outcome = qs._clear_dir(str(keep_dir))
+        cwd_after = os.getcwd()
+    except OSError as exc:
+        outcome = exc
+        cwd_after = None
+    finally:
+        os.fchdir = real_fchdir
+        os.chdir(before_cwd)
+        if real_home is None:
+            os.environ.pop("HOME", None)
+        else:
+            os.environ["HOME"] = real_home
+    check("tui refresh: a cwd that cannot be restored after the cleanup does not raise out of it (the "
+          "directory was still emptied) and the process ends in ~, not in the emptied directory",
+          outcome is True and list(keep_dir.iterdir()) == [] and cwd_after == str(fake_home.resolve()),
+          (outcome, cwd_after))
+
+    # a rejected directory whose rollback cannot be done is not left where the sweep deletes
+    rb = tmp / "rollback"
+    (rb / "quota-tui").mkdir(parents=True)
+    (rb / "quota-tui" / "stranger.txt").write_text("mine")
+    real_mkdir = os.mkdir
+
+    def mkdir_fails(path, mode=0o777):
+        if str(path) == str(rb / "quota-tui"):
+            raise OSError(28, "No space left on device")
+        return real_mkdir(path, mode)
+    os.mkdir = mkdir_fails
+    try:
+        qs._reset_workdir(str(rb / "quota-tui"), (0, 0))      # an identity nothing has: a rejected directory
+    finally:
+        os.mkdir = real_mkdir
+    left = sorted(p.name for p in rb.iterdir())
+    check("tui refresh: a rejected directory is put back when it can be, and otherwise renamed out of the "
+          "sweep's namespace (never left as quota-tui.gone.*, which the next run would empty)",
+          not any(n.startswith("quota-tui.gone.") for n in left)
+          and (rb / "quota-tui" / "stranger.txt").exists(), left)
+    shutil.rmtree(rb)
+
+    # a rejected directory that cannot be put back (the rename onto the path fails) is renamed foreign
+    rb2 = tmp / "rollback-foreign"
+    (rb2 / "quota-tui").mkdir(parents=True)
+    (rb2 / "quota-tui" / "stranger.txt").write_text("mine")
+    real_rename = os.rename
+
+    def rename_back_fails(src, dst, *a, **kw):
+        if str(dst) == str(rb2 / "quota-tui"):
+            raise OSError(28, "No space left on device")
+        return real_rename(src, dst, *a, **kw)
+    os.rename = rename_back_fails
+    try:
+        qs._reset_workdir(str(rb2 / "quota-tui"), (0, 0))
+    finally:
+        os.rename = real_rename
+    left = sorted(p.name for p in rb2.iterdir())
+    foreign_dirs = [n for n in left if n.startswith("quota-tui.foreign.")]
+    check("tui refresh: a rejected directory that cannot be put back is renamed quota-tui.foreign.*, "
+          "contents intact, and nothing is left under quota-tui.gone.*",
+          len(foreign_dirs) == 1 and (rb2 / foreign_dirs[0] / "stranger.txt").read_text() == "mine"
+          and not any(n.startswith("quota-tui.gone.") for n in left), left)
+    qs._sweep_leftovers(str(rb2))
+    check("tui refresh: ...and the sweep leaves it alone",
+          (rb2 / foreign_dirs[0] / "stranger.txt").exists() if foreign_dirs else False, left)
+    shutil.rmtree(rb2)
+
+    # two sources refresh in one process: a tree the first could not delete must not block the second
+    two = tmp / "two-resets"
+    two.mkdir()
+    for round_no in (1, 2):
+        wd = two / "quota-tui"
+        wd.mkdir(mode=0o700, exist_ok=True)
+        here_fd = os.open(".", os.O_RDONLY)
+        try:
+            os.chdir(wd)
+            for _ in range(1200):
+                os.mkdir("d")
+                os.chdir("d")
+        finally:
+            os.fchdir(here_fd)
+            os.close(here_fd)
+        qs._reset_workdir(str(wd), (wd.stat().st_dev, wd.stat().st_ino))
+    left = sorted(p.name for p in two.iterdir())
+    check("tui refresh: a second reset in the same process works even though the first left a tree it could "
+          "not delete (the working directory is fresh and empty, each leftover has its own name)",
+          (two / "quota-tui").is_dir() and list((two / "quota-tui").iterdir()) == []
+          and len([n for n in left if n.startswith("quota-tui.gone.")]) == 2, left)
+    subprocess.run(["rm", "-rf", *[str(two / n) for n in left if n != "quota-tui"]], check=True)
+
+    # the lock file replaced between open and lock: that lock is on a file nobody else sees
+    real_flock = qs.fcntl.flock
+
+    def swap_then_lock(fd, how):
+        real_flock(fd, how)
+        lock_path = home / ".cache" / "dev-lead" / "quota-tui.lock"
+        lock_path.unlink()
+        lock_path.write_text("")
+    d = tmp / "refresh-lock-swap"
+    d.mkdir()
+    cache_file = d / "cache.json"
+    cache_file.write_text(agy_old)
+    os.utime(cache_file, (now_epoch - 3600, now_epoch - 3600))
+    ctx = qs.Context(qs.parse_ts(QS_NOW), "codex", 20.0, "0.0.0", refresh=True, tmux_bin=str(fake), refresh_wait=1.0)
+    saved_env = dict(os.environ)
+    (d / "state.json").write_text(json.dumps({"log": str(d / "tmux.log"), "cache": str(cache_file),
+                                              "cache_doc": agy_new, "rewrite": True, "rewrite_mtime": now_epoch - 1}))
+    os.environ.update({"FAKE_TMUX_STATE": str(d / "state.json"), "HOME": str(home)})
+    qs.fcntl.flock = swap_then_lock
+    try:
+        why = qs.refresh_tui(ctx, "agy_quota_cache", str(cache_file))
+    finally:
+        qs.fcntl.flock = real_flock
+        os.environ.clear()
+        os.environ.update(saved_env)
+    check("tui refresh: a lock file replaced after it was opened is refused, and nothing is started",
+          why is not None and "lock file was replaced" in why and not (d / "tmux.log").exists(), why)
+    (home / ".cache" / "dev-lead" / "quota-tui.lock").unlink()
+
+    base_dir = home / ".cache" / "dev-lead"
+    base_dir.chmod(0o777)
+    r, recs, calls = scenario("loose base mode")
+    check("tui refresh: a ~/.cache/dev-lead with a loose mode is set to 0700 before its lock is used",
+          (base_dir.stat().st_mode & 0o777) == 0o700 and calls, oct(base_dir.stat().st_mode))
+
+    why, sock_left, wd, log = in_process("start fails kill fails", "agy_quota_cache", {"fail": True})
+    check("tui refresh: a start that RAN and failed, then a kill that failed, keeps a socket that was already "
+          "there (nothing positively stopped it)", sock_left and "could not start" in why, (why, sock_left))
+    why, sock_left, wd, log = in_process("kill hangs", "agy_quota_cache",
+                                         {"residue": str(tmp), "sleep_kill": 3},
+                                         {"DEV_LEAD_QUOTA_TMUX_TIMEOUT": "1"})
+    check("tui refresh: a kill that TIMED OUT is not a kill: the socket and the working directory's contents "
+          "are kept and the server is reported as not stopped",
+          sock_left and "could not be stopped" in why and (wd / ".remember").is_dir(), (why, sock_left))
+    why, sock_left, wd, log = in_process("kill works", "agy_quota_cache", {"residue": str(tmp)})
+    check("tui refresh: a kill that worked removes the socket and empties the working directory",
+          why is None and not sock_left and wd.is_dir() and list(wd.iterdir()) == [], (why, sock_left))
 
     # the opt-in lives in dev-lead's plugin data dir, never in the shipped file
     shipped = json.loads((SCRIPTS.parent / "data" / "quota-sources.json").read_text())
