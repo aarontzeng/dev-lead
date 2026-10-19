@@ -1873,6 +1873,1027 @@ def test_claim_audit_parsing(tmp):
           "doc.md:10" in out, out)
 
 
+# ---------------------------------------------------------- quota snapshot ----
+QS_SCRIPT = SCRIPTS / "quota-snapshot.py"
+QS_NOW = "2026-10-19T01:00:00Z"
+QS_RESET = "2026-10-19T05:00:00Z"          # after QS_NOW
+QS_WEEK = "2026-10-25T00:00:00Z"
+QS_PAST = "2026-10-18T23:00:00Z"           # before QS_NOW: that window has ended
+QS_RECORD_KEYS = ["source", "kind", "adapter", "billing_provider", "pool_id", "family",
+                  "scope_status", "support_level", "read_status", "freshness",
+                  "observed_at", "source_updated_at", "source_time_basis", "windows",
+                  "problems"]
+QS_WINDOW_KEYS = ["kind", "duration_minutes", "used_pct", "remaining_pct", "resets_at",
+                  "limit_state"]
+QS_VOCAB = {
+    "read_status": {"ok", "missing", "refused", "auth_error", "network_error",
+                    "parse_error", "unsupported", "error"},
+    "freshness": {"fresh", "stale", "unknown"},
+    "support_level": {"official", "private_cache", "tui_only"},
+    "source_time_basis": {"live", "writer", "mtime", None},
+    "scope_status": {"known", "unknown"},
+}
+QS_WINDOW_VOCAB = {
+    "kind": {"five_hour", "weekly", "monthly", "other"},
+    "limit_state": {"available", "exhausted", "unknown"},
+}
+QS_KINDS = {                               # kind -> (adapter, billing_provider)
+    "codex_app_server": ("codex", "chatgpt_subscription"),
+    "claude_usage_cache": ("claude", "claude_subscription"),
+    "agy_quota_cache": ("agy", "antigravity"),
+    "cursor_usage_cache": ("cursor", "cursor_subscription"),
+    "opencode_go_cache": ("opencode", "opencode_go"),
+}
+#: every (returncode, stdout, stderr, parsed) of a successful-looking run, for the
+#: closed-vocabulary and no-leak sweeps at the end of test_quota_snapshot
+QS_RUNS = []
+
+# A stand-in for `codex app-server --listen stdio://`. FAKE_CODEX_SCENARIO picks
+# the behaviour, FAKE_CODEX_RESULT is the rate-limits reply, and the fake writes
+# its own pid and every message it receives to files the test reads back. The
+# noise it interleaves is what the real server was measured to send, plus a
+# non-JSON line, a boolean id (True == 1 in Python), a server REQUEST that
+# reuses our ids, and a late duplicate of the first reply.
+QS_FAKE_CODEX = r'''#!@PYTHON@
+import json
+import os
+import signal
+import sys
+import time
+
+scenario = os.environ["FAKE_CODEX_SCENARIO"]
+if sys.argv[1:] != ["app-server", "--listen", "stdio://"]:
+    sys.exit(3)
+with open(os.environ["FAKE_CODEX_PIDFILE"], "w") as fh:
+    fh.write(str(os.getpid()))
+if scenario == "stubborn":
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+log = open(os.environ["FAKE_CODEX_LOG"], "a")
+
+
+def send(obj):
+    sys.stdout.write(json.dumps(obj) + "\n")
+    sys.stdout.flush()
+
+
+def noise():
+    send({"method": "configWarning", "params": {"summary": "noise"}})
+    sys.stdout.write("this line is not JSON\n")
+    sys.stdout.flush()
+    send({"method": "remoteControl/status/changed", "params": {"status": "x"}})
+    send({"id": 99, "result": {"unrelated": True}})
+    send({"id": True, "error": {"code": -1, "message": "a boolean id is not 1"}})
+    send({"id": 1, "method": "server/request", "params": {}})
+    send({"id": 2, "method": "server/request", "params": {}})
+    send({"method": "account/updated", "params": {"accountId": "ACCT-SECRET-7f3a"}})
+
+
+for line in sys.stdin:
+    msg = json.loads(line)
+    log.write(json.dumps(msg) + "\n")
+    log.flush()
+    if msg.get("id") == 1 and msg.get("method") == "initialize":
+        noise()
+        if scenario == "init_error":
+            send({"id": 1, "error": {"code": -32600, "message": "INIT-ERROR-BODY-91ac"}})
+        elif scenario == "eof":
+            sys.exit(0)
+        elif scenario in ("half_line", "stubborn"):
+            if scenario == "half_line":
+                sys.stdout.write('{"id": 1, "resu')
+                sys.stdout.flush()
+            time.sleep(60)
+        elif scenario == "flood":
+            # 9 MiB of non-JSON lines, more than MAX_CODEX_BYTES, before a good reply
+            sys.stdout.write(("x" * 1023 + "\n") * (9 * 1024))
+            sys.stdout.flush()
+            send({"id": 1, "result": {"userAgent": "fake-codex"}})
+        else:
+            send({"id": 1, "result": {"userAgent": "fake-codex"}})
+    elif msg.get("id") == 2:
+        noise()
+        send({"id": 1, "result": {"late": "duplicate of the first reply"}})
+        if scenario == "rpc_error":
+            send({"id": 2, "error": {"code": -32000, "message": "RPC-ERROR-BODY-5d2e"}})
+        else:
+            send({"id": 2, "result": json.loads(os.environ["FAKE_CODEX_RESULT"])})
+'''
+
+
+def _qs_epoch(iso):
+    from datetime import datetime, timezone
+    return int(datetime.strptime(iso, "%Y-%m-%dT%H:%M:%SZ")
+               .replace(tzinfo=timezone.utc).timestamp())
+
+
+def _qs_iso(epoch):
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(epoch))
+
+
+def _qs(args, env=None, cwd=None, script=None):
+    """Run quota-snapshot.py (or a copy of it) at the fixed clock; (CompletedProcess, parsed stdout or None)."""
+    cmd = ["python3", script or QS_SCRIPT, "--now", QS_NOW, *args]
+    try:
+        r = run(*cmd, env=env, cwd=cwd, timeout=60)
+    except subprocess.TimeoutExpired:
+        return subprocess.CompletedProcess(cmd, 124, "", "timed out after 60 s"), None
+    try:
+        doc = json.loads(r.stdout)
+    except ValueError:
+        doc = None
+    QS_RUNS.append((r.returncode, r.stdout, r.stderr, doc))
+    return r, doc
+
+
+def _qs_source(kind, path=None, ttl=300, name=None):
+    adapter, billing = QS_KINDS[kind]
+    src = {"name": name or adapter, "kind": kind, "adapter": adapter,
+           "billing_provider": billing, "ttl_seconds": ttl}
+    if path is not None:
+        src["path"] = str(path)
+    return src
+
+
+def _qs_config(tmp, name, sources, **top):
+    path = tmp / ("%s.json" % name)
+    doc = {"schema_version": 1, "sources": sources}
+    doc.update(top)
+    path.write_text(json.dumps(doc))
+    return path
+
+
+def _qs_win(rec, kind):
+    for w in rec["windows"]:
+        if w["kind"] == kind:
+            return w
+    return None
+
+
+def _qs_pid_gone(pidfile):
+    """True when the fake's own pid is no longer a live (or zombie) process."""
+    try:
+        pid = int(pidfile.read_text())
+    except (OSError, ValueError):
+        return False                           # the fake never started: that is not "reaped"
+    if pid <= 1:
+        return False
+    if Path("/proc/self").exists():
+        return not Path("/proc/%d" % pid).exists()
+    try:
+        os.kill(pid, 0)                        # signal 0 only probes; nothing is delivered
+    except ProcessLookupError:
+        return True
+    except OSError:
+        return False
+    return False
+
+
+def _qs_snapshot(limit_id="codex", primary=(55, 300, QS_RESET), secondary=(12, 10080, QS_WEEK)):
+    def window(spec):
+        if spec is None:
+            return None
+        used, minutes, reset = spec
+        return {"usedPercent": used, "windowDurationMins": minutes,
+                "resetsAt": _qs_epoch(reset) if isinstance(reset, str) else reset}
+    return {"limitId": limit_id, "limitName": None,
+            "primary": window(primary), "secondary": window(secondary),
+            "credits": {"hasCredits": True, "unlimited": False,
+                        "balance": "BALANCE-SECRET-9c1d"},
+            "planType": "PLAN-SECRET-2b8e", "accountId": "ACCT-SECRET-7f3a",
+            "spendControlReached": False}
+
+
+def _qs_codex(tmp, name, scenario, result=None, timeout=5, script=None):
+    """Run the collector against the fake; (proc, doc, seconds, pidfile, logfile)."""
+    fake = tmp / name
+    fake.write_text(QS_FAKE_CODEX.replace("@PYTHON@", sys.executable))
+    fake.chmod(0o755)
+    pidfile, logfile = tmp / (name + ".pid"), tmp / (name + ".log")
+    env = dict(os.environ, FAKE_CODEX_SCENARIO=scenario, FAKE_CODEX_PIDFILE=str(pidfile),
+               FAKE_CODEX_LOG=str(logfile), FAKE_CODEX_RESULT=json.dumps(result or {}))
+    cfg = _qs_config(tmp, name + "-cfg", [_qs_source("codex_app_server")])
+    started = time.monotonic()
+    r, doc = _qs(["--config", cfg, "--codex-bin", fake, "--timeout", str(timeout)], env=env,
+                 script=script)
+    return r, doc, time.monotonic() - started, pidfile, logfile
+
+
+def test_quota_snapshot(tmp):
+    """quota-snapshot.py: what it must refuse to report, per source and across all.
+
+    The failure each case catches is a number the script would otherwise invent
+    or a state it would otherwise assert: a boolean read as 1, a NaN passed
+    through, 101 clamped to 100, a symlinked cache followed, a stale file
+    re-read as fresh, one pool's headroom reported as the other's, a codex
+    process left running, a secret copied from a source document.
+    """
+    QS_RUNS.clear()
+    now_ts = _qs_epoch(QS_NOW)
+    seq = [0]
+
+    def at(kind, path, ttl=300):
+        seq[0] += 1
+        cfg = _qs_config(tmp, "cfg%d" % seq[0], [_qs_source(kind, path, ttl=ttl)])
+        return _qs(["--config", cfg])
+
+    def cache(kind, content, age=60, ttl=300):
+        """Write a cache `age` seconds before the fixed clock (negative: after it)."""
+        seq[0] += 1
+        path = tmp / ("cache%d.json" % seq[0])
+        path.write_text(content if isinstance(content, str) else json.dumps(content))
+        if age is not None:
+            os.utime(path, (now_ts - age, now_ts - age))
+        return at(kind, path, ttl)
+
+    def only(doc):
+        return doc["records"][0] if doc and len(doc["records"]) == 1 else None
+
+    # ---------------------------------------------------------------- codex ----
+    version = json.loads((SCRIPTS.parent / ".claude-plugin" / "plugin.json")
+                         .read_text())["version"]
+    snap = _qs_snapshot()
+    r, doc, took, pidfile, logfile = _qs_codex(
+        tmp, "fake-ok", "ok", {"rateLimits": snap, "rateLimitsByLimitId": {"codex": snap},
+                               "accountId": "ACCT-SECRET-7f3a"})
+    rec = only(doc)
+    check("quota-snapshot: codex normal exchange exits 0 with exactly ONE record "
+          "(the map and rateLimits describe the same pool)",
+          r.returncode == 0 and rec is not None, r.stdout + r.stderr)
+    rec = rec or {"windows": [], "problems": []}
+    check("quota-snapshot: codex record is official GPT, known scope, live time",
+          (rec.get("pool_id"), rec.get("family"), rec.get("scope_status"),
+           rec.get("support_level"), rec.get("source_time_basis"), rec.get("read_status"))
+          == ("codex:codex", "GPT", "known", "official", "live", "ok"), rec)
+    check("quota-snapshot: codex reading is fresh and stamped with the observation time",
+          rec.get("freshness") == "fresh" and rec.get("source_updated_at") == QS_NOW
+          and rec.get("observed_at") == QS_NOW, rec)
+    check("quota-snapshot: codex windows are mapped by DURATION (300 five_hour, 10080 weekly)",
+          [(w["kind"], w["duration_minutes"]) for w in rec["windows"]]
+          == [("five_hour", 300), ("weekly", 10080)], rec["windows"])
+    w5 = _qs_win(rec, "five_hour") or {}
+    check("quota-snapshot: codex values are used/remaining percent and resetsAt SECONDS as ISO UTC",
+          (w5.get("used_pct"), w5.get("remaining_pct"), w5.get("resets_at"), w5.get("limit_state"))
+          == (55, 45, QS_RESET, "available"), w5)
+    check("quota-snapshot: codex weekly resetsAt is converted from Unix seconds too",
+          (_qs_win(rec, "weekly") or {}).get("resets_at") == QS_WEEK, rec["windows"])
+    check("quota-snapshot: codex accountId / credits.balance / planType never reach stdout or stderr",
+          not any(s in r.stdout + r.stderr
+                  for s in ("ACCT-SECRET-7f3a", "BALANCE-SECRET-9c1d", "PLAN-SECRET-2b8e")),
+          r.stdout)
+    sent = [json.loads(line) for line in logfile.read_text().splitlines()]
+    check("quota-snapshot: codex gets initialize, initialized, then account/rateLimits/read, in order",
+          [(m.get("id"), m.get("method")) for m in sent]
+          == [(1, "initialize"), (None, "initialized"), (2, "account/rateLimits/read")], sent)
+    check("quota-snapshot: codex initialize names the client and carries the plugin version",
+          (sent or [{}])[0].get("params", {}).get("clientInfo")
+          == {"name": "dev_lead_quota", "version": version}, sent)
+    check("quota-snapshot: the codex process it started is gone afterwards",
+          _qs_pid_gone(pidfile))
+
+    snap_b = _qs_snapshot("codex_other", primary=(30, 300, QS_RESET), secondary=None)
+    r, doc, _, pidfile, _ = _qs_codex(
+        tmp, "fake-multi", "ok",
+        {"rateLimits": snap, "rateLimitsByLimitId": {"codex": snap, "codex_other": snap_b}})
+    ids = sorted(x["pool_id"] for x in (doc or {"records": []})["records"])
+    check("quota-snapshot: codex gives one record per limitId, none doubled by rateLimits",
+          ids == ["codex:codex", "codex:codex_other"], ids)
+    check("quota-snapshot: codex null secondary is absent from windows",
+          doc and [len(x["windows"]) for x in doc["records"]] == [2, 1], r.stdout)
+    check("quota-snapshot: ...and named as a problem on that record only, so it is not headroom",
+          doc and [[p for p in x["problems"] if "not reported" in p] for x in doc["records"]]
+          == [[], ["secondary: window not reported, only the other is known"]], r.stdout)
+    check("quota-snapshot: the codex process is gone after a multi-pool reply",
+          _qs_pid_gone(pidfile))
+
+    r, doc, *_ = _qs_codex(tmp, "fake-single", "ok", {"rateLimits": snap})
+    check("quota-snapshot: codex with only rateLimits gives its one record",
+          doc and [x["pool_id"] for x in doc["records"]] == ["codex:codex"], r.stdout)
+    r, doc, *_ = _qs_codex(tmp, "fake-emptymap", "ok",
+                           {"rateLimits": snap, "rateLimitsByLimitId": {}})
+    check("quota-snapshot: codex with an EMPTY map falls back to rateLimits alone",
+          doc and [x["pool_id"] for x in doc["records"]] == ["codex:codex"], r.stdout)
+    r, doc, *_ = _qs_codex(
+        tmp, "fake-badid", "ok",
+        {"rateLimitsByLimitId": {"bad id!": snap, "codex": snap}})
+    rec = only(doc) or {"pool_id": None, "problems": []}
+    check("quota-snapshot: codex skips a limit id that is not a plain token, and says so",
+          rec["pool_id"] == "codex:codex" and any("skipped" in p for p in rec["problems"])
+          and "bad id" not in r.stdout, r.stdout)
+
+    odd = _qs_snapshot(primary=(30, 15, QS_RESET), secondary=None)
+    r, doc, *_ = _qs_codex(tmp, "fake-odd", "ok", {"rateLimitsByLimitId": {"codex": odd}})
+    rec = only(doc) or {"windows": []}
+    check("quota-snapshot: codex primary of 15 minutes is ONE 'other' window with that duration",
+          [(w["kind"], w["duration_minutes"], w["used_pct"]) for w in rec["windows"]]
+          == [("other", 15, 30)], rec["windows"])
+    flip = _qs_snapshot(primary=(12, 10080, QS_WEEK), secondary=(55, 300, QS_RESET))
+    r, doc, *_ = _qs_codex(tmp, "fake-flip", "ok", {"rateLimitsByLimitId": {"codex": flip}})
+    rec = only(doc) or {"windows": []}
+    check("quota-snapshot: codex primary of 10080 is weekly and secondary of 300 is five_hour "
+          "(the duration decides, not the position)",
+          [(w["kind"], w["duration_minutes"], w["used_pct"]) for w in rec["windows"]]
+          == [("weekly", 10080, 12), ("five_hour", 300, 55)], rec["windows"])
+    for name, first, second in (("fake-dur-a", True, 0), ("fake-dur-b", -1, "300")):
+        odd = _qs_snapshot(primary=(30, first, QS_RESET), secondary=(40, second, QS_WEEK))
+        r, doc, *_ = _qs_codex(tmp, name, "ok", {"rateLimitsByLimitId": {"codex": odd}})
+        rec = only(doc) or {"windows": [], "problems": []}
+        check("quota-snapshot: codex windowDurationMins %s / %s -> 'other' with a null duration, "
+              "number kept, state unknown" % (json.dumps(first), json.dumps(second)),
+              [(w["kind"], w["duration_minutes"], w["used_pct"], w["limit_state"])
+               for w in rec["windows"]] == [("other", None, 30, "unknown"), ("other", None, 40, "unknown")]
+              and sum("windowDurationMins" in p for p in rec["problems"]) == 2, rec)
+    unread = _qs_snapshot(primary=(30, 300, True), secondary=(100, 10080, 10 ** 20))
+    r, doc, *_ = _qs_codex(tmp, "fake-badreset", "ok", {"rateLimitsByLimitId": {"codex": unread}})
+    rec = only(doc) or {"windows": [], "problems": []}
+    check("quota-snapshot: codex resetsAt true / out of range -> null reset, number kept, unknown "
+          "(at 100 too: an unreadable end may already be past)",
+          [(w["used_pct"], w["resets_at"], w["limit_state"]) for w in rec["windows"]]
+          == [(30, None, "unknown"), (100, None, "unknown")]
+          and sum("not a valid timestamp" in p for p in rec["problems"]) == 2, rec)
+    empty = _qs_snapshot(primary=None, secondary=None)
+    r, doc, *_ = _qs_codex(tmp, "fake-nowin", "ok", {"rateLimitsByLimitId": {"codex": empty}})
+    rec = only(doc) or {}
+    check("quota-snapshot: codex snapshot with neither primary nor secondary is parse_error, "
+          "not an ok record that reads as 'no limit'",
+          (rec.get("read_status"), rec.get("windows"), rec.get("freshness"))
+          == ("parse_error", [], "unknown") and len(rec.get("problems") or []) == 1, r.stdout)
+    anon = {k: v for k, v in snap.items() if k != "limitId"}
+    r, doc, *_ = _qs_codex(tmp, "fake-anon", "ok", {"rateLimits": anon, "rateLimitsByLimitId": {}})
+    rec = only(doc) or {}
+    check("quota-snapshot: codex rateLimits without a limitId (and an empty map) is pool codex:codex, "
+          "read and windowed, not a parse_error that happens to share the id",
+          rec.get("pool_id") == "codex:codex" and rec.get("read_status") == "ok"
+          and len(rec.get("windows") or []) == 2, r.stdout)
+
+    edge = _qs_snapshot(primary=(100, 300, QS_RESET), secondary=(0, 10080, None))
+    r, doc, *_ = _qs_codex(tmp, "fake-edge", "ok", {"rateLimitsByLimitId": {"codex": edge}})
+    rec = only(doc) or {"windows": []}
+    check("quota-snapshot: codex usedPercent 100 is exhausted with 0 remaining",
+          (_qs_win(rec, "five_hour") or {}).get("limit_state") == "exhausted"
+          and (_qs_win(rec, "five_hour") or {}).get("remaining_pct") == 0, rec["windows"])
+    check("quota-snapshot: codex usedPercent 0 with no resetsAt is available with a null reset",
+          (_qs_win(rec, "weekly") or {}).get("remaining_pct") == 100
+          and (_qs_win(rec, "weekly") or {}).get("resets_at") is None
+          and (_qs_win(rec, "weekly") or {}).get("limit_state") == "available", rec["windows"])
+
+    bad = _qs_snapshot(primary=("55", 300, QS_RESET), secondary=(True, 10080, QS_PAST))
+    r, doc, *_ = _qs_codex(tmp, "fake-bad", "ok", {"rateLimitsByLimitId": {"codex": bad}})
+    rec = only(doc) or {"windows": [], "problems": []}
+    check("quota-snapshot: codex usedPercent as a string or a boolean is null/unknown, not a number",
+          all(w["used_pct"] is None and w["remaining_pct"] is None
+              and w["limit_state"] == "unknown" for w in rec["windows"])
+          and len(rec["windows"]) == 2 and len(rec["problems"]) >= 2, rec)
+
+    for name, result in (("fake-nores", {}), ("fake-strres", {"rateLimits": "oops"})):
+        r, doc, *_ = _qs_codex(tmp, name, "ok", result)
+        rec = only(doc) or {}
+        check("quota-snapshot: codex reply without a usable snapshot is parse_error (%s)" % name,
+              rec.get("read_status") == "parse_error" and rec.get("windows") == [], r.stdout)
+
+    r, doc, _, pidfile, _ = _qs_codex(tmp, "fake-rpc", "rpc_error")
+    rec = only(doc) or {"problems": []}
+    check("quota-snapshot: a JSON-RPC error object is read_status error, carrying its code only",
+          rec.get("read_status") == "error" and any("-32000" in p for p in rec["problems"])
+          and "RPC-ERROR-BODY-5d2e" not in r.stdout + r.stderr, r.stdout)
+    check("quota-snapshot: the codex process is gone after a JSON-RPC error", _qs_pid_gone(pidfile))
+
+    r, doc, _, pidfile, logfile = _qs_codex(tmp, "fake-initerr", "init_error")
+    rec = only(doc) or {}
+    check("quota-snapshot: an error reply to initialize is read_status error and stops there",
+          rec.get("read_status") == "error" and "INIT-ERROR-BODY-91ac" not in r.stdout
+          and len(logfile.read_text().splitlines()) == 1, r.stdout)
+    check("quota-snapshot: the codex process is gone after an initialize error",
+          _qs_pid_gone(pidfile))
+
+    r, doc, _, pidfile, _ = _qs_codex(tmp, "fake-eof", "eof")
+    rec = only(doc) or {}
+    check("quota-snapshot: EOF before the reply is network_error with no windows",
+          rec.get("read_status") == "network_error" and rec.get("windows") == []
+          and rec.get("freshness") == "unknown", r.stdout)
+    check("quota-snapshot: the codex process is gone after EOF", _qs_pid_gone(pidfile))
+
+    r, doc, took, pidfile, _ = _qs_codex(tmp, "fake-half", "half_line", timeout=2)
+    rec = only(doc) or {}
+    check("quota-snapshot: half a line then a stall returns within --timeout + 3 s",
+          took < 2 + 3, "took %.1fs" % took)
+    check("quota-snapshot: half a line then a stall is network_error",
+          r.returncode == 0 and rec.get("read_status") == "network_error", r.stdout)
+    check("quota-snapshot: the stalled codex process was terminated, not left sleeping",
+          _qs_pid_gone(pidfile))
+
+    r, doc, took, pidfile, _ = _qs_codex(tmp, "fake-stubborn", "stubborn", timeout=1)
+    rec = only(doc) or {}
+    check("quota-snapshot: a codex that ignores SIGTERM is still gone (kill after the 2 s wait)",
+          _qs_pid_gone(pidfile) and rec.get("read_status") == "network_error", r.stdout)
+    check("quota-snapshot: ...and the escalation stays bounded", took < 1 + 2 + 3, "took %.1fs" % took)
+
+    r, doc, took, pidfile, _ = _qs_codex(tmp, "fake-flood", "flood", {"rateLimits": snap}, timeout=20)
+    rec = only(doc) or {"problems": []}
+    check("quota-snapshot: codex writing more than 8 MiB before its reply is network_error "
+          "(too much output), not read on",
+          rec.get("read_status") == "network_error"
+          and any("too much" in p for p in rec["problems"]), r.stdout + r.stderr)
+    check("quota-snapshot: the codex process is gone after an output flood", _qs_pid_gone(pidfile))
+
+    # The manifest is read for the version only: a manifest that cannot be read,
+    # or holds no short X.Y.Z, costs the version and never the run. A copy of the
+    # script has a manifest of its own, so the real one is never touched.
+    copy = tmp / "qs-copy"
+    (copy / "scripts").mkdir(parents=True)
+    (copy / ".claude-plugin").mkdir()
+    for name in ("quota-snapshot.py", "_common.py"):
+        shutil.copy(SCRIPTS / name, copy / "scripts" / name)
+    copy_script = copy / "scripts" / "quota-snapshot.py"
+    manifest = copy / ".claude-plugin" / "plugin.json"
+
+    def version_sent(logfile):
+        sent = [json.loads(line) for line in logfile.read_text().splitlines()] if logfile.exists() else []
+        return (sent or [{}])[0].get("params", {}).get("clientInfo", {}).get("version")
+
+    for name, label, declared in (("fake-ver-a", "not X.Y.Z", "v0.6-NOT-SEMVER"),
+                                  ("fake-ver-b", "an overlong X.Y.Z", "1.2." + "3" * 40)):
+        manifest.write_text(json.dumps({"name": "dev-lead", "version": declared}))
+        r, doc, _, _, logfile = _qs_codex(tmp, name, "ok", {"rateLimits": snap}, script=copy_script)
+        check("quota-snapshot: a manifest version that is %s goes to codex as 'unknown'" % label,
+              r.returncode == 0 and version_sent(logfile) == "unknown", r.stdout + r.stderr)
+    manifest.write_text(json.dumps({"name": "dev-lead", "version": version}))
+    if os.geteuid() == 0:
+        print("  skip quota-snapshot: unreadable-manifest case (root reads a mode-000 file)")
+    else:
+        manifest.chmod(0)
+        try:
+            r, doc, _, _, logfile = _qs_codex(tmp, "fake-noman", "ok", {"rateLimits": snap},
+                                              script=copy_script)
+        finally:
+            manifest.chmod(0o644)
+        check("quota-snapshot: an unreadable plugin.json still prints the records, version 'unknown'",
+              r.returncode == 0 and doc and [x["pool_id"] for x in doc["records"]] == ["codex:codex"]
+              and version_sent(logfile) == "unknown", "rc=%s %s" % (r.returncode, r.stderr[-300:]))
+
+    cfg = _qs_config(tmp, "cfg-nocodex", [_qs_source("codex_app_server")])
+    r, doc = _qs(["--config", cfg, "--codex-bin", tmp / "no-such-codex"])
+    check("quota-snapshot: a missing codex binary is read_status missing, exit 0",
+          r.returncode == 0 and (only(doc) or {}).get("read_status") == "missing", r.stdout)
+    plain = tmp / "not-executable"
+    plain.write_text("#!/bin/sh\n")
+    plain.chmod(0o644)
+    r, doc = _qs(["--config", cfg, "--codex-bin", plain])
+    check("quota-snapshot: a codex that cannot be executed is read_status error",
+          r.returncode == 0 and (only(doc) or {}).get("read_status") == "error", r.stdout)
+
+    # --------------------------------------------------------------- claude ----
+    claude_ok = {
+        "five_hour": {"utilization": 55, "resets_at": "2026-10-19T05:00:00+00:00"},
+        "seven_day": {"utilization": 12.5, "resets_at": "2026-10-25T08:00:00+08:00"},
+        "seven_day_opus": {"utilization": 99, "resets_at": QS_RESET},
+        "account_email": "canary-claude@example.invalid",
+    }
+    r, doc = cache("claude_usage_cache", claude_ok, age=60)
+    rec = only(doc) or {"windows": []}
+    check("quota-snapshot: claude fresh cache is ok/fresh, stamped with its mtime",
+          (rec.get("read_status"), rec.get("freshness"), rec.get("source_time_basis"),
+           rec.get("source_updated_at")) == ("ok", "fresh", "mtime", "2026-10-19T00:59:00Z"), rec)
+    check("quota-snapshot: claude record is private_cache Claude, pool claude:subscription",
+          (rec.get("pool_id"), rec.get("family"), rec.get("scope_status"), rec.get("support_level"))
+          == ("claude:subscription", "Claude", "known", "private_cache"), rec)
+    check("quota-snapshot: claude utilization is USED percent; remaining is 100 - used",
+          [(w["kind"], w["duration_minutes"], w["used_pct"], w["remaining_pct"])
+           for w in rec["windows"]]
+          == [("five_hour", 300, 55, 45), ("weekly", 10080, 12.5, 100 - 12.5)], rec["windows"])
+    check("quota-snapshot: claude resets_at is normalised to UTC (+08:00 converted)",
+          [w["resets_at"] for w in rec["windows"]] == [QS_RESET, "2026-10-25T00:00:00Z"],
+          rec["windows"])
+    check("quota-snapshot: claude per-model keys and the email are not emitted",
+          len(rec["windows"]) == 2 and "canary-claude" not in r.stdout, r.stdout)
+    check("quota-snapshot: claude per-model weekly object -> a problem says it is present and not "
+          "read; the window states are unchanged",
+          rec.get("problems") == ["per-model weekly limits are present and not read"]
+          and [w["limit_state"] for w in rec["windows"]] == ["available", "available"], rec)
+    claude_plain = {k: v for k, v in claude_ok.items() if k != "seven_day_opus"}
+    r, doc = cache("claude_usage_cache", dict(claude_plain, seven_day_opus=None, seven_day_sonnet=None))
+    rec = only(doc) or {}
+    check("quota-snapshot: claude per-model weekly keys that are null add no problem",
+          rec.get("read_status") == "ok" and rec.get("problems") == [], rec)
+    r, doc = cache("claude_usage_cache", dict(claude_plain, seven_day_breakdown={
+        "as_of": QS_NOW, "rows": [], "window_started_at": QS_PAST}))
+    rec = only(doc) or {}
+    check("quota-snapshot: claude seven_day_breakdown (a usage report, no utilization) adds no problem",
+          rec.get("read_status") == "ok" and rec.get("problems") == [], rec)
+
+    for age, want, label in ((300, "fresh", "exactly ttl old"), (301, "stale", "one second past ttl"),
+                             (3600, "stale", "an hour old"), (-30, "fresh", "30 s ahead (skew)"),
+                             (-61, "unknown", "61 s ahead"), (-3600, "unknown", "an hour ahead")):
+        r, doc = cache("claude_usage_cache", claude_ok, age=age)
+        rec = only(doc) or {"problems": []}
+        check("quota-snapshot: claude mtime %s -> %s" % (label, want),
+              rec.get("freshness") == want, rec)
+        if want == "unknown":
+            check("quota-snapshot: claude mtime %s names the clock in problems" % label,
+                  any("clock" in p for p in rec["problems"]), rec["problems"])
+
+    real = tmp / "claude-real.json"
+    real.write_text(json.dumps(claude_ok))
+    link = tmp / "claude-link.json"
+    link.symlink_to(real)
+    r, doc = at("claude_usage_cache", link)
+    rec = only(doc) or {"problems": []}
+    check("quota-snapshot: a symlinked cache is refused, though its target is valid",
+          rec.get("read_status") == "refused" and rec.get("windows") == []
+          and any("symlink" in p for p in rec["problems"]), r.stdout)
+    adir = tmp / "claude-dir.json"
+    adir.mkdir()
+    r, doc = at("claude_usage_cache", adir)
+    check("quota-snapshot: a directory where the cache should be is refused",
+          (only(doc) or {}).get("read_status") == "refused", r.stdout)
+    fifo = tmp / "claude-fifo.json"
+    os.mkfifo(fifo)
+    r, doc = at("claude_usage_cache", fifo)
+    check("quota-snapshot: a FIFO is refused and not opened (it would block forever)",
+          r.returncode == 0 and (only(doc) or {}).get("read_status") == "refused", r.stdout + r.stderr)
+    passwd = Path("/etc/passwd")
+    if passwd.is_file() and not passwd.is_symlink() and passwd.stat().st_uid != os.geteuid():
+        r, doc = at("claude_usage_cache", passwd)
+        rec = only(doc) or {"problems": []}
+        check("quota-snapshot: a file owned by another user is refused, not read",
+              rec.get("read_status") == "refused" and any("owned" in p for p in rec["problems"]),
+              r.stdout)
+    else:
+        print("  skip quota-snapshot: another-owner case (/etc/passwd is not foreign-owned here)")
+    # The owner is checked again on the OPENED descriptor. A chown between lstat
+    # and open keeps the inode, so only fstat's owner can tell; that race needs
+    # root, so this runs in-process with fstat reporting another owner.
+    import importlib.util as _ilu
+    _qs_spec = _ilu.spec_from_file_location("quota_snapshot_under_test", QS_SCRIPT)
+    qs_mod = _ilu.module_from_spec(_qs_spec)
+    _qs_spec.loader.exec_module(qs_mod)
+    chowned = tmp / "claude-chowned.json"
+    chowned.write_text(json.dumps(claude_ok))
+    real_fstat = os.fstat
+
+    class _ForeignOwner:
+        def __init__(self, st):
+            self._st = st
+
+        def __getattr__(self, name):
+            return os.geteuid() + 1 if name == "st_uid" else getattr(self._st, name)
+
+    os.fstat = lambda fd: _ForeignOwner(real_fstat(fd))
+    try:
+        got = qs_mod.read_cache(str(chowned))
+    except Exception as exc:                   # reported by the check, not raised past it
+        got = (None, None, "raised", type(exc).__name__)
+    finally:
+        os.fstat = real_fstat
+    check("quota-snapshot: a cache whose OPENED descriptor another user owns is refused (fstat owner)",
+          tuple(got[2:]) == ("refused", "cache file is not owned by the current user"), got[2:])
+
+    body = json.dumps(claude_ok)
+    r, doc = cache("claude_usage_cache", body + " " * (1024 * 1024 - len(body)))
+    check("quota-snapshot: a cache of exactly 1 MiB is still read",
+          (only(doc) or {}).get("read_status") == "ok", r.stdout)
+    r, doc = cache("claude_usage_cache", body + " " * (1024 * 1024 - len(body) + 1))
+    rec = only(doc) or {"problems": []}
+    check("quota-snapshot: a cache over 1 MiB is refused, not parsed",
+          rec.get("read_status") == "refused" and rec.get("windows") == []
+          and any("1 MiB" in p for p in rec["problems"]), r.stdout)
+
+    r, doc = at("claude_usage_cache", tmp / "no-such-cache.json")
+    check("quota-snapshot: an absent cache is read_status missing, exit 0",
+          r.returncode == 0 and (only(doc) or {}).get("read_status") == "missing", r.stdout)
+    for label, text in (("truncated JSON", body[:40]), ("an empty file", ""),
+                        ("a JSON array", "[1, 2]"), ("an object with neither window", "{}")):
+        r, doc = cache("claude_usage_cache", text)
+        rec = only(doc) or {}
+        check("quota-snapshot: claude %s is parse_error, not a crash" % label,
+              r.returncode == 0 and rec.get("read_status") == "parse_error"
+              and rec.get("windows") == [] and rec.get("freshness") == "unknown", r.stdout + r.stderr)
+
+    tpl = ('{"five_hour": {"utilization": %s, "resets_at": "' + QS_RESET + '"}, '
+           '"seven_day": {"utilization": %s, "resets_at": "' + QS_WEEK + '"}}')
+    for first, second in (('"5"', "true"), ("NaN", "101"), ("-1", "Infinity"),
+                          ("null", "false"), ("[5]", '{"v": 5}'), ("1e999", "100.0001")):
+        r, doc = cache("claude_usage_cache", tpl % (first, second))
+        rec = only(doc) or {"windows": [], "problems": []}
+        check("quota-snapshot: claude utilization %s / %s -> both windows unknown, never a number"
+              % (first, second),
+              r.returncode == 0 and len(rec["windows"]) == 2
+              and all(w["used_pct"] is None and w["remaining_pct"] is None
+                      and w["limit_state"] == "unknown" for w in rec["windows"])
+              and len(rec["problems"]) >= 2, r.stdout + r.stderr)
+    r, doc = cache("claude_usage_cache", tpl % ("0", "100"))
+    rec = only(doc) or {"windows": []}
+    check("quota-snapshot: claude utilization 0 is available and 100 is exhausted (the bounds hold)",
+          [(w["used_pct"], w["remaining_pct"], w["limit_state"]) for w in rec["windows"]]
+          == [(0, 100, "available"), (100, 0, "exhausted")], rec["windows"])
+
+    gone = dict(claude_ok, five_hour={"utilization": 80, "resets_at": QS_PAST})
+    r, doc = cache("claude_usage_cache", gone)
+    rec = only(doc) or {"windows": [], "problems": []}
+    w5 = _qs_win(rec, "five_hour") or {}
+    check("quota-snapshot: a resets_at already in the past is unknown + a problem, not 'reset to zero'",
+          w5.get("limit_state") == "unknown" and w5.get("used_pct") != 0
+          and any("past" in p for p in rec["problems"]), rec)
+    check("quota-snapshot: ...and leaves the other window alone",
+          (_qs_win(rec, "weekly") or {}).get("limit_state") == "available", rec["windows"])
+    # a reset that is present but unreadable may already be past, exactly like one
+    # that is past: the number stays, the state is unknown (at 100 % too)
+    for label, used, reset, expect in (
+            ("null", 5, None, "available"),
+            ("zone-less", 5, "2026-10-19T05:00:00", "unknown"),
+            ("not a time", 5, "tomorrow", "unknown"),
+            ("not a time at 100 %", 100, "tomorrow", "unknown"),
+            ("with offset minutes 90", 5, "2026-10-19T05:30:00+00:90", "unknown"),
+            ("with offset hours 24", 5, "2026-10-19T05:00:00+24:00", "unknown")):
+        r, doc = cache("claude_usage_cache",
+                       dict(claude_plain, five_hour={"utilization": used, "resets_at": reset}))
+        rec = only(doc) or {"windows": [], "problems": []}
+        w5 = _qs_win(rec, "five_hour") or {}
+        check("quota-snapshot: claude resets_at %s is a null reset, never a guessed one; %s, number kept"
+              % (label, expect),
+              w5.get("resets_at") is None and w5.get("limit_state") == expect
+              and w5.get("used_pct") == used and (reset is None) == (not rec["problems"]), rec)
+    r, doc = cache("claude_usage_cache", {"five_hour": None, "seven_day": claude_ok["seven_day"]})
+    rec = only(doc) or {"windows": [], "problems": []}
+    check("quota-snapshot: claude window that is null is unknown with a problem, still listed",
+          (_qs_win(rec, "five_hour") or {}).get("limit_state") == "unknown"
+          and (_qs_win(rec, "five_hour") or {}).get("used_pct") is None and rec["problems"], rec)
+
+    # ------------------------------------------------------------------ agy ----
+    def agy_entry(fraction, reset=QS_RESET, seconds=99999):
+        return {"remaining_fraction": fraction, "reset_time": reset, "reset_in_seconds": seconds}
+    agy_ok = {"gemini-5h": agy_entry(0.75), "gemini-weekly": agy_entry(0.37, QS_WEEK, 1),
+              "3p-5h": agy_entry(0.5), "3p-weekly": agy_entry(0.9, QS_WEEK, 5)}
+    r, doc = cache("agy_quota_cache", agy_ok)
+    recs = {x["pool_id"]: x for x in (doc or {"records": []})["records"]}
+    check("quota-snapshot: agy gives two pools, agy:gemini (Gemini, known) and agy:3p (no family, unknown)",
+          sorted(recs) == ["agy:3p", "agy:gemini"]
+          and (recs["agy:gemini"]["family"], recs["agy:gemini"]["scope_status"]) == ("Gemini", "known")
+          and (recs["agy:3p"]["family"], recs["agy:3p"]["scope_status"]) == (None, "unknown")
+          and all(x["support_level"] == "tui_only" for x in recs.values()), r.stdout)
+    gem = recs.get("agy:gemini", {"windows": []})
+    check("quota-snapshot: agy remaining_fraction is REMAINING: used = 100 - fraction*100",
+          [(w["kind"], w["duration_minutes"], w["remaining_pct"], w["used_pct"])
+           for w in gem["windows"]]
+          == [("five_hour", 300, 0.75 * 100, 100 - 0.75 * 100),
+              ("weekly", 10080, 0.37 * 100, 100 - 0.37 * 100)], gem["windows"])
+    check("quota-snapshot: agy takes the reset from reset_time and ignores reset_in_seconds",
+          [w["resets_at"] for w in gem["windows"]] == [QS_RESET, QS_WEEK], gem["windows"])
+    check("quota-snapshot: agy freshness is the file mtime for both pools",
+          all(x["freshness"] == "fresh" and x["source_time_basis"] == "mtime" for x in recs.values()),
+          r.stdout)
+
+    for value, label in ((0, "0"), (0.0, "0.0")):
+        r, doc = cache("agy_quota_cache", dict(agy_ok, **{"gemini-5h": agy_entry(value)}))
+        recs = {x["pool_id"]: x for x in (doc or {"records": []})["records"]}
+        w = _qs_win(recs.get("agy:gemini", {"windows": []}), "five_hour") or {}
+        check("quota-snapshot: agy remaining_fraction %s is exhausted (used 100, remaining 0)" % label,
+              (w.get("limit_state"), w.get("used_pct"), w.get("remaining_pct")) == ("exhausted", 100, 0),
+              w)
+    for value, label in ((None, "null"), (1.2, "1.2"), (-0.1, "-0.1"), (True, "true"), ("0.5", '"0.5"')):
+        r, doc = cache("agy_quota_cache", dict(agy_ok, **{"gemini-5h": agy_entry(value)}))
+        recs = {x["pool_id"]: x for x in (doc or {"records": []})["records"]}
+        gem = recs.get("agy:gemini", {"windows": [], "problems": []})
+        w = _qs_win(gem, "five_hour") or {}
+        check("quota-snapshot: agy remaining_fraction %s -> unknown with a problem, no number" % label,
+              (w.get("limit_state"), w.get("used_pct"), w.get("remaining_pct"))
+              == ("unknown", None, None) and gem["problems"], gem)
+        check("quota-snapshot: ...and the other agy pool is untouched (%s)" % label,
+              (_qs_win(recs.get("agy:3p", {"windows": []}), "five_hour") or {}).get("limit_state")
+              == "available", r.stdout)
+
+    # a null from a fallback dict would pass for "unknown", so the window itself
+    # must be listed, in a record that is there
+    for key, pool, other, kind, kept in (("3p-weekly", "agy:3p", "agy:gemini", "weekly", 0.37 * 100),
+                                         ("gemini-5h", "agy:gemini", "agy:3p", "five_hour", 0.5 * 100)):
+        r, doc = cache("agy_quota_cache", {k: v for k, v in agy_ok.items() if k != key})
+        recs = {x["pool_id"]: x for x in (doc or {"records": []})["records"]}
+        check("quota-snapshot: agy %s missing -> both pool records are still there" % key,
+              sorted(recs) == ["agy:3p", "agy:gemini"], r.stdout)
+        hit = recs.get(pool, {"windows": [], "problems": []})
+        w = _qs_win(hit, kind)
+        check("quota-snapshot: agy %s missing -> %s %s is listed, null and unknown with a problem, "
+              "NOT the %s value" % (key, pool, kind, other),
+              w is not None and (w["limit_state"], w["used_pct"], w["remaining_pct"]) == ("unknown", None, None)
+              and any(p.startswith(key + ":") for p in hit["problems"]), hit)
+        check("quota-snapshot: ...while %s keeps its own %s (%s missing)" % (other, kind, key),
+              (_qs_win(recs.get(other, {"windows": []}), kind) or {}).get("remaining_pct") == kept, r.stdout)
+
+    r, doc = cache("agy_quota_cache", {"unrelated": 1})
+    check("quota-snapshot: agy cache with none of its keys is parse_error on BOTH pools",
+          doc and len(doc["records"]) == 2
+          and all(x["read_status"] == "parse_error" for x in doc["records"]), r.stdout)
+    r, doc = at("agy_quota_cache", tmp / "no-such-agy.json")
+    check("quota-snapshot: an absent agy cache is missing on BOTH pools (the TUI never wrote it)",
+          doc and sorted(x["pool_id"] for x in doc["records"]) == ["agy:3p", "agy:gemini"]
+          and all(x["read_status"] == "missing" for x in doc["records"]), r.stdout)
+
+    # --------------------------------------------------------------- cursor ----
+    cursor_ok = {"schema": 2, "unified": True, "weekly_pct": 5.4, "weekly_reset": QS_WEEK,
+                 "plan": "PLAN-CANARY-cursor", "prepaid_usd": 12.34, "auto_pct": 11, "api_pct": 22}
+    r, doc = cache("cursor_usage_cache", cursor_ok)
+    rec = only(doc) or {"windows": []}
+    check("quota-snapshot: cursor unified plan -> one weekly window from weekly_pct (USED percent)",
+          [(w["kind"], w["duration_minutes"], w["used_pct"], w["remaining_pct"], w["resets_at"])
+           for w in rec["windows"]] == [("weekly", 10080, 5.4, 100 - 5.4, QS_WEEK)], rec["windows"])
+    check("quota-snapshot: cursor record is private_cache, no family, unknown scope, pool cursor:unified",
+          (rec.get("pool_id"), rec.get("family"), rec.get("scope_status"), rec.get("support_level"),
+           rec.get("read_status")) == ("cursor:unified", None, "unknown", "private_cache", "ok"), rec)
+    check("quota-snapshot: cursor plan / prepaid / auto / api fields are not emitted",
+          not any(s in r.stdout for s in ("PLAN-CANARY-cursor", "12.34", "prepaid", "auto_pct")), r.stdout)
+    r, doc = cache("cursor_usage_cache", dict(cursor_ok, unified=False))
+    rec = only(doc) or {"problems": []}
+    check("quota-snapshot: cursor legacy billing-cycle plan is unsupported with no windows",
+          rec.get("read_status") == "unsupported" and rec.get("windows") == []
+          and "legacy billing-cycle plan, no weekly window" in rec["problems"], rec)
+    for label, change in (("schema 1", {"schema": 1}), ('schema "2"', {"schema": "2"}),
+                          ("schema true", {"schema": True}), ("no schema", {"schema": None})):
+        r, doc = cache("cursor_usage_cache", dict(cursor_ok, **change))
+        rec = only(doc) or {}
+        check("quota-snapshot: cursor %s is unsupported, windows empty (not read as schema 2)" % label,
+              rec.get("read_status") == "unsupported" and rec.get("windows") == [], r.stdout)
+    r, doc = cache("cursor_usage_cache", {k: v for k, v in cursor_ok.items() if k != "unified"})
+    check("quota-snapshot: cursor schema 2 without a boolean 'unified' is parse_error",
+          (only(doc) or {}).get("read_status") == "parse_error", r.stdout)
+    for value in ("101", '"5.4"', "true"):
+        r, doc = cache("cursor_usage_cache",
+                       json.dumps(cursor_ok).replace("5.4", value))
+        w = ((only(doc) or {"windows": [{}]})["windows"] or [{}])[0]
+        check("quota-snapshot: cursor weekly_pct %s -> unknown, no number" % value,
+              (w.get("limit_state"), w.get("used_pct")) == ("unknown", None), r.stdout)
+
+    # ------------------------------------------------------------- opencode ----
+    def go_usage(rolling=4, weekly=1, monthly=69, status="ok"):
+        def entry(percent, reset, st=status):
+            return {"status": st, "percent": percent, "resetsAt": reset}
+        return {"rolling": entry(rolling, QS_RESET), "weekly": entry(weekly, QS_WEEK),
+                "monthly": entry(monthly, "2026-11-08T08:38:38Z")}
+
+    def go_doc(fetched=60, usage="default", error=None, http=None):
+        return {"schema": 1,
+                "fetched_at": None if fetched is None else _qs_iso(now_ts - fetched),
+                "usage": go_usage() if usage == "default" else usage,
+                "attempted_at": QS_NOW, "error": error, "http_status": http}
+
+    r, doc = cache("opencode_go_cache", go_doc(fetched=100), age=99999, ttl=900)
+    rec = only(doc) or {"windows": []}
+    check("quota-snapshot: opencode-go success is ok with five_hour, weekly and monthly windows",
+          rec.get("read_status") == "ok"
+          and [(w["kind"], w["duration_minutes"], w["used_pct"], w["remaining_pct"])
+               for w in rec["windows"]]
+          == [("five_hour", 300, 4, 96), ("weekly", 10080, 1, 99), ("monthly", None, 69, 31)], rec)
+    check("quota-snapshot: opencode-go freshness comes from fetched_at (writer), not the file mtime",
+          (rec.get("freshness"), rec.get("source_time_basis"), rec.get("source_updated_at"))
+          == ("fresh", "writer", _qs_iso(now_ts - 100)), rec)
+    check("quota-snapshot: opencode-go record is private_cache, no family, unknown scope, pool opencode-go",
+          (rec.get("pool_id"), rec.get("family"), rec.get("scope_status"), rec.get("support_level"))
+          == ("opencode-go", None, "unknown", "private_cache"), rec)
+
+    r, doc = cache("opencode_go_cache", go_doc(fetched=100, error="unauthorized BODY-CANARY-77", http=401),
+                   age=10, ttl=900)
+    rec = only(doc) or {"windows": []}
+    check("quota-snapshot: opencode-go 401 after a success is auth_error, the old windows still reported",
+          rec.get("read_status") == "auth_error" and len(rec["windows"]) == 3
+          and rec.get("freshness") == "fresh", rec)
+    check("quota-snapshot: opencode-go error text never reaches the output",
+          "BODY-CANARY-77" not in r.stdout + r.stderr, r.stdout)
+    r, doc = cache("opencode_go_cache", go_doc(fetched=2000, error="unauthorized", http=403),
+                   age=1, ttl=900)
+    rec = only(doc) or {}
+    check("quota-snapshot: opencode-go 403 is auth_error, and an old success goes STALE although the "
+          "file and the latest attempt are new",
+          rec.get("read_status") == "auth_error" and rec.get("freshness") == "stale", rec)
+    for label, error, http, want in (("500", "server error", 500, "network_error"),
+                                     ("no status", "fetch failed", None, "network_error"),
+                                     ("no key", "no opencode-go key", None, "auth_error")):
+        r, doc = cache("opencode_go_cache", go_doc(fetched=100, error=error, http=http), ttl=900)
+        check("quota-snapshot: opencode-go latest attempt failed (%s) -> %s" % (label, want),
+              (only(doc) or {}).get("read_status") == want, r.stdout)
+    r, doc = cache("opencode_go_cache", go_doc(fetched=None, usage=None,
+                                               error="no opencode-go key"), ttl=900)
+    rec = only(doc) or {}
+    check("quota-snapshot: opencode-go 'no opencode-go key' with nothing fetched is auth_error, "
+          "no windows, no time, freshness unknown",
+          (rec.get("read_status"), rec.get("windows"), rec.get("source_updated_at"),
+           rec.get("source_time_basis"), rec.get("freshness"))
+          == ("auth_error", [], None, None, "unknown"), rec)
+    for fetched, want in ((900, "fresh"), (901, "stale")):
+        r, doc = cache("opencode_go_cache", go_doc(fetched=fetched), ttl=900)
+        check("quota-snapshot: opencode-go fetched %d s ago against ttl 900 -> %s" % (fetched, want),
+              (only(doc) or {}).get("freshness") == want, r.stdout)
+    # 02:30 at +00:90 would be 01:00Z, the fixed clock itself, if 90 minutes were taken
+    r, doc = cache("opencode_go_cache", dict(go_doc(), fetched_at="2026-10-19T02:30:00+00:90"), ttl=900)
+    rec = only(doc) or {"problems": []}
+    check("quota-snapshot: opencode-go fetched_at with offset minutes 90 is not a time, so not fresh",
+          (rec.get("freshness"), rec.get("source_updated_at")) == ("unknown", None)
+          and "fetched_at is not a valid timestamp" in rec["problems"], rec)
+    r, doc = cache("opencode_go_cache", go_doc(usage=dict(
+        go_usage(), rolling={"status": None, "percent": 4, "resetsAt": QS_RESET},
+        weekly={"percent": 1, "resetsAt": QS_WEEK})), ttl=900)
+    rec = only(doc) or {"windows": [], "problems": []}
+    check("quota-snapshot: opencode-go status null or absent -> that window unknown, 'status is "
+          "missing', number kept",
+          [(w["kind"], w["limit_state"], w["used_pct"]) for w in rec["windows"]]
+          == [("five_hour", "unknown", 4), ("weekly", "unknown", 1), ("monthly", "available", 69)]
+          and sum("status is missing" in p for p in rec["problems"]) == 2, rec)
+    r, doc = cache("opencode_go_cache", go_doc(usage=dict(go_usage(), weekly={
+        "status": "limited", "percent": 40, "resetsAt": QS_WEEK})), ttl=900)
+    rec = only(doc) or {"windows": [], "problems": []}
+    w = _qs_win(rec, "weekly") or {}
+    check("quota-snapshot: opencode-go status 'limited' makes that window unknown, status in the problem",
+          (w.get("limit_state"), w.get("used_pct")) == ("unknown", 40)
+          and any("limited" in p for p in rec["problems"])
+          and (_qs_win(rec, "five_hour") or {}).get("limit_state") == "available", rec)
+    r, doc = cache("opencode_go_cache", go_doc(usage=dict(go_usage(), weekly={
+        "status": "limited", "percent": 100, "resetsAt": QS_WEEK})), ttl=900)
+    rec = only(doc) or {"windows": [], "problems": []}
+    check("quota-snapshot: opencode-go status 'limited' at percent 100 is still exhausted, and the "
+          "status is still named as a problem",
+          (_qs_win(rec, "weekly") or {}).get("limit_state") == "exhausted"
+          and any("limited" in p for p in rec["problems"]), r.stdout)
+    r, doc = cache("opencode_go_cache", go_doc(usage=dict(go_usage(), weekly={
+        "status": "ok\nINJECTED line", "percent": 40, "resetsAt": QS_WEEK})), ttl=900)
+    check("quota-snapshot: opencode-go status text that is not a bare token is not copied",
+          "INJECTED" not in r.stdout, r.stdout)
+    r, doc = cache("opencode_go_cache", go_doc(usage=go_usage(rolling=100, weekly=0)), ttl=900)
+    rec = only(doc) or {"windows": []}
+    check("quota-snapshot: opencode-go percent 100 is exhausted (remaining 0), percent 0 is available",
+          [(w["limit_state"], w["remaining_pct"]) for w in rec["windows"][:2]]
+          == [("exhausted", 0), ("available", 100)], rec["windows"])
+    for value in ('"7"', "101", "null", "true"):
+        r, doc = cache("opencode_go_cache", json.dumps(go_doc(fetched=60)).replace(
+            '"percent": 4,', '"percent": %s,' % value), ttl=900)
+        w = _qs_win(only(doc) or {"windows": []}, "five_hour") or {}
+        check("quota-snapshot: opencode-go percent %s -> unknown, no number" % value,
+              (w.get("limit_state"), w.get("used_pct"), w.get("remaining_pct")) == ("unknown", None, None),
+              r.stdout)
+    r, doc = cache("opencode_go_cache", go_doc(usage=dict(go_usage(), rolling={
+        "status": "ok", "percent": 80, "resetsAt": QS_PAST})), ttl=900)
+    check("quota-snapshot: opencode-go resetsAt in the past -> unknown, not 'available'",
+          (_qs_win(only(doc) or {"windows": []}, "five_hour") or {}).get("limit_state") == "unknown",
+          r.stdout)
+    r, doc = cache("opencode_go_cache", dict(go_doc(), schema=2), ttl=900)
+    check("quota-snapshot: opencode-go schema 2 is unsupported, no windows",
+          (only(doc) or {}).get("read_status") == "unsupported" and (only(doc) or {}).get("windows") == [],
+          r.stdout)
+    r, doc = cache("opencode_go_cache", go_doc(usage=None), ttl=900)
+    check("quota-snapshot: opencode-go success recorded without usage is parse_error",
+          (only(doc) or {}).get("read_status") == "parse_error", r.stdout)
+
+    # --------------------------------------------------------------- common ----
+    cfg = _qs_config(tmp, "cfg-all", [
+        _qs_source("codex_app_server"),
+        _qs_source("claude_usage_cache", tmp / "none-claude.json"),
+        _qs_source("agy_quota_cache", tmp / "none-agy.json"),
+        _qs_source("cursor_usage_cache", tmp / "none-cursor.json"),
+        _qs_source("opencode_go_cache", tmp / "none-go.json", name="opencode-go")])
+    r, doc = _qs(["--config", cfg, "--codex-bin", tmp / "no-such-codex"])
+    recs = (doc or {"records": []})["records"]
+    check("quota-snapshot: when EVERY source fails it still exits 0 and prints every record",
+          r.returncode == 0 and len(recs) == 6 and all(x["read_status"] == "missing" for x in recs),
+          r.stdout + r.stderr)
+    check("quota-snapshot: the object carries schema_version 1 and generated_at = the clock",
+          doc and doc["schema_version"] == 1 and doc["generated_at"] == QS_NOW, r.stdout)
+    r, doc = _qs(["--config", cfg, "--source", "cursor", "--source", "claude",
+                  "--codex-bin", tmp / "no-such-codex"])
+    check("quota-snapshot: --source (repeatable) limits the run, in config order",
+          doc and [x["source"] for x in doc["records"]] == ["claude", "cursor"], r.stdout)
+
+    def usage_error(label, args, config=None, env=None):
+        r, _ = _qs((["--config", config] if config else []) + args, env=env)
+        lines = r.stderr.strip().splitlines()
+        check("quota-snapshot: %s -> exit 2, nothing on stdout, one line on stderr" % label,
+              r.returncode == 2 and r.stdout == "" and len(lines) == 1, "rc=%s %r %r" % (
+                  r.returncode, r.stdout, r.stderr))
+
+    usage_error("--source nope", ["--source", "nope"], config=cfg)
+    usage_error("--timeout 0", ["--timeout", "0"], config=cfg)
+    usage_error("--timeout nan", ["--timeout", "nan"], config=cfg)
+    usage_error("an unreadable --now", ["--now", "yesterday"], config=cfg)
+    usage_error("an unknown option", ["--frobnicate"], config=cfg)
+    usage_error("a config file that does not exist", [], config=tmp / "no-such-config.json")
+    broken = tmp / "broken-config.json"
+    broken.write_text('{"schema_version": 1, "sources": [')
+    usage_error("a config that is not JSON", [], config=broken)
+    for label, bad in (
+            ("an unknown kind", [dict(_qs_source("claude_usage_cache", "/x"), kind="mystery_cache")]),
+            ("a duplicate name", [_qs_source("claude_usage_cache", "/x"),
+                                  _qs_source("claude_usage_cache", "/y")]),
+            ("a missing adapter", [{k: v for k, v in _qs_source("claude_usage_cache", "/x").items()
+                                    if k != "adapter"}]),
+            ("a missing path on a cache kind", [_qs_source("claude_usage_cache")]),
+            ("ttl_seconds 0", [_qs_source("claude_usage_cache", "/x", ttl=0)]),
+            ("ttl_seconds -5", [_qs_source("claude_usage_cache", "/x", ttl=-5)]),
+            ("ttl_seconds as a string", [_qs_source("claude_usage_cache", "/x", ttl="300")]),
+            ("ttl_seconds true", [_qs_source("claude_usage_cache", "/x", ttl=True)]),
+            ("ttl_seconds 1 followed by 400 zeros (an int no float holds)",
+             [_qs_source("claude_usage_cache", "/x", ttl=10 ** 400)]),
+            ("ttl_seconds Infinity", [_qs_source("claude_usage_cache", "/x", ttl=float("inf"))]),
+            ("ttl_seconds NaN", [_qs_source("claude_usage_cache", "/x", ttl=float("nan"))]),
+            ("no sources", [])):
+        usage_error("a config with %s" % label, [], config=_qs_config(tmp, "cfg-bad", bad))
+    usage_error("schema_version 2", [], config=_qs_config(
+        tmp, "cfg-v2", [_qs_source("claude_usage_cache", "/x")], schema_version=2))
+
+    default = json.loads((SCRIPTS.parent / "data" / "quota-sources.json").read_text())
+    check("quota-snapshot: the shipped config names the five sources and their kinds",
+          [(s["name"], s["kind"]) for s in default["sources"]]
+          == [("codex", "codex_app_server"), ("claude", "claude_usage_cache"),
+              ("agy", "agy_quota_cache"), ("cursor", "cursor_usage_cache"),
+              ("opencode-go", "opencode_go_cache")], default)
+    r, doc = _qs(["--source", "codex", "--codex-bin", tmp / "no-such-codex"],
+                 env=dict(os.environ, DEV_LEAD_QUOTA_SOURCES=""))
+    check("quota-snapshot: with no --config and an empty env var the shipped config is used",
+          r.returncode == 0 and doc and [x["source"] for x in doc["records"]] == ["codex"],
+          r.stdout + r.stderr)
+    only_cfg = _qs_config(tmp, "cfg-envonly", [
+        _qs_source("claude_usage_cache", tmp / "none-env.json", name="envonly")])
+    r, doc = _qs([], env=dict(os.environ, DEV_LEAD_QUOTA_SOURCES=str(only_cfg)))
+    check("quota-snapshot: DEV_LEAD_QUOTA_SOURCES replaces the default config",
+          doc and [x["source"] for x in doc["records"]] == ["envonly"], r.stdout + r.stderr)
+    r, doc = _qs(["--config", cfg, "--source", "claude"],
+                 env=dict(os.environ, DEV_LEAD_QUOTA_SOURCES=str(only_cfg)))
+    check("quota-snapshot: --config wins over DEV_LEAD_QUOTA_SOURCES",
+          doc and [x["source"] for x in doc["records"]] == ["claude"], r.stdout + r.stderr)
+
+    home = tmp / "qs-home"
+    (home / ".cache" / "opencode-go").mkdir(parents=True)
+    xdg = tmp / "qs-xdg"
+    (xdg / "opencode-go").mkdir(parents=True)
+    cwd = tmp / "qs-cwd"
+    (cwd / "rel" / "opencode-go").mkdir(parents=True)
+    for where, percent in ((home / ".cache", 4), (xdg, 77), (cwd / "rel", 88)):
+        (where / "opencode-go" / "usage.json").write_text(json.dumps(go_doc(
+            usage=go_usage(rolling=percent))))
+    (home / "tilde.json").write_text(json.dumps(claude_ok))
+    xdg_cfg = _qs_config(tmp, "cfg-xdg", [
+        dict(_qs_source("opencode_go_cache", name="go"), path="${XDG_CACHE_HOME}/opencode-go/usage.json",
+             ttl_seconds=900)])
+    for label, value, want in (("unset", None, 4), ("empty", "", 4),
+                               ("relative", "rel", 4), ("absolute", str(xdg), 77)):
+        env = {k: v for k, v in os.environ.items() if k != "XDG_CACHE_HOME"}
+        env["HOME"] = str(home)
+        if value is not None:
+            env["XDG_CACHE_HOME"] = value
+        r, doc = _qs(["--config", xdg_cfg], env=env, cwd=cwd)
+        used = (_qs_win(only(doc) or {"windows": []}, "five_hour") or {}).get("used_pct")
+        check("quota-snapshot: XDG_CACHE_HOME %s -> %s" % (
+            label, "~/.cache" if want == 4 else "that directory"), used == want, r.stdout + r.stderr)
+    tilde_cfg = _qs_config(tmp, "cfg-tilde", [dict(_qs_source("claude_usage_cache"), path="~/tilde.json")])
+    os.utime(home / "tilde.json", (now_ts - 5, now_ts - 5))
+    r, doc = _qs(["--config", tilde_cfg], env=dict(os.environ, HOME=str(home)))
+    check("quota-snapshot: a leading ~ in a path means $HOME",
+          (only(doc) or {}).get("read_status") == "ok", r.stdout + r.stderr)
+
+    # the reference is where a reader learns the record shape, so it must name all of it
+    ref = " ".join((SCRIPTS.parent / "skills" / "dev-lead" / "references" / "quota-sources.md")
+                   .read_text().split())
+    named = set(QS_RECORD_KEYS + QS_WINDOW_KEYS)
+    for vocab in list(QS_VOCAB.values()) + list(QS_WINDOW_VOCAB.values()):
+        named |= {"null" if v is None else v for v in vocab}
+    unnamed = sorted(n for n in named if "`%s`" % n not in ref)
+    check("quota-snapshot: the reference names every record key, window key and vocabulary value",
+          not unnamed, unnamed)
+    check("quota-snapshot: the reference says reaping codex can add about 2 s past --timeout",
+          "reaping the process adds at most about 2 s" in ref)
+
+    # sweeps over every document printed above
+    runs = [(rc, out, err, parsed) for rc, out, err, parsed in QS_RUNS if rc == 0]
+    check("quota-snapshot: every successful run printed exactly one JSON object with schema_version 1",
+          runs and all(p is not None and p.get("schema_version") == 1
+                       and sorted(p) == ["generated_at", "records", "schema_version"]
+                       for _, _, _, p in runs), "%d runs" % len(runs))
+    check("quota-snapshot: no successful run wrote anything to stderr",
+          all(err == "" for _, _, err, _ in runs), [err for _, _, err, _ in runs if err][:1])
+    records = [rec for _, _, _, p in runs if p for rec in p["records"]]
+    windows = [w for rec in records for w in rec["windows"]]
+    check("quota-snapshot: every record carries exactly the whitelisted fields",
+          records and all(list(rec) == QS_RECORD_KEYS for rec in records),
+          [list(rec) for rec in records if list(rec) != QS_RECORD_KEYS][:1])
+    check("quota-snapshot: every window carries exactly the whitelisted fields",
+          windows and all(list(w) == QS_WINDOW_KEYS for w in windows), len(windows))
+    for field, allowed in QS_VOCAB.items():
+        seen = {rec[field] for rec in records}
+        check("quota-snapshot: every emitted %s is in its closed vocabulary" % field,
+              seen <= allowed, sorted(map(str, seen - allowed)))
+    for field, allowed in QS_WINDOW_VOCAB.items():
+        seen = {w[field] for w in windows}
+        check("quota-snapshot: every emitted window %s is in its closed vocabulary" % field,
+              seen <= allowed, sorted(map(str, seen - allowed)))
+    check("quota-snapshot: the cases above produced every read_status in the vocabulary",
+          {"ok", "missing", "refused", "auth_error", "network_error", "parse_error",
+           "unsupported", "error"} <= {rec["read_status"] for rec in records},
+          sorted({rec["read_status"] for rec in records}))
+    check("quota-snapshot: no emitted percentage is a boolean, NaN, or outside 0-100",
+          all(w[f] is None or (not isinstance(w[f], bool) and isinstance(w[f], (int, float))
+                               and 0 <= w[f] <= 100)
+              for w in windows for f in ("used_pct", "remaining_pct")), len(windows))
+    check("quota-snapshot: no source document marker leaked into any stdout",
+          not any(s in out for _, out, _, _ in runs
+                  for s in ("canary-claude", "PLAN-CANARY-cursor", "BODY-CANARY-77",
+                            "ACCT-SECRET-7f3a", "BALANCE-SECRET-9c1d", "PLAN-SECRET-2b8e")),
+          "leak")
+
+
 # ------------------------------------------------------------ lint version ----
 def test_lint_version(tmp):
     """check_version(): both rules, and the two things that make them honest.
@@ -9025,6 +10046,10 @@ def main():
     print("claim-audit.py parsing, range and exit codes")
     with tempfile.TemporaryDirectory() as td:
         test_claim_audit_parsing(Path(td))
+
+    print("quota-snapshot.py")
+    with tempfile.TemporaryDirectory() as td:
+        test_quota_snapshot(Path(td))
 
     if FAILURES:
         print(f"\nFAIL — {len(FAILURES)} test(s) failed")
