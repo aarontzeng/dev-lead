@@ -173,9 +173,23 @@ What each kind can produce, and when:
 
 - **Who writes it:** only the interactive Antigravity TUI
   (`/tmp/gemini/statusline-quota-cache.json`), so `support_level` is
-  `tui_only`. With no TUI session the file is absent or old: on this host on
-  2026-10-19 it did not exist and the records were `missing`. The collector
-  cannot refresh it.
+  `tui_only`. The TUI writes the file when it renders a status line that
+  carries a quota payload: when someone uses it, or when `/usage` is run in
+  it. An idle TUI does not rewrite it (measured 2026-10-19 on two hosts: a TUI
+  open since 08:20 left the file untouched from 10:34 for more than 26
+  minutes, and `/usage` rewrote it at once). With no TUI the file is absent or
+  old, and the records are `missing` or `stale`. The collector cannot refresh
+  it.
+- **No other source on a consumer login:** headless `agy -p` refreshes its
+  quota internally but prints none (its stream-json carries token counts
+  only, and agy 1.4.2 has no quota subcommand), and the backend's quota calls
+  answer a consumer login with 403 (`retrieveUserQuotaSummary`: no licence;
+  `fetchAvailableModels`: no permission; on the production and the daily host
+  alike, 2026-10-19). A leg's own outcome (429, an empty answer, a timeout) is
+  the remaining signal.
+- **Refreshing it is an operator's choice:** running `/usage` in a TUI hosted
+  in tmux rewrites the cache, but that types into a person's interactive
+  session, so this collector never does it.
 - **Units:** `remaining_fraction` is the REMAINING fraction 0-1, `reset_time`
   is an ISO string. `reset_in_seconds` is ignored because it ages from the
   moment it was written.
@@ -263,9 +277,9 @@ The next phase reads these records to inform dispatch. What it must hold to:
   the numbers are current: the measurement below saw a rewrite carry a value
   that lagged real use. Treat agy headroom as advisory; the leg's own outcome
   decides.
-- **An mtime can go stale while the values have not changed.** Caches judged
-  by mtime are only as fresh as their writer's last rewrite. Measured
-  2026-10-19 on ps-241: an idle AGY TUI rewrote its cache at irregular
-  intervals (09:14, 09:17, 09:30, 09:45: roughly every 13-15 min), and only
-  while it was open; the 09:45 value had not moved although an agy leg spent
-  Gemini quota at 09:34-09:40.
+- **An mtime can go stale while the values have not changed, and a fresh
+  mtime can carry old values.** Caches judged by mtime are only as fresh as
+  their writer's last rewrite. The agy writer is a TUI that rewrites only when
+  it is used (see `agy_quota_cache`); on 2026-10-19 a rewrite at 09:45 still
+  carried the 09:30 value although an agy leg had spent Gemini quota at
+  09:34-09:40.
