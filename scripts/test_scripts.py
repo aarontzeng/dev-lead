@@ -2801,7 +2801,8 @@ def test_quota_snapshot(tmp):
               ("agy", "agy_quota_cache"), ("cursor", "cursor_usage_cache"),
               ("opencode-go", "opencode_go_cache")], default)
     r, doc = _qs(["--source", "codex", "--codex-bin", tmp / "no-such-codex"],
-                 env=dict(os.environ, DEV_LEAD_QUOTA_SOURCES=""))
+                 env=dict(os.environ, DEV_LEAD_QUOTA_SOURCES="", HOME=str(tmp / "qs-nolocal"),
+                          CLAUDE_PLUGIN_DATA=""))
     check("quota-snapshot: with no --config and an empty env var the shipped config is used",
           r.returncode == 0 and doc and [x["source"] for x in doc["records"]] == ["codex"],
           r.stdout + r.stderr)
@@ -2892,6 +2893,287 @@ def test_quota_snapshot(tmp):
                   for s in ("canary-claude", "PLAN-CANARY-cursor", "BODY-CANARY-77",
                             "ACCT-SECRET-7f3a", "BALANCE-SECRET-9c1d", "PLAN-SECRET-2b8e")),
           "leak")
+
+
+# ----------------------------------------------------------- TUI refresh ----
+QS_FAKE_TMUX = r"""#!/usr/bin/env python3
+# A tmux stand-in: records every call; `new-session` "runs" the CLI by writing
+# its cache (when the state says the CLI would), `kill-server` is recorded.
+import json, os, sys
+state = json.load(open(os.environ["FAKE_TMUX_STATE"]))
+with open(state["log"], "a") as fh:
+    fh.write(json.dumps(sys.argv[1:] + ["TMUX=" + os.environ.get("TMUX", "") + "|" + os.environ.get("TMUX_PANE", "")]) + "\n")
+args = sys.argv[1:]
+if state.get("fail"):
+    sys.exit(1)
+if "kill-server" in args and state.get("fail_kill"):
+    sys.exit(1)
+if "new-session" in args and state.get("socket_dir"):
+    import socket as _s
+    os.makedirs(state["socket_dir"], exist_ok=True)
+    srv = _s.socket(_s.AF_UNIX)
+    srv.bind(os.path.join(state["socket_dir"], args[1]))
+if "new-session" in args and state.get("sleep"):
+    import time as _t
+    _t.sleep(state["sleep"])
+if "new-session" in args and state.get("rewrite"):
+    if state.get("partial"):
+        # the agy status line writes with `>`: truncate first, JSON later
+        with open(state["cache"], "w") as fh:
+            fh.write('{"gemini-5h": ')
+        os.utime(state["cache"], (state["rewrite_mtime"], state["rewrite_mtime"]))
+        import subprocess
+        subprocess.Popen([sys.executable, "-c",
+                          "import os, time, sys; time.sleep(0.8); open(sys.argv[1], 'w').write(sys.argv[2]); "
+                          "os.utime(sys.argv[1], (float(sys.argv[3]), float(sys.argv[3])))",
+                          state["cache"], state["cache_doc"], str(state["rewrite_mtime"])],
+                         start_new_session=True, stdin=subprocess.DEVNULL,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)  # or tmux's caller waits on the pipe
+    else:
+        with open(state["cache"], "w") as fh:
+            fh.write(state["cache_doc"])
+        if state["rewrite_mtime"] is not None:
+            os.utime(state["cache"], (state["rewrite_mtime"], state["rewrite_mtime"]))
+"""
+
+
+def test_quota_snapshot_tui_refresh(tmp):
+    """--refresh starts agy / cursor-agent in a PRIVATE tmux server, only when both opt-ins hold and the cache is stale."""
+    runs_before = len(QS_RUNS)
+    fake = tmp / "tmux"
+    fake.write_text(QS_FAKE_TMUX)
+    fake.chmod(0o755)
+    now_epoch = datetime_epoch(QS_NOW)
+    entry = {"remaining_fraction": 0.6, "reset_time": QS_RESET, "reset_in_seconds": 1}
+    agy_new = json.dumps({"gemini-5h": entry, "gemini-weekly": entry, "3p-5h": entry,
+                          "3p-weekly": dict(entry, remaining_fraction=0.25)})
+    agy_old = json.dumps({"gemini-5h": dict(entry, remaining_fraction=0.1), "gemini-weekly": entry,
+                          "3p-5h": entry, "3p-weekly": entry})
+    cur_new = json.dumps({"schema": 2, "unified": True, "weekly_pct": 12.5, "weekly_reset": QS_WEEK})
+    cur_old = json.dumps({"schema": 2, "unified": True, "weekly_pct": 3.0, "weekly_reset": QS_WEEK})
+    home = tmp / "refresh-home"
+    home.mkdir()
+
+    def scenario(label, kind="agy_quota_cache", *, refresh="tmux_spawn", flag=True, age=3600,
+                 rewrite=True, fail=False, tmux_bin=None, partial=False, wait="1", env_extra=None,
+                 new_doc=None, extra_state=None):
+        d = tmp / ("refresh-" + label.replace(" ", "-"))
+        d.mkdir()
+        cache_file = d / "cache.json"
+        old, new = (agy_old, agy_new) if kind == "agy_quota_cache" else (cur_old, cur_new)
+        cache_file.write_text(old)
+        os.utime(cache_file, (now_epoch - age, now_epoch - age))
+        src = _qs_source(kind, cache_file)
+        if refresh is not None:
+            src["refresh"] = refresh
+        cfg = _qs_config(d, "cfg", [src])
+        log = d / "tmux.log"
+        state = {"log": str(log), "cache": str(cache_file), "cache_doc": new_doc or new, "rewrite": rewrite,
+                 "rewrite_mtime": now_epoch - 1, "fail": fail, "partial": partial}
+        state.update(extra_state or {})
+        (d / "state.json").write_text(json.dumps(state))
+        args = ["--config", cfg, "--tmux-bin", tmux_bin or fake, "--refresh-wait", wait]
+        if flag:
+            args.append("--refresh")
+        env = dict(os.environ, FAKE_TMUX_STATE=str(d / "state.json"), HOME=str(home))
+        env.update(env_extra or {})
+        r, doc = _qs(args, env=env)
+        calls = [json.loads(x) for x in log.read_text().splitlines()] if log.exists() else []
+        return r, (doc or {"records": []})["records"], calls
+
+    def verbs(calls):
+        return [next((a for a in c if a in ("new-session", "kill-server")), "?") for c in calls]
+
+    def private(calls):
+        return bool(calls) and all(c[:1] == ["-L"] and c[1].startswith("dev-lead-quota-") for c in calls) \
+            and len({c[1] for c in calls}) == 1
+
+    def argv(call):
+        return call[:-1]                          # the fake appends what it saw in TMUX
+
+    r, recs, calls = scenario("agy stale", env_extra={"TMUX": "/tmp/tmux-1/default,1,0", "TMUX_PANE": "%3"})
+    gem = next((x for x in recs if x["pool_id"] == "agy:gemini"), {})
+    check("tui refresh: a stale opted-in agy cache starts `agy` in a new detached session in dev-lead's "
+          "empty directory, then kills that server",
+          verbs(calls) == ["new-session", "kill-server"] and argv(calls[0])[-1] == "agy"
+          and "-d" in calls[0] and calls[0][calls[0].index("-c") + 1]
+          == str(home / ".cache" / "dev-lead" / "quota-tui"), calls)
+    check("tui refresh: ...every tmux call names one private socket (-L dev-lead-quota-*), never the "
+          "person's server", private(calls), calls)
+    check("tui refresh: ...the private server reads no tmux config (-f /dev/null before new-session)",
+          calls and calls[0][2:4] == ["-f", os.devnull] and calls[0][4] == "new-session", calls)
+    check("tui refresh: ...and tmux never sees the caller's TMUX or TMUX_PANE (both dropped)",
+          calls and all(c[-1] == "TMUX=|" for c in calls), calls)
+    p3 = next((x for x in recs if x["pool_id"] == "agy:3p"), {})
+    check("tui refresh: ...and the rewritten cache is what is read: BOTH agy pools fresh, no problem, "
+          "each with its new value",
+          len(recs) == 2 and all(x.get("freshness") == "fresh" and x.get("problems") == [] for x in recs)
+          and (_qs_win(gem, "five_hour") or {}).get("remaining_pct") == 60
+          and (_qs_win(p3, "weekly") or {}).get("remaining_pct") == 25, recs)
+
+    r, recs, calls = scenario("non-object json", new_doc="[1, 2]")
+    check("tui refresh: a cache rewritten to valid JSON that is not an object is not a successful refresh",
+          all(any("did not rewrite" in p for p in x["problems"]) for x in recs), recs)
+
+    r, recs, calls = scenario("kill fails", extra_state={"fail_kill": True})
+    check("tui refresh: a private server that cannot be stopped is a problem even when the cache was rewritten",
+          all(any("could not be stopped" in p for p in x["problems"]) for x in recs), recs)
+    sockdir2 = tmp / "tmuxtmp2" / ("tmux-%d" % os.geteuid())
+    r, recs, calls = scenario("kill fails keeps socket", env_extra={"TMUX_TMPDIR": str(tmp / "tmuxtmp2")},
+                              extra_state={"fail_kill": True, "socket_dir": str(sockdir2)})
+    check("tui refresh: ...and its socket is kept, the one way to reach that server later",
+          calls and (sockdir2 / calls[0][1]).exists(), list(sockdir2.iterdir()) if sockdir2.exists() else None)
+
+    sockdir = tmp / "tmuxtmp" / ("tmux-%d" % os.geteuid())
+    r, recs, calls = scenario("socket file", env_extra={"TMUX_TMPDIR": str(tmp / "tmuxtmp")},
+                              extra_state={"socket_dir": str(sockdir)})
+    check("tui refresh: the private socket file tmux leaves behind is removed",
+          calls and not (sockdir / calls[0][1]).exists() and sockdir.is_dir(), list(sockdir.iterdir()))
+
+    workdir = home / ".cache" / "dev-lead" / "quota-tui"
+    workdir.chmod(0o755)
+    r, recs, calls = scenario("loose workdir mode")
+    check("tui refresh: a working directory with a looser mode is set back to 0700 before use",
+          (workdir.stat().st_mode & 0o777) == 0o700 and calls, oct(workdir.stat().st_mode))
+
+    # the clock is read AFTER the refresh: without --now, generated_at is not
+    # earlier than the second the CLI rewrote the cache (the fake takes 1.2 s)
+    d = tmp / "refresh-clock"
+    d.mkdir()
+    cache_file = d / "cache.json"
+    cache_file.write_text(agy_old)
+    os.utime(cache_file, (time.time() - 3600, time.time() - 3600))
+    cfg = _qs_config(d, "cfg", [dict(_qs_source("agy_quota_cache", cache_file), refresh="tmux_spawn")])
+    (d / "state.json").write_text(json.dumps({"log": str(d / "tmux.log"), "cache": str(cache_file),
+                                              "cache_doc": agy_new, "rewrite": True, "rewrite_mtime": None,
+                                              "sleep": 1.2}))
+    r = run("python3", QS_SCRIPT, "--config", cfg, "--tmux-bin", fake, "--refresh", "--refresh-wait", "5",
+            env=dict(os.environ, FAKE_TMUX_STATE=str(d / "state.json"), HOME=str(home)), timeout=60)
+    try:
+        out = json.loads(r.stdout)
+    except ValueError:
+        out = None
+    written = int(cache_file.stat().st_mtime)
+    check("tui refresh: without --now the clock is read after the refresh (generated_at is not before "
+          "the rewrite)",
+          out and int(datetime_epoch(out["generated_at"])) >= written
+          and all(int(datetime_epoch(x["observed_at"])) >= written and x["freshness"] == "fresh"
+                  for x in out["records"]), (r.stdout[:300], written))
+
+    r, recs, calls = scenario("partial write", partial=True, wait="5")
+    check("tui refresh: a cache truncated first and written later is waited for: read whole (not "
+          "parse_error), fresh, no problem",
+          len(recs) == 2 and all(x.get("read_status") == "ok" and x.get("freshness") == "fresh"
+                                 and x.get("problems") == [] for x in recs), recs)
+
+    workdir = home / ".cache" / "dev-lead" / "quota-tui"
+    (workdir / "planted.txt").write_text("x")
+    r, recs, calls = scenario("workdir not empty")
+    check("tui refresh: a working directory that is not empty -> nothing is started (--trust would "
+          "trust what is there)",
+          calls == [] and all(any("not empty" in p for p in x["problems"]) for x in recs), (calls, recs))
+    (workdir / "planted.txt").unlink()
+    workdir.rmdir()
+    elsewhere = tmp / "elsewhere"
+    elsewhere.mkdir()
+    workdir.symlink_to(elsewhere)
+    r, recs, calls = scenario("workdir a link")
+    check("tui refresh: a working directory that is a link -> nothing is started",
+          calls == [] and all(any("not a plain directory" in p for p in x["problems"]) for x in recs),
+          (calls, recs))
+    workdir.unlink()
+    check("tui refresh: no key is ever sent (no send-keys in any call)",
+          not any("send-keys" in c for c in calls), calls)
+
+    r, recs, calls = scenario("cursor stale", "cursor_usage_cache")
+    cur = recs[0] if recs else {}
+    check("tui refresh: a stale opted-in cursor cache starts `cursor-agent --trust` the same way",
+          verbs(calls) == ["new-session", "kill-server"] and argv(calls[0])[-2:] == ["cursor-agent", "--trust"]
+          and private(calls), calls)
+    check("tui refresh: ...and the new cursor weekly figure is read, fresh",
+          cur.get("freshness") == "fresh" and (_qs_win(cur, "weekly") or {}).get("used_pct") == 12.5, cur)
+
+    for label, kw in (("not opted in", dict(refresh=None)), ("no --refresh", dict(flag=False)),
+                      ("fresh cache", dict(age=10))):
+        r, recs, calls = scenario(label, **kw)
+        check("tui refresh: %s -> tmux is never run" % label, calls == [], calls)
+
+    r, recs, calls = scenario("no rewrite", rewrite=False)
+    gem = next((x for x in recs if x["pool_id"] == "agy:gemini"), {})
+    check("tui refresh: a CLI that rewrites nothing is a problem on both agy records, the server is still "
+          "killed, the old cache stays stale",
+          verbs(calls) == ["new-session", "kill-server"] and gem.get("freshness") == "stale"
+          and all(any("did not rewrite" in p for p in x["problems"]) for x in recs), (calls, recs))
+    r, recs, calls = scenario("tmux failing", fail=True)
+    check("tui refresh: tmux failing to start the CLI is a problem, and the server is killed anyway",
+          verbs(calls) == ["new-session", "kill-server"]
+          and all(any("could not start" in p for p in x["problems"]) for x in recs), (calls, recs))
+    r, recs, calls = scenario("tmux missing", tmux_bin=tmp / "no-such-tmux")
+    check("tui refresh: no tmux binary is a problem, not a crash",
+          r.returncode == 0 and all(any("tmux is not available" in p for p in x["problems"]) for x in recs),
+          r.stdout + r.stderr)
+
+    for label, path in (
+            ("refresh on a claude source", _qs_config(tmp, "cfg-r1", [dict(
+                _qs_source("claude_usage_cache", tmp / "x.json"), refresh="tmux_spawn")])),
+            ("the retired value tmux_usage", _qs_config(tmp, "cfg-r2", [dict(
+                _qs_source("agy_quota_cache", tmp / "x.json"), refresh="tmux_usage")])),
+            ("an unknown refresh value", _qs_config(tmp, "cfg-r3", [dict(
+                _qs_source("cursor_usage_cache", tmp / "x.json"), refresh="keystrokes")]))):
+        r, doc = _qs(["--config", path])
+        check("tui refresh: %s is a config error (exit 2)" % label,
+              r.returncode == 2 and r.stdout == "", r.stderr)
+    valid = _qs_config(tmp, "cfg-wait", [_qs_source("claude_usage_cache", tmp / "x.json")])
+    for wait in ("0", "61", "nan"):
+        r, doc = _qs(["--refresh-wait", wait, "--config", valid])
+        check("tui refresh: --refresh-wait %s is a usage error (exit 2, named)" % wait,
+              r.returncode == 2 and "--refresh-wait" in r.stderr, r.stderr)
+
+    # the opt-in lives in dev-lead's plugin data dir, never in the shipped file
+    shipped = json.loads((SCRIPTS.parent / "data" / "quota-sources.json").read_text())
+    check("tui refresh: the shipped config does not opt in",
+          all("refresh" not in s for s in shipped["sources"]), shipped)
+    local = _qs_config(tmp, "local-src", [_qs_source("claude_usage_cache", tmp / "none.json", name="localonly")])
+    own = tmp / "plugins" / "data" / "dev-lead-dev-lead"
+    own.mkdir(parents=True)
+    (own / "quota-sources.json").write_text(local.read_text())
+    other = tmp / "plugins" / "data" / "codex-openai-codex"
+    other.mkdir(parents=True)
+    (other / "quota-sources.json").write_text(local.read_text().replace("localonly", "otherplugin"))
+    base_env = dict(os.environ, DEV_LEAD_QUOTA_SOURCES="", HOME=str(tmp / "empty-home"))
+    r, doc = _qs([], env=dict(base_env, CLAUDE_PLUGIN_DATA=str(own)))
+    check("tui refresh: quota-sources.json in dev-lead's plugin data dir replaces the shipped config",
+          doc and [x["source"] for x in doc["records"]] == ["localonly"], r.stdout + r.stderr)
+    r, doc = _qs([], env=dict(base_env, CLAUDE_PLUGIN_DATA=str(other)))
+    check("tui refresh: ANOTHER plugin's data dir is ignored (the shipped config is used)",
+          doc and "otherplugin" not in r.stdout and len(doc["records"]) > 1, r.stdout + r.stderr)
+    home2 = tmp / "home-with-local"
+    (home2 / ".claude" / "plugins" / "data" / "dev-lead-dev-lead").mkdir(parents=True)
+    (home2 / ".claude" / "plugins" / "data" / "dev-lead-dev-lead" / "quota-sources.json").write_text(local.read_text())
+    r, doc = _qs([], env=dict(base_env, HOME=str(home2), CLAUDE_PLUGIN_DATA=""))
+    check("tui refresh: with no CLAUDE_PLUGIN_DATA the home plugin data dir is used",
+          doc and [x["source"] for x in doc["records"]] == ["localonly"], r.stdout + r.stderr)
+    explicit = _qs_config(tmp, "explicit-src", [_qs_source("claude_usage_cache", tmp / "none.json", name="explicit")])
+    r, doc = _qs(["--config", explicit], env=dict(base_env, CLAUDE_PLUGIN_DATA=str(own)))
+    check("tui refresh: --config still wins over the plugin data dir",
+          doc and [x["source"] for x in doc["records"]] == ["explicit"], r.stdout + r.stderr)
+    r, doc = _qs([], env=dict(base_env, CLAUDE_PLUGIN_DATA=str(own), DEV_LEAD_QUOTA_SOURCES=str(explicit)))
+    check("tui refresh: DEV_LEAD_QUOTA_SOURCES still wins over the plugin data dir",
+          doc and [x["source"] for x in doc["records"]] == ["explicit"], r.stdout + r.stderr)
+
+    # the closed vocabularies hold for every record these runs produced too
+    # (test_quota_snapshot's sweep ran before them)
+    mine = [p for rc, _, _, p in QS_RUNS[runs_before:] if rc == 0 and p]
+    recs_all = [rec for p in mine for rec in p["records"]]
+    check("tui refresh: every record of these runs keeps the closed vocabularies",
+          recs_all and all(rec[f] in allowed for rec in recs_all for f, allowed in QS_VOCAB.items())
+          and all(w[f] in allowed for rec in recs_all for w in rec["windows"]
+                  for f, allowed in QS_WINDOW_VOCAB.items()), len(recs_all))
+
+
+def datetime_epoch(iso):
+    from datetime import datetime as _dt
+    return _dt.strptime(iso, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=__import__("datetime").timezone.utc).timestamp()
 
 
 # ------------------------------------------------------------ lint version ----
@@ -10050,6 +10332,9 @@ def main():
     print("quota-snapshot.py")
     with tempfile.TemporaryDirectory() as td:
         test_quota_snapshot(Path(td))
+    print("quota-snapshot.py --refresh (private tmux server)")
+    with tempfile.TemporaryDirectory() as td:
+        test_quota_snapshot_tui_refresh(Path(td))
 
     if FAILURES:
         print(f"\nFAIL — {len(FAILURES)} test(s) failed")

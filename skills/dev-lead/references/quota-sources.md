@@ -4,14 +4,18 @@ Read this when you need to know what a record printed by
 [`scripts/quota-snapshot.py`](../../../scripts/quota-snapshot.py) means, where a
 figure in it comes from, how far to trust it, or before adding a source. The
 collector reads five sources, declared in
-[`data/quota-sources.json`](../../../data/quota-sources.json), and prints one
-JSON record per quota pool. This file is where the record shape and its closed
+[`data/quota-sources.json`](../../../data/quota-sources.json) (replaced, in this
+order, by `--config`, `DEV_LEAD_QUOTA_SOURCES`, or a `quota-sources.json` in
+dev-lead's plugin data directory), and prints one JSON record per quota pool. This file is where the record shape and its closed
 vocabularies are written down (the tests pin the same lists), along with what
 the code cannot say about itself: who writes each source, what was checked,
 and what is still a guess.
 
 **Nothing consumes the output yet.** The collector changes no dispatch
-behaviour.
+behaviour. It is read-only except for one opt-in action: `--refresh` on a host
+that asks for it starts `agy` or `cursor-agent --trust` in a tmux server of
+its own so that a cache that is missing, stale, or without a usable time is
+rewritten (*Refreshing a TUI cache* below).
 
 ## The output
 
@@ -83,8 +87,10 @@ What each kind can produce, and when:
 
 ## What every source shares
 
-- **Read-only.** It never runs a model and never reads a credential. The only
-  process it starts is `codex app-server`, and it ends that one itself.
+- **Read-only.** It never runs a model and never reads a credential. It
+  starts `codex app-server` and ends that one itself; with `--refresh` on a
+  host that opts in it may also start `agy` or `cursor-agent --trust` in a
+  private tmux server (*Refreshing a TUI cache*).
 - **No invented values.** A value that is missing, a boolean, a string, not
   finite or out of range is reported as `null` with `limit_state` `unknown`
   and a line in `problems`. It is never clamped, zeroed or filled from another
@@ -178,8 +184,8 @@ What each kind can produce, and when:
   it. An idle TUI does not rewrite it (measured 2026-10-19 on two hosts: a TUI
   open since 08:20 left the file untouched from 10:34 for more than 26
   minutes, and `/usage` rewrote it at once). With no TUI the file is absent or
-  old, and the records are `missing` or `stale`. The collector cannot refresh
-  it.
+  old, and the records are `missing` or `stale`. The collector does not
+  refresh it unless asked to (below).
 - **No other source on a consumer login:** headless `agy -p` refreshes its
   quota internally but prints none (its stream-json carries token counts
   only, and agy 1.4.2 has no quota subcommand), and the backend's quota calls
@@ -187,9 +193,7 @@ What each kind can produce, and when:
   `fetchAvailableModels`: no permission; on the production and the daily host
   alike, 2026-10-19). A leg's own outcome (429, an empty answer, a timeout) is
   the remaining signal.
-- **Refreshing it is an operator's choice:** running `/usage` in a TUI hosted
-  in tmux rewrites the cache, but that types into a person's interactive
-  session, so this collector never does it.
+- **Refreshing it (opt-in, twice):** see *Refreshing a TUI cache* below.
 - **Units:** `remaining_fraction` is the REMAINING fraction 0-1, `reset_time`
   is an ISO string. `reset_in_seconds` is ignored because it ages from the
   moment it was written.
@@ -199,6 +203,69 @@ What each kind can produce, and when:
   read from the other pool. The statusline renderer does fall back across
   pools, which would report one pool's headroom as the other's.
 - **Not verified:** which models the `3p` pool covers.
+
+## Refreshing a TUI cache
+
+The agy and Cursor caches are written only by their CLIs' interactive status
+lines, and an idle TUI never rewrites them. A TUI that starts does (measured
+2026-10-19): agy writes its quota cache within about 4 s, already at its
+folder-trust prompt, and `cursor-agent --trust` re-fetches a cache 300 s or
+older within about 6 s. Neither calls a model.
+
+So `--refresh`, for a source whose config sets `"refresh": "tmux_spawn"` (only
+`agy_quota_cache` and `cursor_usage_cache` may) and whose cache is missing,
+older than its TTL, more than 60 s in the future, or has an mtime that cannot
+be read as a time, starts `agy` or
+`cursor-agent --trust` detached in a tmux server of its own (`tmux -L
+dev-lead-quota-<pid>-<cli> -f /dev/null`: no tmux config is read, since the
+person's `~/.tmux.conf` could run commands, and `TMUX` / `TMUX_PANE` are
+dropped from tmux's environment), in a fixed directory of dev-lead's
+(`~/.cache/dev-lead/quota-tui`), waits up to `--refresh-wait` seconds (default
+15, at most 60) for the cache to be rewritten AND parse as a JSON object (the agy status
+line truncates the file before it writes it), and kills that server on every
+path; success is judged after the kill. The refresh runs before the collection
+clock is read, so a rewritten cache is not "in the future" of its record. It
+never types a key, and never touches the person's own tmux server or a TUI
+they have open.
+
+- **The working directory must be a real, empty directory the user owns.**
+  `cursor-agent --trust` trusts it, so a link (which would trust its target)
+  or anything placed in it is refused, and its mode is set to 0700 before the
+  check. Neither CLI writes into it (measured).
+
+- **Two opt-ins.** The caller passes `--refresh`, AND the host's config marks
+  the source. The shipped `data/` file never does; a host opts in with its own
+  `quota-sources.json` in dev-lead's plugin data directory (beside
+  `roster.json`), which then replaces the shipped file.
+- **It needs the status line installed** for that CLI: the caches are written
+  by the user's statusline scripts, not by the CLIs themselves. Without one,
+  the started CLI rewrites nothing and the record says so.
+- **What the record says.** A refresh that worked adds nothing; the record is
+  as fresh as the rewritten cache. Otherwise every record of that source gets
+  one problem: `<cli> refresh skipped: tmux is not available`, `<cli> refresh
+  failed: tmux could not start <command>`, `<cli> refresh failed: <command>
+  did not rewrite its cache within N s`, or one about the working directory
+  (`cannot create`, `cannot list`, `not a plain directory of the user's`, `not
+  empty`), or `<cli> refresh failed: its private tmux server could not be
+  stopped`, and the records stay as stale as the cache was. Two exceptions:
+  a server that would not stop may still have let the cache be rewritten, so
+  that record can be fresh and still carry the problem (which keeps it from
+  reading as headroom); and
+  when the wait ends while agy is still writing (it truncates the file first),
+  the kill leaves a truncated cache, and the records are `parse_error` until
+  the next rewrite.
+- **Known limits.** Starting the CLI is a real start: it may check for an
+  update and writes its own logs and state in its own config directories (not
+  in the working directory). tmux 3.2a leaves the private socket file behind
+  after `kill-server`; the collector removes it. A collector killed during the wait skips its
+  cleanup and leaves its private server running; the socket is named by pid,
+  so the next run with that pid kills it. Two collectors at once, or a person
+  starting the same CLI during the wait, may each take the other's rewrite as
+  its own; the cache was still rewritten.
+- **Considered and not used:** typing `/usage` into a TUI the person keeps
+  open in tmux. It works (the dialog re-fetches the quota), but it types into
+  someone's interactive session, and no check of their pane can rule out a
+  key arriving between the check and the send.
 
 ## `cursor_usage_cache`
 

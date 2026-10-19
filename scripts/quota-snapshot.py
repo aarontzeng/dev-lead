@@ -3,6 +3,7 @@
 
     python3 quota-snapshot.py [--source NAME]... [--config PATH] [--now ISO8601]
                               [--codex-bin PATH] [--timeout SECONDS]
+                              [--refresh] [--tmux-bin PATH] [--refresh-wait S]
 
 Four statusline caches and one CLI protocol each keep their own units (used vs
 remaining, percent vs fraction, seconds vs ISO) and fail in their own way. This
@@ -11,7 +12,9 @@ reads them all and prints ONE object on stdout:
     {"schema_version": 1, "generated_at": "<ISO UTC>", "records": [...]}
 
 one record per quota pool. The sources, their kinds and their TTLs come from
-data/quota-sources.json (--config or DEV_LEAD_QUOTA_SOURCES replaces it);
+data/quota-sources.json; --config, DEV_LEAD_QUOTA_SOURCES, or a
+quota-sources.json in dev-lead's plugin data directory replaces it (in that
+order);
 references/quota-sources.md under skills/dev-lead gives the record shape and
 its closed vocabularies, who writes each source, what was verified and what
 was not. Nothing consumes the output yet.
@@ -20,8 +23,15 @@ Contract:
   * Exit 0 whenever the object was printed, even if every source failed (the
     failures are inside the records). Exit 2 for a usage or config error, with
     one line on stderr and nothing on stdout.
-  * It never runs a model and never reads a credential. The only process it
-    starts is `codex app-server`, and it reaps that one itself.
+  * It never runs a model and never reads a credential. It starts `codex
+    app-server` and reaps it itself. Opt-in twice over -- with --refresh, AND
+    on a host whose config marks the source `"refresh": "tmux_spawn"` -- it
+    also starts `agy` or `cursor-agent --trust` when that cache is missing,
+    older than its TTL, more than 60 s in the future, or has an mtime that is
+    not a usable time, detached in a tmux
+    server of its own, until the CLI rewrites its cache, then kills that
+    server (see refresh_tui). It never types a key, and never touches the
+    person's own tmux server or a TUI they have open.
   * Output is a whitelist. A field of a source document that is not named in
     the record shape (account ids, plan names, balances, raw error bodies) is
     never copied, and a problem line says what is wrong with a bad value, not
@@ -54,6 +64,8 @@ from _common import ROOT, declared_version
 SCHEMA_VERSION = 1
 DEFAULT_CONFIG = ROOT / "data" / "quota-sources.json"
 CONFIG_ENV = "DEV_LEAD_QUOTA_SOURCES"
+LOCAL_CONFIG_NAME = "quota-sources.json"   # in dev-lead's plugin data dir, beside roster.json
+PLUGIN_NAME = "dev-lead"
 MAX_CACHE_BYTES = 1024 * 1024
 MAX_CODEX_BYTES = 8 * 1024 * 1024       # everything the server may write before we give up
 CLOCK_SKEW_SECONDS = 60
@@ -77,11 +89,16 @@ class _Parser(argparse.ArgumentParser):
 
 
 class Context:
-    def __init__(self, now, codex_bin, timeout, version):
+    def __init__(self, now, codex_bin, timeout, version, refresh=False, tmux_bin="tmux",
+                 refresh_wait=15.0):
         self.now = now
         self.codex_bin = codex_bin
         self.timeout = timeout
         self.version = version
+        self.refresh = refresh
+        self.tmux_bin = tmux_bin
+        self.refresh_wait = refresh_wait
+        self.refresh_problems = {}
 
 
 # ------------------------------------------------------------------ values ----
@@ -398,6 +415,9 @@ def collect_claude(src, ctx):
 
 def collect_cursor(src, ctx):
     rec = new_record(src, ctx, "cursor:unified", None, "unknown")
+    why = _refresh_problem(src, ctx)
+    if why:
+        rec["problems"].append(why)
     doc, mtime = load(src, [rec])
     if doc is None:
         return [rec]
@@ -415,6 +435,161 @@ def collect_cursor(src, ctx):
     return [rec]
 
 
+# ----------------------------------------------------------- TUI refresh ----
+# The agy and Cursor caches are written only by their CLIs' interactive status
+# lines, and an idle TUI never rewrites them (measured 2026-10-19). A TUI that
+# STARTS does: agy writes its quota at once, even at its folder-trust prompt
+# (4 s on the work host), and `cursor-agent --trust` re-fetches a cache 300 s
+# or older (6 s). So a refresh starts the CLI in a tmux server of its own
+# (`tmux -L <private socket>`), never the person's server, waits for the
+# cache to change, and kills that server. No key is typed into anything, and
+# no model is called.
+REFRESH_TMUX_SPAWN = "tmux_spawn"
+REFRESH_COMMANDS = {
+    "agy_quota_cache": ("agy", ["agy"]),
+    "cursor_usage_cache": ("cursor", ["cursor-agent", "--trust"]),
+}
+
+
+def _tmux(ctx, *args):
+    """True when one tmux command ran and succeeded, False when it failed, None if tmux cannot run.
+
+    TMUX and TMUX_PANE are dropped from its environment: a collector started
+    inside the person's tmux must not hand that server's address to anything
+    the private server runs.
+    """
+    env = {k: v for k, v in os.environ.items() if k not in ("TMUX", "TMUX_PANE")}
+    try:
+        done = subprocess.run([ctx.tmux_bin, *args], capture_output=True, text=True,
+                              timeout=10, stdin=subprocess.DEVNULL, env=env)
+    except FileNotFoundError:
+        return None
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return done.returncode == 0
+
+
+def _mtime_or_none(path):
+    try:
+        return os.lstat(path).st_mtime_ns
+    except OSError:
+        return None
+
+
+def refresh_tui(ctx, kind, path):
+    """Start the kind's CLI in a private tmux server until its cache changes; None, or why not.
+
+    The working directory is a fixed one of dev-lead's own
+    (~/.cache/dev-lead/quota-tui), and it must be a real directory the user
+    owns, not a link: `cursor-agent --trust` trusts it, so a link would trust
+    its target. The private server reads no config file (`-f /dev/null`: the
+    person's ~/.tmux.conf could run commands against their own server), and it
+    is killed on every path, including a failure to start. Success is judged
+    after the kill, so a write that lands while the server stops still counts.
+    """
+    label, command = REFRESH_COMMANDS[kind]
+    workdir = os.path.join(os.path.expanduser("~"), ".cache", "dev-lead", "quota-tui")
+    try:
+        os.makedirs(workdir, mode=0o700, exist_ok=True)
+        st = os.lstat(workdir)
+    except OSError as exc:
+        return "%s refresh failed: cannot create its working directory (%s)" % (label, errno_name(exc))
+    if not stat.S_ISDIR(st.st_mode) or st.st_uid != os.geteuid():
+        return "%s refresh skipped: its working directory is not a plain directory of the user's" % label
+    try:
+        os.chmod(workdir, 0o700)                  # an older, looser mode would let someone else add to it
+        crowded = bool(os.listdir(workdir))
+    except OSError as exc:
+        return "%s refresh failed: cannot list its working directory (%s)" % (label, errno_name(exc))
+    if crowded:
+        # neither CLI writes into it (measured), so anything there was put
+        # there, and --trust would trust it
+        return "%s refresh skipped: its working directory is not empty" % label
+    socket = "dev-lead-quota-%d-%s" % (os.getpid(), label)
+    before = _mtime_or_none(path)
+    started = _tmux(ctx, "-L", socket, "-f", os.devnull, "new-session", "-d", "-s", "quota",
+                    "-x", "200", "-y", "50", "-c", workdir, *command)
+    try:
+        if started:
+            # changed AND whole: the agy status line writes with a plain `>`,
+            # so the mtime moves at the truncate, before the JSON is in;
+            # killing the CLI then would leave half a file
+            deadline = time.monotonic() + ctx.refresh_wait
+            while time.monotonic() < deadline and not _rewritten(path, before):
+                time.sleep(0.25)
+    finally:
+        stopped = True
+        if started is not None:
+            # -f here too: kill-server starts no server, so it reads no config
+            # (tmux 3.2a), but nothing is left to that
+            stopped = _tmux(ctx, "-L", socket, "-f", os.devnull, "kill-server") or not started
+            if stopped:
+                # only once the server is gone: its socket is the one way to
+                # reach a server that would not stop
+                _remove_socket(socket)
+    if started is None:
+        return "%s refresh skipped: tmux is not available" % label
+    if not started:
+        return "%s refresh failed: tmux could not start %s" % (label, command[0])
+    if not stopped:
+        return "%s refresh failed: its private tmux server could not be stopped" % label
+    if _rewritten(path, before):
+        return None
+    return "%s refresh failed: %s did not rewrite its cache within %g s" % (
+        label, command[0], ctx.refresh_wait)
+
+
+def _remove_socket(name):
+    """Unlink the private server's socket file, which tmux 3.2a leaves behind (measured)."""
+    path = os.path.join(os.environ.get("TMUX_TMPDIR") or "/tmp", "tmux-%d" % os.geteuid(), name)
+    try:
+        st = os.lstat(path)
+        if stat.S_ISSOCK(st.st_mode) and st.st_uid == os.geteuid():
+            os.unlink(path)
+    except OSError:
+        pass
+
+
+def _rewritten(path, before):
+    """The cache's mtime moved since `before` and it now parses as a JSON object."""
+    if _mtime_or_none(path) == before:
+        return False
+    try:
+        with open(path, "rb") as fh:
+            return isinstance(json.loads(fh.read(MAX_CACHE_BYTES + 1).decode("utf-8")), dict)
+    except (OSError, ValueError, RecursionError):
+        return False
+
+
+def refresh_sources(sources, ctx, when):
+    """{source name: problem} after refreshing every opted-in, stale TUI cache.
+
+    Runs before the collection clock is read (main), so a cache rewritten here
+    is never "in the future" of the records. A cache is refreshed when it is
+    missing, older than its TTL, more than CLOCK_SKEW_SECONDS ahead of `when`,
+    or has an mtime that is not a usable time.
+    """
+    problems = {}
+    for src in sources:
+        if src.get("refresh") != REFRESH_TMUX_SPAWN:
+            continue
+        path = expand_path(src["path"])
+        mtime = _mtime_or_none(path)
+        updated = from_epoch(mtime / 1e9) if mtime is not None else None
+        if updated is not None:
+            age = (when - updated).total_seconds()
+            if -CLOCK_SKEW_SECONDS <= age <= src["ttl_seconds"]:
+                continue                          # fresh already: nothing to start
+        why = refresh_tui(ctx, src["kind"], path)
+        if why:
+            problems[src["name"]] = why
+    return problems
+
+
+def _refresh_problem(src, ctx):
+    return ctx.refresh_problems.get(src["name"])
+
+
 # --------------------------------------------------------------------- agy ----
 def collect_agy(src, ctx):
     # two pools, and a missing window of one is NEVER read from the other: the
@@ -424,6 +599,10 @@ def collect_agy(src, ctx):
              ("agy:3p", None, "unknown", "3p"))
     windows = (("5h", "five_hour", FIVE_HOUR_MINUTES), ("weekly", "weekly", WEEKLY_MINUTES))
     recs = [new_record(src, ctx, pool_id, family, scope) for pool_id, family, scope, _ in pools]
+    why = _refresh_problem(src, ctx)
+    if why:
+        for rec in recs:
+            rec["problems"].append(why)
     doc, mtime = load(src, recs)
     if doc is None:
         return recs
@@ -754,8 +933,28 @@ def load_config(path):
             raise UsageError("%s: kind %s needs a path" % (where, src["kind"]))
         if src["name"] in seen:
             raise UsageError("%s: duplicate name %s" % (where, " ".join(src["name"].split())))
+        if "refresh" in src and not (src["refresh"] == REFRESH_TMUX_SPAWN
+                                     and src["kind"] in REFRESH_COMMANDS):
+            raise UsageError("%s: refresh is only %s, and only on %s" % (
+                where, REFRESH_TMUX_SPAWN, " or ".join(sorted(REFRESH_COMMANDS))))
         seen.add(src["name"])
     return sources
+
+
+def local_config():
+    """dev-lead's own plugin data dir copy of the sources file, if there is one.
+
+    The same directory as roster.json (scripts/roster.py roster_path): a
+    CLAUDE_PLUGIN_DATA that is another plugin's is ignored. This is where a host
+    opts in to `"refresh": "tmux_spawn"`; the shipped data/ file never does.
+    """
+    plugin = os.environ.get("CLAUDE_PLUGIN_DATA")
+    if plugin and Path(plugin).name.startswith(PLUGIN_NAME + "-"):
+        base = Path(plugin)
+    else:
+        base = Path(os.path.expanduser("~")) / ".claude" / "plugins" / "data" / "dev-lead-dev-lead"
+    path = base / LOCAL_CONFIG_NAME
+    return str(path) if os.path.isfile(path) else None
 
 
 def parse_args(argv):
@@ -763,12 +962,23 @@ def parse_args(argv):
     parser.add_argument("--source", action="append", default=[], metavar="NAME",
                         help="run only this source (repeatable); default all")
     parser.add_argument("--config", metavar="PATH",
-                        help="sources file; default $%s or data/quota-sources.json" % CONFIG_ENV)
+                        help="sources file; default $%s, else %s in dev-lead's plugin data "
+                             "directory, else data/quota-sources.json" % (CONFIG_ENV, LOCAL_CONFIG_NAME))
     parser.add_argument("--now", metavar="ISO8601", help="override the clock (tests)")
     parser.add_argument("--codex-bin", default="codex", metavar="PATH")
     parser.add_argument("--timeout", type=float, default=20.0, metavar="SECONDS",
                         help="bounds the codex exchange; reaping the process adds at "
                              "most about 2 s (default 20)")
+    parser.add_argument("--refresh", action="store_true",
+                        help="for a source whose config sets refresh to tmux_spawn (agy, cursor) "
+                             "and whose cache is missing, older than its TTL, more than 60 s "
+                             "in the future or of an unusable mtime, start that CLI (cursor-agent "
+                             "with --trust) detached in a private tmux server until it rewrites "
+                             "the cache, then kill that server; it never types a key and never "
+                             "touches your own tmux server")
+    parser.add_argument("--tmux-bin", default="tmux", metavar="PATH")
+    parser.add_argument("--refresh-wait", type=float, default=15.0, metavar="SECONDS",
+                        help="how long a started CLI gets to rewrite its cache (default 15)")
     return parser.parse_args(argv)
 
 
@@ -777,13 +987,15 @@ def main(argv=None):
         args = parse_args(sys.argv[1:] if argv is None else argv)
         if not math.isfinite(args.timeout) or args.timeout <= 0:
             raise UsageError("--timeout must be a positive number")
+        if not math.isfinite(args.refresh_wait) or not 0 < args.refresh_wait <= 60:
+            raise UsageError("--refresh-wait must be a number of seconds in (0, 60]")
         if args.now is None:
             now = datetime.now(timezone.utc)
         else:
             now = parse_ts(args.now)
             if now is None:
                 raise UsageError("--now must be an ISO 8601 time with a zone, e.g. 2026-10-19T01:00:00Z")
-        raw_config = args.config or os.environ.get(CONFIG_ENV) or str(DEFAULT_CONFIG)
+        raw_config = args.config or os.environ.get(CONFIG_ENV) or local_config() or str(DEFAULT_CONFIG)
         sources = load_config(expand_path(raw_config))
         known = [src["name"] for src in sources]
         for name in args.source:
@@ -802,11 +1014,17 @@ def main(argv=None):
     # bound is what makes the blocking stdin write safe: the messages stay a
     # few hundred bytes, which a pipe holds even if codex never reads.
     version = declared if semver is not None and len(declared) <= 32 else "unknown"
-    ctx = Context(now, args.codex_bin, args.timeout, version)
+    ctx = Context(now, args.codex_bin, args.timeout, version, refresh=args.refresh,
+                  tmux_bin=args.tmux_bin, refresh_wait=args.refresh_wait)
+    chosen = [src for src in sources if not args.source or src["name"] in args.source]
+    if args.refresh:
+        ctx.refresh_problems = refresh_sources(chosen, ctx, now)
+        if args.now is None:
+            # read the clock again: the records are judged after the refresh
+            now = ctx.now = datetime.now(timezone.utc)
     records = []
-    for src in sources:
-        if not args.source or src["name"] in args.source:
-            records.extend(collect(src, ctx))
+    for src in chosen:
+        records.extend(collect(src, ctx))
     out = {"schema_version": SCHEMA_VERSION, "generated_at": fmt_ts(now), "records": records}
     sys.stdout.write(json.dumps(out, indent=2, allow_nan=False) + "\n")
     return 0
