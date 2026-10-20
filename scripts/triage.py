@@ -2137,8 +2137,15 @@ def first_round_sizing(config, target, base, head, files, delta_lines, minimum, 
     for path in sorted(lines):
         if path in documents or not any(glob_matches(glob, path) for glob in small["test_globs"]):
             continue
-        added = [row for row in numbered.get(path, []) if row[0] == "+"]
-        counted, _text = _sizing_lines(repo, base, head, {path: (lines[path][0], [])}, {path: added})
+        # A file kind with no lexer counts every line whole for sizing; as evidence of a test, a blank
+        # line or one that opens like a comment in the usual syntaxes is not, whatever the file kind.
+        added = [row for row in numbered.get(path, []) if row[0] == "+" and row[2].strip()
+                 and not row[2].lstrip().startswith(("#", "//", "/*", "*", "--", ";", "<!--"))]
+        if not added:
+            continue
+        # _sizing_lines checks the rows against the line count it is handed, so hand it the kept rows' own
+        # lines: given the file's whole added list it would see a mismatch and count everything.
+        counted, _text = _sizing_lines(repo, base, head, {path: ([row[2] for row in added], [])}, {path: added})
         if counted:
             tested.append(path)
     if raised != "LOW":

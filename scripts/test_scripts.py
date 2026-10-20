@@ -10623,6 +10623,14 @@ def test_triage_small_first_round(tmp):
         ("no-test", {"test": False}, "test_globs"),
         ("test-deleted", {"base_test": "assert True\n", "delete_test": True}, "test_globs"),
         ("test-comment-only", {"base_test": "assert True\n", "test_body": "# a note\nassert True\n"}, "test_globs"),
+        # a comment and a docstring: the docstring passes the comment filter but is no behaviour line
+        ("test-docstring-only", {"base_test": "def test_x():\n    assert True\n",
+                                 "test_body": "# a note\ndef test_x():\n    \"\"\"Checks x.\"\"\"\n    assert True\n"},
+         "test_globs"),
+        # a file kind with no lexer, under a test glob, that gains only a comment and a blank line
+        ("test-notes-comment", {"test": False, "extra": {"pkg/tests/notes.txt": b"# a note\n\n"}}, "test_globs"),
+        # a documentation file under a test glob is explanation, not a test
+        ("test-doc-only", {"test": False, "extra": {"pkg/tests/guide.md": b"assert value == 2\n"}}, "test_globs"),
         ("over", {"option": {"lines": 2}}, "lines"),
         ("trigger-medium", {"trigger": {"glob": "app.py", "path_only": True, "risk": "MEDIUM"}}, "trigger"),
         ("trigger-high", {"trigger": {"glob": "app.py", "added_regex": "value = 2", "risk": "HIGH"}}, "trigger"),
@@ -10637,6 +10645,15 @@ def test_triage_small_first_round(tmp):
         check("triage first round: %s keeps two legs and explains why" % name,
               got.returncode == 0 and result.get("min_review_legs") == 2 and first.get("applied") is False
               and why in first.get("why", ""), got.stdout + got.stderr)
+    got, result, _, _ = scenario("low-default", risk="LOW")
+    first = result.get("first_round", {})
+    check("triage first round: a LOW default is left alone, not reported as reduced",
+          got.returncode == 0 and result.get("min_review_legs") == 1 and first.get("applied") is False
+          and "risk_default" in first.get("why", ""), got.stdout + got.stderr)
+    got, result, _, _ = scenario("test-notes-real", test=False, option={"lines": 4}, extra={"pkg/tests/notes.txt": b"# a note\nexpect 2\n"})
+    check("triage first round: a real line in an unlexed test file still counts as a test",
+          got.returncode == 0 and result.get("min_review_legs") == 1
+          and result.get("first_round", {}).get("applied") is True, got.stdout + got.stderr)
     got, result, _, _ = scenario("absent", absent=True)
     check("triage first round: absent key keeps the existing two legs and output shape",
           got.returncode == 0 and result.get("min_review_legs") == 2 and "first_round" not in result,
