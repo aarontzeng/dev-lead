@@ -310,7 +310,6 @@ legs; `.github/` is not on that list, since its README and issue templates are
 documents and its agent files are caught by name; an optional `wording_globs` list
 in `triage.json` replaces this default) or a message-only change is `wording`, no leg; a delta within
 `small_delta_lines` with `--fix-tested` evidence is `tested`, one leg;
-optional `small_first_round` (`lines`, `test_globs`, `never_globs`) similarly gives a first `scope --base/--target` round one leg when its behaviour lines fit, a test path changes, no excluded path, binary, mode or move changes, and MEDIUM comes only from `risk_default` (the record reports `first_round` and keeps that minimum for later fixes unless a trigger raises it; absent or `--files` keeps the existing sizing);
 anything else -- a binary, mode or move change included -- keeps the range's
 minimum, and a delta a trigger raises to HIGH takes at least HIGH's. The
 evidence and blocker are the lead's statements, recorded and reported, not
@@ -332,6 +331,8 @@ told; one of this change with a round that is not a positive integer refuses
 this change's. A records directory that cannot be listed refuses too. The
 error names the file: repair it, or remove it if that head was never
 reviewed. Other files in the directory are left alone.
+
+A first round can be sized too: the optional `small_first_round` (`lines`, `test_globs`, `never_globs`) gives a `scope --base/--target` round one leg when MEDIUM comes only from `risk_default`, no path matches `never_globs`, a kept path matching `test_globs` gains a behaviour line, the behaviour lines fit `lines`, and nothing is binary, mode or move. Its later fix rounds keep that one leg only while the whole range still passes the rule; absent, or with `--files`, nothing changes.
 
 Every `leg-cmd.sh <adapter> review` launch checks the HEAD it will actually
 review: `--target`'s HEAD, or the caller's cwd when that adapter has no

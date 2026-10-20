@@ -10510,10 +10510,12 @@ def test_triage_small_first_round(tmp):
     env = _roster_env(home, DEV_LEAD_ROSTER=roster_file, DEV_LEAD_TRIAGE=rules_file)
 
     def scenario(name, *, option=None, test=True, extra=None, rename=False, mode=False, trigger=None,
-                 risk="MEDIUM", absent=False):
+                 risk="MEDIUM", absent=False, base_test=None, delete_test=False, test_body="assert value == 2\n"):
         repo = tmp / name
         make_repo(repo)
         (repo / "app.py").write_text("value = 1\n")
+        if base_test is not None:
+            (repo / "test_app.py").write_text(base_test)
         git(repo, "add", "-A")
         git(repo, "commit", "-qm", "base")
         base = git(repo, "rev-parse", "HEAD").stdout.strip()
@@ -10523,8 +10525,10 @@ def test_triage_small_first_round(tmp):
             (repo / "app.py").chmod(0o755)
         else:
             (repo / "app.py").write_text("value = 2\n")
-        if test:
-            (repo / "test_app.py").write_text("assert value == 2\n")
+        if delete_test:
+            (repo / "test_app.py").unlink()
+        elif test:
+            (repo / "test_app.py").write_text(test_body)
         for path, body in (extra or {}).items():
             (repo / path).parent.mkdir(parents=True, exist_ok=True)
             (repo / path).write_bytes(body)
@@ -10586,15 +10590,45 @@ def test_triage_small_first_round(tmp):
                       fixed.returncode == 0 and raised.get("min_review_legs") == 2
                       and raised.get("fix", {}).get("range_min_review_legs") == 2, fixed.stdout + fixed.stderr)
 
+    # A fix that makes the change too large for the rule gives the range its two legs back, and so does a
+    # fix round after the key has left the rules.
+    got, result, repo, base = scenario("grows")
+    if got.returncode == 0 and result.get("min_review_legs") == 1:
+        (repo / "app.py").write_text("value = 3\nother = 4\nthird = 5\nfourth = 6\n")
+        git(repo, "add", "-A")
+        git(repo, "commit", "-qm", "grow")
+        fixed = run(triage, "scope", "--base", base, "--target", repo, "--fix-of", result["head"], env=env)
+        grown = json.loads(fixed.stdout) if fixed.returncode == 0 else {}
+        check("triage first round: a fix that makes the range too large takes two legs again",
+              fixed.returncode == 0 and grown.get("min_review_legs") == 2
+              and grown.get("fix", {}).get("range_min_review_legs") == 2, fixed.stdout + fixed.stderr)
+    else:
+        check("triage first round: the grows scenario starts reduced", False, got.stdout + got.stderr)
+    got, result, repo, base = scenario("key-removed")
+    if got.returncode == 0 and result.get("min_review_legs") == 1:
+        (repo / "app.py").write_text("value = 3\n")
+        git(repo, "add", "-A")
+        git(repo, "commit", "-qm", "fix")
+        _write_doc(rules_file, {k: v for k, v in rules.items() if k != "small_first_round"})
+        fixed = run(triage, "scope", "--base", base, "--target", repo, "--fix-of", result["head"], env=env)
+        removed = json.loads(fixed.stdout) if fixed.returncode == 0 else {}
+        check("triage first round: without the key a fix round keeps the normal range minimum",
+              fixed.returncode == 0 and removed.get("fix", {}).get("range_min_review_legs") == 2,
+              fixed.stdout + fixed.stderr)
+    else:
+        check("triage first round: the key-removed scenario starts reduced", False, got.stdout + got.stderr)
+
     cases = [
         ("never", {"option": {"never_globs": ["app.py"]}}, "never_globs"),
         ("no-test", {"test": False}, "test_globs"),
+        ("test-deleted", {"base_test": "assert True\n", "delete_test": True}, "test_globs"),
+        ("test-comment-only", {"base_test": "assert True\n", "test_body": "# a note\nassert True\n"}, "test_globs"),
         ("over", {"option": {"lines": 2}}, "lines"),
         ("trigger-medium", {"trigger": {"glob": "app.py", "path_only": True, "risk": "MEDIUM"}}, "trigger"),
         ("trigger-high", {"trigger": {"glob": "app.py", "added_regex": "value = 2", "risk": "HIGH"}}, "trigger"),
-        ("binary", {"extra": {"data.bin": b"a\0b"}}, "binary"),
-        ("rename", {"rename": True}, "move"),
-        ("mode", {"mode": True}, "mode"),
+        ("binary", {"extra": {"data.bin": b"a\0b"}}, "data.bin: binary"),
+        ("rename", {"rename": True}, "moved.py: moved from app.py"),
+        ("mode", {"mode": True}, "app.py: file mode changed 100644 -> 100755"),
         ("high-default", {"risk": "HIGH"}, "risk_default"),
     ]
     for name, kwargs, why in cases:

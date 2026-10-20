@@ -2131,14 +2131,24 @@ def first_round_sizing(config, target, base, head, files, delta_lines, minimum, 
     count, text_count = _sizing_lines(repo, base, head, lines, numbered, documents)
     _lenses, raised, _flags = _lenses_and_triggers(dict(config, risk_default="LOW"), files, delta_lines, [])
     unsized = _unsized_changes(entries, [(None, entry) for entry in entries], moves)
+    # "With a test" means a test file the change adds behaviour lines to: a deleted test (no added line), or
+    # one touched only in comments, is no evidence that the change is tested.
+    tested = []
+    for path in sorted(lines):
+        if path in documents or not any(glob_matches(glob, path) for glob in small["test_globs"]):
+            continue
+        added = [row for row in numbered.get(path, []) if row[0] == "+"]
+        counted, _text = _sizing_lines(repo, base, head, {path: (lines[path][0], [])}, {path: added})
+        if counted:
+            tested.append(path)
     if raised != "LOW":
         why = "a delta trigger raises the range to %s" % raised
     elif minimum != MIN_REVIEW_LEGS["MEDIUM"] or config["risk_default"] != "MEDIUM":
         why = "risk_default must be MEDIUM and alone require two legs"
     elif any(glob_matches(glob, path) for path in files for glob in small["never_globs"]):
         why = "a changed path matches never_globs"
-    elif not any(glob_matches(glob, path) for path in files for glob in small["test_globs"]):
-        why = "no changed path matches test_globs"
+    elif not tested:
+        why = "no kept path matching test_globs gains a behaviour line"
     elif count > small["lines"]:
         why = "%d behaviour lines exceeds small_first_round.lines=%d" % (count, small["lines"])
     elif unsized:
@@ -2224,20 +2234,23 @@ def fix_sizing(config, target, base, head, fix_of, *, evidence=None, blocker=Non
             "how to say it was never reviewed."
             % (reviewed[:12], "fix round %d" % earlier if earlier else "the first reviewed head", latest,
                root[:12], ", ".join(name[:12] for name in latest_heads), records_path()))
-    # A reduced first round keeps its recorded range minimum on later fixes;
-    # triggers in the current range may still raise it. Other records keep the
-    # existing range sizing (not the previous fix's wording/tested minimum).
-    first = previous
-    if previous_fix and "small_first_round" in config:
-        first = _reviewed_record(root)
-    if first.get("first_round", {}).get("applied") is True:
-        current_entries = _diff_entries(repo, base, head)
-        current_files = sorted({path for entry in current_entries for path in _paths_for(entry)})
-        _lenses, raised, _flags = _lenses_and_triggers(
-            dict(config, risk_default="LOW"), current_files,
-            _delta_lines([(None, entry) for entry in current_entries]), [])
-        range_min = max(first["min_review_legs"], MIN_REVIEW_LEGS[raised],
-                        MIN_REVIEW_LEGS["HIGH"] if config["risk_default"] == "HIGH" else 0)
+    # A change whose first round was reduced keeps one leg as its range minimum only while the whole range,
+    # base..head as it is now, still passes small_first_round: a fix that makes the change large, untested,
+    # unsized, sensitive or triggered takes the range's normal minimum back, and so does every round once the
+    # key is gone from the rules.
+    if "small_first_round" in config:
+        first = _reviewed_record(root) if previous_fix else previous
+        first_round = first.get("first_round")
+        if isinstance(first_round, dict) and first_round.get("applied") is True:
+            current_entries = _diff_entries(repo, base, head)
+            current_files = sorted({path for entry in current_entries for path in _paths_for(entry)})
+            still, _minimum = first_round_sizing(
+                config, target, base, head, current_files,
+                _delta_lines([(None, entry) for entry in current_entries]), MIN_REVIEW_LEGS["MEDIUM"], [])
+            if still["applied"]:
+                range_min = 1
+            _fired(fired, "first-round", "the reduced first round %s on the range now: %s"
+                   % ("still holds" if still["applied"] else "no longer holds", still["why"]))
     round_number = earlier + 1
     previous_base = previous.get("base") or base
     previous_entries = _diff_entries(repo, previous_base, reviewed)
