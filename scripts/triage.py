@@ -35,7 +35,7 @@ CHANGE_KEYS = ("gerrit", "clones", "gateways")
 # Optional: without it, review legs carry no effort and behave as before.
 # wording_globs (0.6.58): the paths a fix round may change and still be sized
 # as wording only; without it, the documentation suffixes below.
-OPTIONAL_ROOT_KEYS = {"effort", "wording_globs"}
+OPTIONAL_ROOT_KEYS = {"effort", "wording_globs", "small_first_round"}
 # An abstract effort ladder. The table names a tier; each adapter's own
 # spelling of it comes from data/launch.json, never from personal rules.
 EFFORT_LADDER = ("low", "medium", "high", "xhigh", "max")
@@ -355,6 +355,21 @@ def validate(doc):
                 _check_regex(rule.get("regex"), path + ".regex", problems)
     if type(doc.get("small_delta_lines")) is not int or doc.get("small_delta_lines", -1) < 0:
         problems.error("small_delta_lines", "must be an int >= 0")
+    if "small_first_round" in doc:
+        small = doc["small_first_round"]
+        if not isinstance(small, dict):
+            problems.error("small_first_round", "must be an object")
+        else:
+            _unknown_keys(small, {"lines", "test_globs", "never_globs"}, "small_first_round", problems)
+            if type(small.get("lines")) is not int or small.get("lines", -1) < 0:
+                problems.error("small_first_round.lines", "must be an int >= 0")
+            for key in ("test_globs", "never_globs"):
+                globs = small.get(key)
+                if not isinstance(globs, list):
+                    problems.error("small_first_round." + key, "must be a list of globs")
+                else:
+                    for index, glob in enumerate(globs):
+                        _check_glob(glob, "small_first_round.%s[%s]" % (key, index), problems)
     if "wording_globs" in doc:
         wording = doc["wording_globs"]
         if not isinstance(wording, list):
@@ -2090,6 +2105,55 @@ def _refuse_fix_overwrite(head, mode):
                             _record_path(head)))
 
 
+def _unsized_changes(entries, pairs, moves):
+    """Binary, mode and move changes cannot be bounded by hunk-line counts."""
+    return (["%s: binary" % entry["new"] for entry in entries if entry.get("binary")]
+               + ["%s: moved from %s" % (entry["new"], entry["old"]) for entry in moves]
+               + _mode_flags(pairs)
+               + ["%s: file mode changed %s -> %s" % (entry["new"], before["new_mode"], entry.get("new_mode"))
+                  for before, entry in pairs if before is not None and entry["status"][:1] == "R"
+                  and before.get("new_mode") != entry.get("new_mode")]
+               # _mode_flags skips deletions; a removed gitlink is one pointer line
+               + ["%s: a mode %s entry removed" % (entry["old"], mode) for before, entry in pairs
+                  if entry["status"][:1] == "D"
+                  for mode in [before["new_mode"] if before is not None else entry.get("old_mode")]
+                  if mode not in REGULAR_MODES + ("000000", None)])
+
+
+def first_round_sizing(config, target, base, head, files, delta_lines, minimum, fired):
+    small = config["small_first_round"]
+    repo = Path(target)
+    entries = _diff_entries(repo, base, head)
+    moves, _only_moves = _tree_renames(repo, base, head, entries)
+    numbered = {}
+    lines = _between_lines(repo, base, head, entries, moves, numbered)
+    documents = {path for path in lines if _is_wording(config, path)}
+    count, text_count = _sizing_lines(repo, base, head, lines, numbered, documents)
+    _lenses, raised, _flags = _lenses_and_triggers(dict(config, risk_default="LOW"), files, delta_lines, [])
+    unsized = _unsized_changes(entries, [(None, entry) for entry in entries], moves)
+    if raised != "LOW":
+        why = "a delta trigger raises the range to %s" % raised
+    elif minimum != MIN_REVIEW_LEGS["MEDIUM"] or config["risk_default"] != "MEDIUM":
+        why = "risk_default must be MEDIUM and alone require two legs"
+    elif any(glob_matches(glob, path) for path in files for glob in small["never_globs"]):
+        why = "a changed path matches never_globs"
+    elif not any(glob_matches(glob, path) for path in files for glob in small["test_globs"]):
+        why = "no changed path matches test_globs"
+    elif count > small["lines"]:
+        why = "%d behaviour lines exceeds small_first_round.lines=%d" % (count, small["lines"])
+    elif unsized:
+        why = "a binary, mode or move change has no lines to size (%s)" % "; ".join(unsized)
+    else:
+        why = "%d behaviour lines within small_first_round.lines=%d, with a test; MEDIUM from risk_default alone" % (
+            count, small["lines"])
+        _fired(fired, "first-round", "%s; minimum reduced to one leg" % why)
+        return {"rule": "small_first_round", "applied": True, "why": why,
+                "lines": count, "text_lines": text_count}, 1
+    _fired(fired, "first-round", "%s; minimum stays %s leg(s)" % (why, minimum))
+    return {"rule": "small_first_round", "applied": False, "why": why,
+            "lines": count, "text_lines": text_count}, minimum
+
+
 def fix_sizing(config, target, base, head, fix_of, *, evidence=None, blocker=None, range_min=0, fired=None):
     """Size a fix round of the lead's own change by what the fix changed.
 
@@ -2160,6 +2224,20 @@ def fix_sizing(config, target, base, head, fix_of, *, evidence=None, blocker=Non
             "how to say it was never reviewed."
             % (reviewed[:12], "fix round %d" % earlier if earlier else "the first reviewed head", latest,
                root[:12], ", ".join(name[:12] for name in latest_heads), records_path()))
+    # A reduced first round keeps its recorded range minimum on later fixes;
+    # triggers in the current range may still raise it. Other records keep the
+    # existing range sizing (not the previous fix's wording/tested minimum).
+    first = previous
+    if previous_fix and "small_first_round" in config:
+        first = _reviewed_record(root)
+    if first.get("first_round", {}).get("applied") is True:
+        current_entries = _diff_entries(repo, base, head)
+        current_files = sorted({path for entry in current_entries for path in _paths_for(entry)})
+        _lenses, raised, _flags = _lenses_and_triggers(
+            dict(config, risk_default="LOW"), current_files,
+            _delta_lines([(None, entry) for entry in current_entries]), [])
+        range_min = max(first["min_review_legs"], MIN_REVIEW_LEGS[raised],
+                        MIN_REVIEW_LEGS["HIGH"] if config["risk_default"] == "HIGH" else 0)
     round_number = earlier + 1
     previous_base = previous.get("base") or base
     previous_entries = _diff_entries(repo, previous_base, reviewed)
@@ -2181,17 +2259,7 @@ def fix_sizing(config, target, base, head, fix_of, *, evidence=None, blocker=Non
     # A move is one between the two reviewed trees: a rename against the base that
     # an earlier round already reviewed is not this fix's. _mode_flags leaves a
     # renamed entry to the move checks, so its mode is compared here.
-    unsized = (["%s: binary" % entry["new"] for entry in delta_entries if entry.get("binary")]
-               + ["%s: moved from %s" % (entry["new"], entry["old"]) for entry in moves]
-               + _mode_flags(pairs)
-               + ["%s: file mode changed %s -> %s" % (entry["new"], before["new_mode"], entry.get("new_mode"))
-                  for before, entry in pairs if before is not None and entry["status"][:1] == "R"
-                  and before.get("new_mode") != entry.get("new_mode")]
-               # _mode_flags skips deletions; a removed gitlink is one pointer line
-               + ["%s: a mode %s entry removed" % (entry["old"], mode) for before, entry in pairs
-                  if entry["status"][:1] == "D"
-                  for mode in [before["new_mode"] if before is not None else entry.get("old_mode")]
-                  if mode not in REGULAR_MODES + ("000000", None)])
+    unsized = _unsized_changes(delta_entries, pairs, moves)
     if raised == "HIGH":
         rung, why = "full", "a delta trigger raises the fix itself to HIGH"
     elif unsized:
@@ -2480,6 +2548,10 @@ def main(argv=None):
                         output["review_legs"] = []
                         output["legs"] = "own-read"
                 else:
+                    if "small_first_round" in config:
+                        output["first_round"], output["min_review_legs"] = first_round_sizing(
+                            config, args.target, base, head, files, delta_lines,
+                            output["min_review_legs"], output["fired_rules"])
                     _refuse_fix_overwrite(head, "scope")
                 _write_record(output, head, "scope")
     except InputError as exc:

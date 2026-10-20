@@ -10494,6 +10494,136 @@ def test_triage_text_lines(tmp):
     # (an *instructions* file, not AGENTS.md: a global gitignore may hide the latter from `git add -A`)
 
 
+def test_triage_small_first_round(tmp):
+    triage = SCRIPTS / "triage.py"
+    home = tmp / "first-round-home"
+    home.mkdir()
+    roster_file, rules_file = home / "roster.json", home / "triage.json"
+    _write_doc(roster_file, _live_roster())
+    rules = {
+        "version": 1, "me": ["alice"], "lens_classes": {"mechanical": "mechanical", "judgment": "judgment"},
+        "lenses": [{"glob": "**", "lenses": ["mechanical"], "why": "everything"}],
+        "delta_triggers": [], "risk_default": "MEDIUM", "move_check": {"naming": []},
+        "small_delta_lines": 4, "order": [],
+        "small_first_round": {"lines": 3, "test_globs": ["test_*.py", "**/tests/**"], "never_globs": []},
+    }
+    env = _roster_env(home, DEV_LEAD_ROSTER=roster_file, DEV_LEAD_TRIAGE=rules_file)
+
+    def scenario(name, *, option=None, test=True, extra=None, rename=False, mode=False, trigger=None,
+                 risk="MEDIUM", absent=False):
+        repo = tmp / name
+        make_repo(repo)
+        (repo / "app.py").write_text("value = 1\n")
+        git(repo, "add", "-A")
+        git(repo, "commit", "-qm", "base")
+        base = git(repo, "rev-parse", "HEAD").stdout.strip()
+        if rename:
+            (repo / "app.py").rename(repo / "moved.py")
+        elif mode:
+            (repo / "app.py").chmod(0o755)
+        else:
+            (repo / "app.py").write_text("value = 2\n")
+        if test:
+            (repo / "test_app.py").write_text("assert value == 2\n")
+        for path, body in (extra or {}).items():
+            (repo / path).parent.mkdir(parents=True, exist_ok=True)
+            (repo / path).write_bytes(body)
+        git(repo, "add", "-A")
+        git(repo, "commit", "-qm", name)
+        config = dict(rules, risk_default=risk)
+        config["small_first_round"] = dict(rules["small_first_round"], **(option or {}))
+        if absent:
+            del config["small_first_round"]
+        if trigger:
+            config["delta_triggers"] = [trigger]
+        _write_doc(rules_file, config)
+        got = run(triage, "scope", "--base", base, "--target", repo, env=env)
+        result = json.loads(got.stdout) if got.returncode == 0 else {}
+        return got, result, repo, base
+
+    got, result, repo, base = scenario("applies", extra={"docs/guide.md": b"# guide\n" * 10,
+                                                            "app.py": b"# explanation\nvalue = 2\n"})
+    first = result.get("first_round", {})
+    check("triage first round: MEDIUM default alone, test and three behaviour lines take one leg",
+          got.returncode == 0 and result.get("min_review_legs") == 1 and result.get("risk_floor") == "MEDIUM"
+          and first.get("applied") is True and first.get("rule") == "small_first_round"
+          and first.get("lines") == 3 and first.get("text_lines") == 11, got.stdout + got.stderr)
+    if got.returncode == 0:
+        record = json.loads(Path(result["record"]).read_text())
+        check("triage first round: the record carries the reduced minimum and its explanation",
+              record.get("min_review_legs") == 1 and record.get("first_round") == first
+              and any(row.get("rule") == "first-round" for row in record["fired_rules"]), str(record))
+        reviewed = result["head"]
+        (repo / "app.py").write_text("value = 3\n")
+        git(repo, "add", "-A")
+        git(repo, "commit", "-qm", "fix")
+        fixed = run(triage, "scope", "--base", base, "--target", repo, "--fix-of", reviewed, env=env)
+        fix = json.loads(fixed.stdout) if fixed.returncode == 0 else {}
+        check("triage first round: later full fix keeps the recorded range minimum of one",
+              fixed.returncode == 0 and fix.get("min_review_legs") == 1
+              and fix.get("fix", {}).get("range_min_review_legs") == 1 and "first_round" not in fix,
+              fixed.stdout + fixed.stderr)
+        if fixed.returncode == 0:
+            previous_fix = fix["head"]
+            (repo / "app.py").write_text("value = 4\n")
+            git(repo, "add", "-A")
+            git(repo, "commit", "-qm", "second fix")
+            fixed = run(triage, "scope", "--base", base, "--target", repo, "--fix-of", previous_fix, env=env)
+            second = json.loads(fixed.stdout) if fixed.returncode == 0 else {}
+            check("triage first round: second full fix also inherits the root record minimum",
+                  fixed.returncode == 0 and second.get("min_review_legs") == 1
+                  and second.get("fix", {}).get("range_min_review_legs") == 1, fixed.stdout + fixed.stderr)
+            if fixed.returncode == 0:
+                config = dict(rules, delta_triggers=[{"glob": "app.py", "added_regex": "value = 5", "risk": "HIGH"}])
+                _write_doc(rules_file, config)
+                (repo / "app.py").write_text("value = 5\n")
+                git(repo, "add", "-A")
+                git(repo, "commit", "-qm", "blocker fix")
+                fixed = run(triage, "scope", "--base", base, "--target", repo, "--fix-of", second["head"],
+                            "--blocker", "behaviour needs correction", env=env)
+                raised = json.loads(fixed.stdout) if fixed.returncode == 0 else {}
+                check("triage first round: a later trigger still raises the recorded minimum",
+                      fixed.returncode == 0 and raised.get("min_review_legs") == 2
+                      and raised.get("fix", {}).get("range_min_review_legs") == 2, fixed.stdout + fixed.stderr)
+
+    cases = [
+        ("never", {"option": {"never_globs": ["app.py"]}}, "never_globs"),
+        ("no-test", {"test": False}, "test_globs"),
+        ("over", {"option": {"lines": 2}}, "lines"),
+        ("trigger-medium", {"trigger": {"glob": "app.py", "path_only": True, "risk": "MEDIUM"}}, "trigger"),
+        ("trigger-high", {"trigger": {"glob": "app.py", "added_regex": "value = 2", "risk": "HIGH"}}, "trigger"),
+        ("binary", {"extra": {"data.bin": b"a\0b"}}, "binary"),
+        ("rename", {"rename": True}, "move"),
+        ("mode", {"mode": True}, "mode"),
+        ("high-default", {"risk": "HIGH"}, "risk_default"),
+    ]
+    for name, kwargs, why in cases:
+        got, result, _, _ = scenario(name, **kwargs)
+        first = result.get("first_round", {})
+        check("triage first round: %s keeps two legs and explains why" % name,
+              got.returncode == 0 and result.get("min_review_legs") == 2 and first.get("applied") is False
+              and why in first.get("why", ""), got.stdout + got.stderr)
+    got, result, _, _ = scenario("absent", absent=True)
+    check("triage first round: absent key keeps the existing two legs and output shape",
+          got.returncode == 0 and result.get("min_review_legs") == 2 and "first_round" not in result,
+          got.stdout + got.stderr)
+    _write_doc(rules_file, rules)
+    got = run(triage, "scope", "--files", "app.py", "test_app.py", env=env)
+    result = json.loads(got.stdout) if got.returncode == 0 else {}
+    check("triage first round: --files has no sizing and still takes two legs",
+          got.returncode == 0 and result.get("min_review_legs") == 2 and "first_round" not in result,
+          got.stdout + got.stderr)
+    for name, value in (("object", []), ("negative", dict(rules["small_first_round"], lines=-1)),
+                        ("bool", dict(rules["small_first_round"], lines=True)),
+                        ("missing", {}), ("unknown", dict(rules["small_first_round"], typo=1)),
+                        ("test-list", dict(rules["small_first_round"], test_globs="test_*")),
+                        ("empty-glob", dict(rules["small_first_round"], never_globs=[""]))):
+        _write_doc(rules_file, dict(rules, small_first_round=value))
+        got = run(triage, "check", "--file", rules_file, env=env)
+        check("triage first round: rejects bad config %s" % name,
+              got.returncode == 1 and "small_first_round" in got.stdout, got.stdout + got.stderr)
+
+
 def _crlf_repo(path):
     """A repo that committed CRLF files and LATER added `eol=lf`: every fresh
     checkout shows them ` M` with bytes identical to the commit (a peer session,
@@ -11023,6 +11153,9 @@ def main():
     print("triage.py text lines (comment, docstring and blank lines are not counted toward small_delta_lines)")
     with tempfile.TemporaryDirectory() as td:
         test_triage_text_lines(Path(td))
+
+    with tempfile.TemporaryDirectory() as td:
+        test_triage_small_first_round(Path(td))
 
     print("lint.py check_version")
     with tempfile.TemporaryDirectory() as td:

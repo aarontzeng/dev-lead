@@ -310,6 +310,7 @@ legs; `.github/` is not on that list, since its README and issue templates are
 documents and its agent files are caught by name; an optional `wording_globs` list
 in `triage.json` replaces this default) or a message-only change is `wording`, no leg; a delta within
 `small_delta_lines` with `--fix-tested` evidence is `tested`, one leg;
+optional `small_first_round` (`lines`, `test_globs`, `never_globs`) similarly gives a first `scope --base/--target` round one leg when its behaviour lines fit, a test path changes, no excluded path, binary, mode or move changes, and MEDIUM comes only from `risk_default` (the record reports `first_round` and keeps that minimum for later fixes unless a trigger raises it; absent or `--files` keeps the existing sizing);
 anything else -- a binary, mode or move change included -- keeps the range's
 minimum, and a delta a trigger raises to HIGH takes at least HIGH's. The
 evidence and blocker are the lead's statements, recorded and reported, not
