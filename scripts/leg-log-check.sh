@@ -122,12 +122,15 @@ for pat in REFUSAL.get(adapter, ()):
         refused = m.group(0)[:100]
         break
 
-# opencode's --print-logs writes `message=loop session.id=<id> step=<n>` at every
-# turn of the tool loop. A log whose last such line is not followed by a report
-# was CUT OFF while the model was still reading -- a time cap (timeout(1) exits
-# 124), not a hang (a peer session's GLM legs, 2026-10-21: 26 steps of file reads
-# at the 600-s cap). The session survives, so what it read can still be asked for.
-loops = re.findall(r"message=loop session\.id=(ses_[A-Za-z0-9]+) step=(\d+)", text) if adapter == "opencode" else []
+# opencode's --print-logs writes `timestamp=... level=INFO ... message=loop
+# session.id=<id> step=<n>` on every turn of the tool loop, and the session
+# survives the process. A leg killed by a time cap mid-read (a peer session's GLM
+# legs, 2026-10-21: 26 steps of file reads at a 600-s timeout(1), rc 124) can be
+# asked for what it read. The log alone does not prove a time cap -- a provider
+# error, a refusal or a hang can follow the same line -- so the message states
+# what was seen and makes the resume advice conditional (codex review of 0.6.75).
+LOOP = re.compile(r"^timestamp=\S+ level=\w+ .*\bmessage=loop session\.id=(ses_[A-Za-z0-9]+) step=(\d+)\s*$", re.M)
+loops = list(LOOP.finditer(text)) if adapter == "opencode" else []
 
 hits = len(verdict.findall(text))
 if not hits:
@@ -136,15 +139,20 @@ if not hits:
              "outside what the leg may read; put the brief and context where it can "
              "and rerun" % refused)
     if loops:
-        session, step = loops[-1]
-        fail("cut off inside its tool loop at step %s (session %s) -- still reading, not "
-             "hung; usually the time cap. To keep what it read, from the SAME target "
-             "directory (its opencode.json still in place) pipe a message such as \"Your "
-             "time is up: read nothing more. Write your report now from what you have "
-             "read; mark every claim you did not reach NOT REACHED.\" into `opencode run "
-             "-s %s -m <the same model>`, then check that log. That report is partial: "
-             "its NOT REACHED claims are unreviewed. Otherwise rerun with a longer cap "
-             "or a narrower brief" % (step, session, session))
+        last = loops[-1]
+        session, step = last.group(1), last.group(2)
+        after = [l for l in text[last.end():].splitlines()
+                 if re.search(r"level=ERROR|^\s*Error\b|Streaming response failed|\b50[0-9]\]|queue is full", l)]
+        why = ("; after it the log reports %r -- fix that first, resuming will not help"
+               % after[-1].strip()[:160]) if after else ""
+        fail("no verdict; the last tool-loop line is step %s of session %s%s. If YOUR time "
+             "cap ended the leg (timeout(1) exits 124), what it read can be kept: from the "
+             "SAME target directory (its opencode.json still in place) pipe a message such "
+             "as \"Your time is up: read nothing more. Write your report now from what you "
+             "have read; mark every claim you did not reach NOT REACHED.\" into `opencode "
+             "run -s %s -m <the same model>`, then check that log -- a partial report: its "
+             "NOT REACHED claims are unreviewed. Otherwise rerun with a longer cap or a "
+             "narrower brief" % (step, session, why, session))
     fail("no verdict in the output (expected /%s/) -- the leg did not deliver a "
          "review; an error or an empty run looks exactly like this" % expect)
 if refused:

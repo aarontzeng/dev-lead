@@ -350,16 +350,18 @@ under 10 s even while argv-launched runs beside it are wedged.
 - Launch under the host's background mechanism with a generous timeout.
 - **A leg cut off by its time cap was still working, and its session survives.**
   The INFO log writes `message=loop session.id=<id> step=<n>` on every turn of
-  the tool loop; a log that ends on one of those with no report was killed
-  mid-read (a peer's GLM legs, 2026-10-21: 26 steps of file reads at a 600 s
-  `timeout`, rc 124), not hung. [`leg-log-check.sh`](../../../scripts/leg-log-check.sh) names the session and
-  step. From the same frozen target (lock-down `opencode.json` still in place),
-  `opencode run -s <id> -m <same model>` with "Your time is up: read nothing
-  more; write your report now and mark what you did not reach NOT REACHED" on
-  stdin returns what it had read (probed 2026-10-21: two files reported, four
-  NOT REACHED, one step). That report is partial: count it as the leg only for
-  the claims it reached. A leg that is cut off every time needs a longer cap or
-  a narrower brief.
+  the tool loop (a peer's GLM legs, 2026-10-21: 26 steps of file reads at a
+  600 s `timeout`, rc 124). With no report,
+  [`leg-log-check.sh`](../../../scripts/leg-log-check.sh) names the last step
+  and session and any error logged after it. The log alone cannot prove the
+  cap ended it: check your wrapper's exit code (124) and that no provider error
+  or refusal follows. If it was the cap, from the same frozen target (lock-down
+  `opencode.json` still in place), `opencode run -s <id> -m <same model>` with
+  "Your time is up: read nothing more; write your report now and mark what you
+  did not reach NOT REACHED" on stdin returns what it had read (probed
+  2026-10-21: two files reported, four NOT REACHED, one step). That report is
+  partial: count it as the leg only for the claims it reached. A leg that is
+  cut off every time needs a longer cap or a narrower brief.
 - Every run fires a small title-generation call (`agent=title` in logs) —
   expected.
 
