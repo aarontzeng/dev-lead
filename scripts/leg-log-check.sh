@@ -149,7 +149,8 @@ if not hits:
              "SAME target directory (its opencode.json still in place) pipe a message such "
              "as \"Your time is up: read nothing more. Write your report now from what you "
              "have read; mark every claim you did not reach NOT REACHED.\" into `opencode "
-             "run -s %s -m <the same model>`, then check that log -- a partial report: its "
+             "run -s %s -m <the same model> > resume.log 2>&1` (the report goes to stdout, "
+             "--print-logs to stderr: check the file that holds BOTH) -- a partial report: its "
              "NOT REACHED claims are unreviewed. Otherwise rerun with a longer cap or a "
              "narrower brief" % (step, session, session))
     fail("no verdict in the output (expected /%s/) -- the leg did not deliver a "

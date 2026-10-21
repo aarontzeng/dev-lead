@@ -6678,6 +6678,9 @@ def test_roster(tmp):
     got = _family_doc("stealth", "opencode-go/space-bunny", "Meta")
     check("roster: a stealth model cannot be declared a named family",
           got.returncode != 0 and "is unknown by its id, not Meta" in got.stdout, got.stdout + got.stderr)
+    got = _family_doc("beam", "opencode-go/beam-free", "Meta")
+    check("roster: beam-free (lineage undisclosed) cannot be declared a named family",
+          got.returncode != 0 and "is unknown by its id, not Meta" in got.stdout, got.stdout + got.stderr)
     got = _family_doc("upper", "openrouter/google/Gemma-4-31B-it:free", "North")
     check("roster: the model id is matched case-insensitively",
           got.returncode != 0 and "is Gemini by its id, not North" in got.stdout, got.stdout + got.stderr)
@@ -11073,7 +11076,7 @@ def test_leg_log_check(tmp):
     check("leg-log-check: a leg cut off mid tool loop names its last step and how to resume it",
           "step 26" in r.stderr and "opencode run -s ses_ab12CD" in r.stderr, r.stderr)
     check("leg-log-check: ...without claiming why it ended", "not hung" not in r.stderr
-          and "If YOUR time cap" in r.stderr and "Read the log after that line first" in r.stderr, r.stderr)
+          and "If YOUR time cap" in r.stderr and "Read the log after that line first" in r.stderr and "2>&1" in r.stderr, r.stderr)
     r = run(script, "opencode", logs["a loop line quoted inside report text"])
     check("leg-log-check: a loop line quoted in prose is not a log line",
           "tool-loop" not in r.stderr, r.stderr)

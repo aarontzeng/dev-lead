@@ -360,7 +360,10 @@ under 10 s even while argv-launched runs beside it are wedged.
   `opencode.json` still in place), `opencode run -s <id> -m <same model>` with
   "Your time is up: read nothing more; write your report now and mark what you
   did not reach NOT REACHED" on stdin returns what it had read (probed
-  2026-10-21: two files reported, four NOT REACHED, one step). That report is
+  2026-10-21: two files reported, four NOT REACHED, one step). Capture the
+  resume as `> resume.log 2>&1` and check that file: the report text goes to
+  stdout and the `--print-logs` lines to stderr, so a check of the stderr
+  capture alone finds no verdict (a peer's resumed legs, 2026-10-21). That report is
   partial: count it as the leg only for the claims it reached. A leg that is
   cut off every time needs a longer cap or a narrower brief.
 - Every run fires a small title-generation call (`agent=title` in logs) —

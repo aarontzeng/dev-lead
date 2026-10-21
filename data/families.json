@@ -80,7 +80,8 @@
     "unknown": {
       "accounting_valid": false,
       "why": "stealth models whose family is undisclosed by design; they might secretly share any family, so they can never SATISFY the cross-family rule -- fine as an additional pair of eyes, never the accounting leg",
-      "models": ["space-bunny", "big-pickle"]
+      "models": ["space-bunny", "big-pickle", "beam-", "reflection/"],
+      "note": "beam-free (opencode-go/beam-free; OpenRouter shows reflection/beam-1.0-501b-a23b, Reflection AI) added 2026-10-22: its base lineage is not disclosed where this file can check it, so it is classed here until it is"
     }
   },
   "rules": {
