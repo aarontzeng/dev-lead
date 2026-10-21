@@ -348,14 +348,15 @@ under 10 s even while argv-launched runs beside it are wedged.
   INFO stream carries `projectID=` (config binding, below) and
   `evaluated permission=` (the per-tool-call audit trail).
 - Launch under the host's background mechanism with a generous timeout.
-- **A leg cut off by its time cap was still working, and its session survives.**
+- **A leg your time cap cut off mid-read keeps its session.**
   The INFO log writes `message=loop session.id=<id> step=<n>` on every turn of
   the tool loop (a peer's GLM legs, 2026-10-21: 26 steps of file reads at a
   600 s `timeout`, rc 124). With no report,
   [`leg-log-check.sh`](../../../scripts/leg-log-check.sh) names the last step
-  and session and any error logged after it. The log alone cannot prove the
-  cap ended it: check your wrapper's exit code (124) and that no provider error
-  or refusal follows. If it was the cap, from the same frozen target (lock-down
+  and session. The log alone cannot prove the
+  cap ended it: check your wrapper's exit code (124) and read the log after
+  that line for a provider error, quota or refusal (resuming will not help then).
+  If it was the cap, from the same frozen target (lock-down
   `opencode.json` still in place), `opencode run -s <id> -m <same model>` with
   "Your time is up: read nothing more; write your report now and mark what you
   did not reach NOT REACHED" on stdin returns what it had read (probed

@@ -11024,10 +11024,9 @@ def test_leg_log_check(tmp):
          "timestamp=2026-10-21T12:24:00Z level=INFO run=r1 message=loop session.id=ses_ab12CD step=26\ntimestamp=2026-10-21T12:24:12Z level=INFO stream providerID=x modelID=y\n", 1),
         ("a tool loop that ended in a report", "opencode",
          "timestamp=2026-10-21T12:24:00Z level=INFO run=r1 message=loop session.id=ses_ab12CD step=3\n" + report, 0),
-        ("a tool loop that ended on a provider error", "opencode",
-         "timestamp=2026-10-21T12:24:00Z level=INFO run=r1 message=loop session.id=ses_ab12CD step=4\nStreaming response failed: [503] ResourceExhausted\nexit=1\n", 1),
         ("a loop line quoted inside report text", "opencode",
-         "the log said message=loop session.id=ses_zz step=9\nexit=0\n", 1),
+         "the log said timestamp=2026-10-21T12:24:00Z level=INFO run=r1 message=loop "
+         "session.id=ses_zz step=9\nexit=0\n", 1),
         ("refused read, nothing after", "opencode",
          "timestamp=1 INFO x\nError: The user rejected permission to use this specific tool call.\nexit=0\n", 1),
         ("a long error dump is not a review (agy quota)", "agy", long_err, 1),
@@ -11074,10 +11073,7 @@ def test_leg_log_check(tmp):
     check("leg-log-check: a leg cut off mid tool loop names its last step and how to resume it",
           "step 26" in r.stderr and "opencode run -s ses_ab12CD" in r.stderr, r.stderr)
     check("leg-log-check: ...without claiming why it ended", "not hung" not in r.stderr
-          and "If YOUR time cap" in r.stderr and "resuming will not help" not in r.stderr, r.stderr)
-    r = run(script, "opencode", logs["a tool loop that ended on a provider error"])
-    check("leg-log-check: a provider error after the last loop line is named, and resuming is ruled out",
-          "ResourceExhausted" in r.stderr and "resuming will not help" in r.stderr, r.stderr)
+          and "If YOUR time cap" in r.stderr and "Read the log after that line first" in r.stderr, r.stderr)
     r = run(script, "opencode", logs["a loop line quoted inside report text"])
     check("leg-log-check: a loop line quoted in prose is not a log line",
           "tool-loop" not in r.stderr, r.stderr)
