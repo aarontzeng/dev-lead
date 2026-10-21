@@ -11019,6 +11019,11 @@ def test_leg_log_check(tmp):
         ("missing file", "opencode", None, 1),
         ("empty file", "opencode", "", 1),
         ("timeout: logs and exit=124 only", "opencode", "timestamp=1 INFO start\nexit=124\n", 1),
+        ("timeout mid tool loop", "opencode",
+         "INFO message=loop session.id=ses_ab12CD step=25\nNow the bench scripts:\n"
+         "INFO message=loop session.id=ses_ab12CD step=26\nINFO stream providerID=x modelID=y\n", 1),
+        ("a tool loop that ended in a report", "opencode",
+         "INFO message=loop session.id=ses_ab12CD step=3\n" + report, 0),
         ("refused read, nothing after", "opencode",
          "timestamp=1 INFO x\nError: The user rejected permission to use this specific tool call.\nexit=0\n", 1),
         ("a long error dump is not a review (agy quota)", "agy", long_err, 1),
@@ -11061,6 +11066,12 @@ def test_leg_log_check(tmp):
     check("leg-log-check: a worked-around refusal is still WARNED about", "WARNING" in r.stderr, r.stderr)
     r = run(script, "opencode", logs["a report quoting the refusal words mid-line"])
     check("leg-log-check: ...but mentioning the words draws no warning", "WARNING" not in r.stderr, r.stderr)
+    r = run(script, "opencode", logs["timeout mid tool loop"])
+    check("leg-log-check: a leg cut off mid tool loop names its last step and how to resume it",
+          "step 26" in r.stderr and "opencode run -s ses_ab12CD" in r.stderr, r.stderr)
+    r = run(script, "codex", logs["timeout mid tool loop"])
+    check("leg-log-check: ...only for opencode, whose log the loop line comes from",
+          r.returncode == 1 and "tool loop" not in r.stderr, r.stderr)
     r = run(script, "agy", logs["agy's own denial line"])
     check("leg-log-check: the agy denial is named as the cause", "refused" in r.stderr, r.stderr)
     r = run(script, "agy", logs["agy 1.4.2's empty-answer line (a denied tool call)"])

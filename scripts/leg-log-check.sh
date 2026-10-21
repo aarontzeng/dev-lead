@@ -122,12 +122,29 @@ for pat in REFUSAL.get(adapter, ()):
         refused = m.group(0)[:100]
         break
 
+# opencode's --print-logs writes `message=loop session.id=<id> step=<n>` at every
+# turn of the tool loop. A log whose last such line is not followed by a report
+# was CUT OFF while the model was still reading -- a time cap (timeout(1) exits
+# 124), not a hang (a peer session's GLM legs, 2026-10-21: 26 steps of file reads
+# at the 600-s cap). The session survives, so what it read can still be asked for.
+loops = re.findall(r"message=loop session\.id=(ses_[A-Za-z0-9]+) step=(\d+)", text) if adapter == "opencode" else []
+
 hits = len(verdict.findall(text))
 if not hits:
     if refused:
         fail("a tool call was refused (%r) and no verdict followed -- usually a read "
              "outside what the leg may read; put the brief and context where it can "
              "and rerun" % refused)
+    if loops:
+        session, step = loops[-1]
+        fail("cut off inside its tool loop at step %s (session %s) -- still reading, not "
+             "hung; usually the time cap. To keep what it read, from the SAME target "
+             "directory (its opencode.json still in place) pipe a message such as \"Your "
+             "time is up: read nothing more. Write your report now from what you have "
+             "read; mark every claim you did not reach NOT REACHED.\" into `opencode run "
+             "-s %s -m <the same model>`, then check that log. That report is partial: "
+             "its NOT REACHED claims are unreviewed. Otherwise rerun with a longer cap "
+             "or a narrower brief" % (step, session, session))
     fail("no verdict in the output (expected /%s/) -- the leg did not deliver a "
          "review; an error or an empty run looks exactly like this" % expect)
 if refused:
