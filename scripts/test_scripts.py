@@ -17,6 +17,21 @@ import tempfile
 import time
 from pathlib import Path
 
+
+def _lock_dir(path):
+    """A directory its owner cannot write, holding a file: nothing can delete the file, whatever
+    the Python (3.13+ rmtree deletes a tree of any depth, so depth alone no longer blocks it; CI's
+    ubuntu-26.04 image, 2026-10-22). Not for root, who writes anywhere."""
+    os.mkdir(path)
+    (Path(path) / "f").write_text("x")
+    os.chmod(path, 0o500)
+
+
+def _rm_locked(*paths):
+    if paths:
+        subprocess.run(["chmod", "-R", "u+w", *map(str, paths)], check=True)
+        subprocess.run(["rm", "-rf", *map(str, paths)], check=True)
+
 SCRIPTS = Path(__file__).resolve().parent
 FAILURES = []
 
@@ -2962,6 +2977,11 @@ if "new-session" in args and state.get("residue"):
             os.mkdir("d")
             os.chdir("d")
         os.fchdir(here)
+        # Python 3.13+ deletes any depth (rmtree is no longer recursive): a directory its
+        # owner cannot write keeps the tree undeletable there too
+        os.mkdir(os.path.join(cwd, "locked"))
+        open(os.path.join(cwd, "locked", "f"), "w").write("x")
+        os.chmod(os.path.join(cwd, "locked"), 0o500)
 if "new-session" in args and state.get("sleep"):
     import time as _t
     _t.sleep(state["sleep"])
@@ -3163,6 +3183,8 @@ def test_quota_snapshot_tui_refresh(tmp):
           list(workdir.iterdir()) == [] and (outside / "keep.txt").read_text() == "keep", list(workdir.iterdir()))
     r, recs, calls = scenario("residue too deep", extra_state={"residue": str(outside), "deep": True})
     def chain_depth(top):
+        if not os.path.isdir(top):                # Python 3.13+ deleted the chain: report 0, do not raise
+            return 0
         here = os.open(".", os.O_RDONLY)
         depth = 0
         try:
@@ -3175,8 +3197,10 @@ def test_quota_snapshot_tui_refresh(tmp):
             os.close(here)
         return depth
     leftovers = list((home / ".cache" / "dev-lead").glob("quota-tui.gone.*"))
-    check("tui refresh: ...the deep tree was really built (the leftover still holds a chain of 1200 directories)",
-          len(leftovers) == 1 and chain_depth(leftovers[0] / "deep") == 1200,
+    check("tui refresh: ...the undeletable tree was really built (the leftover still holds the unwritable "
+          "directory, and before Python 3.13 the chain of 1200 directories too)",
+          len(leftovers) == 1 and (leftovers[0] / "locked" / "f").exists()
+          and (sys.version_info >= (3, 13) or chain_depth(leftovers[0] / "deep") == 1200),
           [(p.name, chain_depth(p / "deep")) for p in leftovers])
     gone = list((home / ".cache" / "dev-lead").glob("quota-tui.gone.*"))
     check("tui refresh: a residue tree deeper than the recursion limit does not crash the run (records "
@@ -3188,7 +3212,7 @@ def test_quota_snapshot_tui_refresh(tmp):
     r, recs, calls = scenario("after a too-deep residue")
     check("tui refresh: ...and the next refresh starts (not refused as 'not empty')",
           verbs(calls) == ["new-session", "kill-server"], (calls, recs))
-    subprocess.run(["rm", "-rf", *map(str, gone)], check=True)
+    _rm_locked(*gone)
     leftover = home / ".cache" / "dev-lead" / "quota-tui.gone.99999"
     (leftover / "sub").mkdir(parents=True)
     (leftover / "sub" / "f.txt").write_text("x")
@@ -3335,6 +3359,7 @@ def test_quota_snapshot_tui_refresh(tmp):
     finally:
         os.fchdir(here_fd)
         os.close(here_fd)
+    _lock_dir(workdir / "locked")                 # undeletable on Python 3.13+ as well
     r, recs, calls = scenario("crowded too deep")
     started_in = json.loads((tmp / "refresh-crowded-too-deep" / "tmux.log.ls").read_text()) \
         if (tmp / "refresh-crowded-too-deep" / "tmux.log.ls").exists() else None
@@ -3343,8 +3368,7 @@ def test_quota_snapshot_tui_refresh(tmp):
           verbs(calls) == ["new-session", "kill-server"] and started_in == [] and list(workdir.iterdir()) == []
           and any(p.name.startswith("quota-tui.gone.") for p in workdir.parent.iterdir())
           and all(not any("not empty" in p for p in x["problems"]) for x in recs), (calls, started_in, recs))
-    subprocess.run(["rm", "-rf", *[str(p) for p in workdir.parent.iterdir() if p.name.startswith("quota-tui.gone.")]],
-                   check=True)
+    _rm_locked(*[p for p in workdir.parent.iterdir() if p.name.startswith("quota-tui.gone.")])
 
     # a private server an earlier run could not stop may still be writing there: nothing is moved or started
     stray_dir = tmp / "tmuxtmp-stray" / ("tmux-%d" % os.geteuid())
@@ -3792,13 +3816,14 @@ def test_quota_snapshot_tui_refresh(tmp):
         finally:
             os.fchdir(here_fd)
             os.close(here_fd)
+        _lock_dir(wd / "locked")                  # undeletable on Python 3.13+ as well
         qs._reset_workdir(str(wd), (wd.stat().st_dev, wd.stat().st_ino))
     left = sorted(p.name for p in two.iterdir())
     check("tui refresh: a second reset in the same process works even though the first left a tree it could "
           "not delete (the working directory is fresh and empty, each leftover has its own name)",
           (two / "quota-tui").is_dir() and list((two / "quota-tui").iterdir()) == []
           and len([n for n in left if n.startswith("quota-tui.gone.")]) == 2, left)
-    subprocess.run(["rm", "-rf", *[str(two / n) for n in left if n != "quota-tui"]], check=True)
+    _rm_locked(*[two / n for n in left if n != "quota-tui"])
 
     # the lock file replaced between open and lock: that lock is on a file nobody else sees
     real_flock = qs.fcntl.flock
@@ -11259,7 +11284,10 @@ def main():
         test_quota_snapshot(Path(td))
     print("quota-snapshot.py --refresh (private tmux server)")
     with tempfile.TemporaryDirectory() as td:
-        test_quota_snapshot_tui_refresh(Path(td))
+        try:
+            test_quota_snapshot_tui_refresh(Path(td))
+        finally:                                  # a locked residue a failed check left behind must not break the teardown
+            subprocess.run(["chmod", "-R", "u+w", td], check=False)
 
     if FAILURES:
         print(f"\nFAIL — {len(FAILURES)} test(s) failed")
