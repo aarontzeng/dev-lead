@@ -476,6 +476,23 @@ two rounds and would have run a third on no principle at all.
    companion's `task --background`) needs a second backgrounded step that
    blocks until the job is terminal; each runtime file names its own waiter.
 
+   **A leg launched DETACHED (so it survives a dropped session) is the same
+   trap.** `systemd-run --user --collect …` returns once the unit has
+   started, not when the leg has finished, so a backgrounded call around it
+   ends at once and nothing ever announces the leg finishing (a peer session,
+   2026-10-23: two legs sat unseen for 35 minutes). Launch it as the waiting
+   form instead --
+   `systemd-run --user --wait --collect --quiet --unit=<name> … <runner> …` --
+   which blocks until the unit has ended: that ONE command under the host's
+   background mechanism is the notification, while the leg itself stays a
+   detached unit (what the runner does not redirect is kept in the journal).
+   Two detached legs are two such calls. This is host-specific launching, so dev-lead ships no helper for
+   it: the unit's runner evals what leg-cmd.sh emits and adds what that command
+   leaves to the caller (always the output redirect; the `cd` too where the
+   command has none, e.g. claude implement), as for any other leg. A
+   launcher that itself returns at once (the codex companion's
+   `task --background`) still needs its own waiter, inside the unit or beside it.
+
    **A multi-leg round is therefore one backgrounded call PER LEG, not one call
    that starts them all.** This is the operative consequence, and it names the
    reason a lead reaches for the inner `&` at all: wanting four legs running at
