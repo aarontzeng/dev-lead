@@ -5652,7 +5652,7 @@ def test_leg_cmd():
     # --add-dir (a peer session, 2026-09-22): cursor takes it, inserted before the
     # prompt and quoted; an adapter without the flag REFUSES rather than
     # dropping it -- for opencode, whose out-of-cwd read is auto-rejected
-    # headless, with the rule that replaces it.
+    # headless at the default `ask`, with the rule that replaces it.
     r = subprocess.run([str(script), "cursor", "review", "--model", "grok-4.7-medium",
                         "--run-dir", "/tmp/r", "--add-dir", "/ctx one", "--add-dir", "/ctx2"],
                        capture_output=True, text=True)

@@ -258,8 +258,9 @@ if os.environ.get("RUN_DIR_ARG") and r["prompt_delivery"] == "prompt_file":
 # takes `--add-dir` (probed 2026-09-22 in `--mode ask`: a file there was read);
 # an adapter without an add_dir_flag REFUSES rather than dropping the value --
 # for opencode that matters most, because a read outside its cwd is
-# auto-rejected headless and the leg ends with empty output, looking like a
-# clean run. Inserted before the prompt, after every flag the template sets.
+# auto-rejected headless when external_directory is left at `ask` (the
+# review config denies it, which returns an error instead) and the leg then
+# ends with empty output, looking like a clean run. Inserted before the prompt, after every flag the template sets.
 add_dirs = [x for x in os.environ.get("ADD_DIRS", "").split("\n") if x]
 if add_dirs:
     flag = spec.get("add_dir_flag")

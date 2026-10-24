@@ -43,9 +43,11 @@ else.
 | `grok` | `--tools` allowlists reads; absolute paths in the prompt file |
 | `opencode` | **cannot take out-of-project paths at all** — see below |
 
-`opencode` auto-rejects anything outside the project root
-(`permission=external_directory`, fatal headless: measured, died in seven
-seconds having read nothing) and has no `--add-dir`. Its evidence therefore has
+`opencode` refuses anything outside the project root
+(`permission=external_directory`: left at `ask` it is auto-rejected and fatal
+headless -- measured, died in seven seconds having read nothing; the review
+config now sets it to `deny`, which returns an error and lets the leg go on, but
+the file is still unread) and has no `--add-dir`. Its evidence therefore has
 to live *inside* the project. **Declare those paths to the certification**
 rather than excusing them:
 

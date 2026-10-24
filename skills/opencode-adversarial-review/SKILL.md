@@ -144,10 +144,22 @@ match wins; see runtime):
       "git show*": "allow",
       "git rev-parse*": "allow"
     },
-    "edit": "deny"
+    "edit": "deny",
+    "external_directory": "deny"
   }
 }
 ```
+
+`external_directory: deny` is what keeps a wrong path from ending the leg. Left
+at its default (`ask`), a read outside the target is auto-rejected headless
+and the leg stops with no verdict, however good the review was; with an
+explicit deny the model gets an error message back and keeps reviewing. A peer
+session measured it on 4 changes x 5 Google models: 3 of 20 legs died after
+~20 s on a mis-typed path (the frozen path with its last components dropped),
+and the failing case ran 206 s to a verdict once the line was added. `opencode
+debug agent build` in the target lists the merged rule last, and opencode
+re-appends its own tool-output allow after it, so truncated tool output stays
+readable.
 
 Call this what it is: a **machine-enforced guardrail against a fallible
 delegate, not a security boundary against an adversarial one.** File edits
@@ -296,12 +308,14 @@ target; the lock-down `opencode.json` must already be in the target.
   hangs before the session is even created — `message=init` then silence,
   forever, in every model (measured; size sweep in the runtime file).
 - **Put the claims IN a file inside the repo, not outside it.** Anything
-  outside the project trips `permission=external_directory`, which
-  auto-rejects headless, and the model treats the refusal as fatal
-  (measured: died in seven seconds having read nothing). State the repo
-  root explicitly in the prompt ("your cwd is EXACTLY <path>; use relative
-  paths") — the same run later hallucinated a neighboring absolute path and
-  died identically.
+  outside the project trips `permission=external_directory`. Left at `ask`
+  it is auto-rejected headless and the model treats the refusal as fatal
+  (measured: died in seven seconds having read nothing; the same run later
+  hallucinated a neighboring absolute path and died identically). The config
+  above denies it instead, so the model gets an error and goes on; the claims
+  still belong inside the repo, because a read it cannot make is a finding it
+  cannot check. State the repo root explicitly in the prompt ("your cwd is
+  EXACTLY <path>; use relative paths").
 - **Check the log mechanically before reading it as a verdict:**
 
   ```bash
