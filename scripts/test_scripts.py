@@ -3031,6 +3031,164 @@ if "new-session" in args and state.get("rewrite"):
 """
 
 
+def test_install_opencode_go_usage(tmp):
+    """The plugin installer copies, never clobbers what it did not make, and retires only a V1 link."""
+    script = SCRIPTS / "install-opencode-go-usage.sh"
+    src = SCRIPTS.parent / "opencode-plugin" / "go-usage"
+
+    def run(home, *args, path=None):
+        env = dict(os.environ, HOME=str(home))
+        env.pop("XDG_CONFIG_HOME", None)
+        if path:
+            env["PATH"] = path + os.pathsep + env["PATH"]
+        return subprocess.run([str(script), *args], capture_output=True, text=True, env=env)
+
+    home = tmp / "h1"
+    home.mkdir()
+    dest = home / ".config" / "opencode" / "plugins" / "go-usage"
+    r = run(home)
+    check("go-usage install: copies the three plugin files",
+          r.returncode == 0 and all((dest / f).read_bytes() == (src / f).read_bytes()
+                                    for f in ("index.ts", "cache.ts", "tui.ts")), r.stdout + r.stderr)
+    check("go-usage install: a copy, not a link", not dest.is_symlink() and not (dest / "index.ts").is_symlink())
+    (dest / "index.ts").write_text("stale")
+    r = run(home)
+    check("go-usage install: a second run refreshes its own copy",
+          r.returncode == 0 and (dest / "index.ts").read_bytes() == (src / "index.ts").read_bytes(), r.stderr)
+
+    home = tmp / "h2"
+    other = home / "elsewhere"
+    other.mkdir(parents=True)
+    (other / "keep.txt").write_text("k")
+    dest = home / ".config" / "opencode" / "plugins" / "go-usage"
+    dest.parent.mkdir(parents=True)
+    dest.symlink_to(other)
+    r = run(home)
+    check("go-usage install: a link it did not make is refused and left in place",
+          r.returncode == 1 and dest.is_symlink() and [p.name for p in other.iterdir()] == ["keep.txt"], r.stdout + r.stderr)
+    r = run(home, "--force")
+    check("go-usage install: --force replaces that link with a real directory, the link's target untouched",
+          r.returncode == 0 and not dest.is_symlink() and (dest / "index.ts").is_file() and [p.name for p in other.iterdir()] == ["keep.txt"],
+          r.stdout + r.stderr)
+
+    home = tmp / "h3"
+    dest = home / ".config" / "opencode" / "plugins" / "go-usage"
+    dest.mkdir(parents=True)
+    (dest / "mine.ts").write_text("x")
+    r = run(home)
+    check("go-usage install: a directory with someone else's files is refused",
+          r.returncode == 1 and (dest / "mine.ts").read_text() == "x" and not (dest / "index.ts").exists(),
+          r.stdout + r.stderr)
+
+    # round-1 review: planted names, silent copy failures, trailing slash, --dest, aside-not-delete
+    home = tmp / "h6"
+    victim = home / "important"
+    victim.parent.mkdir(parents=True)
+    victim.write_text("keep me")
+    dest = home / ".config" / "opencode" / "plugins" / "go-usage"
+    dest.mkdir(parents=True)
+    (dest / "mine.ts").write_text("x")
+    (dest / ".installed-by-dev-lead").symlink_to(victim)
+    r = run(home)
+    check("go-usage install: a marker that is a link to another file is not proof of ownership",
+          r.returncode == 1 and victim.read_text() == "keep me" and (dest / "mine.ts").read_text() == "x",
+          r.stdout + r.stderr)
+
+    home = tmp / "h7"
+    r = run(home)
+    dest = home / ".config" / "opencode" / "plugins" / "go-usage"
+    victim = home / "target.txt"
+    victim.write_text("keep me")
+    (dest / "index.ts.new").symlink_to(victim)
+    r = run(home)
+    check("go-usage install: a planted <file>.new link is never written through, and the install still completes",
+          r.returncode == 0 and victim.read_text() == "keep me" and (dest / "index.ts").is_file()
+          and not (dest / "index.ts.new").exists() and not list(dest.parent.glob("go-usage.stage.*")),
+          r.stdout + r.stderr)
+
+    home = tmp / "h8"
+    real = home / "realdir"
+    real.mkdir(parents=True)
+    (real / ".installed-by-dev-lead").write_text("")      # looks like an install of ours behind the link
+    (real / "index.ts").write_text("not ours")
+    dest = home / "plugins" / "go-usage"
+    dest.parent.mkdir()
+    dest.symlink_to(real)
+    r = run(home, "--dest", str(dest) + "/")
+    check("go-usage install: --dest with a trailing slash does not see through a link",
+          r.returncode == 1 and "is a link" in r.stderr and dest.is_symlink() and (real / "index.ts").read_text() == "not ours",
+          r.stdout + r.stderr)
+
+    home = tmp / "h9"
+    dest = home / ".config" / "opencode" / "plugins" / "go-usage"
+    dest.mkdir(parents=True)
+    (dest / "mine.ts").write_text("precious")
+    r = run(home, "--force")
+    asides = list(dest.parent.glob("go-usage.old.*"))
+    check("go-usage install: --force on a foreign directory renames it aside, it does not delete it",
+          r.returncode == 0 and len(asides) == 1 and (asides[0] / "old" / "mine.ts").read_text() == "precious"
+          and str(asides[0] / "old") in r.stdout
+          and (dest / "index.ts").is_file() and not (dest / "mine.ts").exists(), r.stdout + r.stderr)
+
+    # a failing cp, and a failing final rename, after the staging directory exists
+    shim = tmp / "shim"
+    shim.mkdir()
+    for name, body in (("cp", "exit 1"),
+                       ("mv", 'case "$*" in *.stage.*) exit 1;; esac; exec /bin/mv "$@"')):
+        (shim / name).write_text("#!/bin/sh\n" + body + "\n")
+        (shim / name).chmod(0o755)
+    for label, which in (("a failing copy", "cp"), ("a failing final rename", "mv")):
+        home = tmp / ("h10-" + which)
+        r = run(home)
+        dest = home / ".config" / "opencode" / "plugins" / "go-usage"
+        (dest / "index.ts").write_text("old")
+        sub = tmp / ("shim-" + which)
+        sub.mkdir()
+        (sub / which).write_bytes((shim / which).read_bytes())
+        (sub / which).chmod(0o755)
+        r = run(home, path=str(sub))
+        left = [p.name for p in dest.parent.iterdir()]
+        check("go-usage install: %s exits non-zero, the old copy is back as it was, and no staging is left" % label,
+              r.returncode != 0 and (dest / "index.ts").read_text() == "old"
+              and (dest / ".installed-by-dev-lead").is_file() and left == ["go-usage"], (r.stdout, r.stderr, left))
+
+    home = tmp / "h12"
+    real = home / "realdir"
+    real.mkdir(parents=True)
+    (real / "index.ts").write_text("not ours")
+    dest = home / "plugins" / "go-usage"
+    dest.parent.mkdir()
+    dest.symlink_to(real)
+    r = run(home, "--force", "--dest", str(dest) + "/.")
+    check("go-usage install: --dest ending in /. is refused outright",
+          r.returncode == 1 and "refusing" in r.stderr and (real / "index.ts").read_text() == "not ours",
+          r.stdout + r.stderr)
+
+    home = tmp / "h11"
+    v1 = home / ".config" / "opencode" / "plugin" / "go-usage.ts"
+    v1.parent.mkdir(parents=True)
+    v1.symlink_to(home / "gone.ts")
+    r = run(home, "--dest", str(home / "try" / "go-usage"))
+    check("go-usage install: --dest elsewhere leaves the real opencode 1 link alone",
+          r.returncode == 0 and v1.is_symlink() and (home / "try" / "go-usage" / "index.ts").is_file(),
+          r.stdout + r.stderr)
+
+    home = tmp / "h4"
+    v1 = home / ".config" / "opencode" / "plugin" / "go-usage.ts"
+    v1.parent.mkdir(parents=True)
+    v1.symlink_to(home / "gone.ts")
+    r = run(home)
+    check("go-usage install: the retired V1 plugin link is removed, and nothing takes its place",
+          r.returncode == 0 and not v1.is_symlink() and not v1.exists(), r.stderr)
+    home = tmp / "h5"
+    v1 = home / ".config" / "opencode" / "plugin" / "go-usage.ts"
+    v1.parent.mkdir(parents=True)
+    v1.write_text("a real file the user wrote")
+    r = run(home)
+    check("go-usage install: ...but a real file of that name is left alone",
+          r.returncode == 0 and v1.read_text() == "a real file the user wrote", r.stderr)
+
+
 def test_quota_snapshot_tui_refresh(tmp):
     """--refresh starts agy / cursor-agent in a PRIVATE tmux server, only when both opt-ins hold and the cache is stale."""
     runs_before = len(QS_RUNS)
@@ -11326,6 +11484,9 @@ def main():
     print("quota-snapshot.py")
     with tempfile.TemporaryDirectory() as td:
         test_quota_snapshot(Path(td))
+    print("install-opencode-go-usage.sh")
+    with tempfile.TemporaryDirectory() as td:
+        test_install_opencode_go_usage(Path(td))
     print("quota-snapshot.py --refresh (private tmux server)")
     with tempfile.TemporaryDirectory() as td:
         try:

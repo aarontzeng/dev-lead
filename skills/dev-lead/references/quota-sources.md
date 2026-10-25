@@ -210,7 +210,8 @@ The agy and Cursor caches are written only by their CLIs' interactive status
 lines, and an idle TUI never rewrites them. A TUI that starts does (measured
 2026-10-19): agy writes its quota cache within about 4 s, already at its
 folder-trust prompt, and `cursor-agent --trust` re-fetches a cache 300 s or
-older within about 6 s. A TUI `opencode` (v2, with aadev's go-usage plugin) runs the
+older within about 6 s. A TUI `opencode` (v2, with the go-usage plugin from `opencode-plugin/`, installed by
+[`install-opencode-go-usage.sh`](../../../scripts/install-opencode-go-usage.sh)) runs the
 plugin's first poll 5 s after it starts and rewrites `usage.json`; a bare `opencode serve` does
 not load the plugin (measured by a peer on 2.1.4), so only the TUI is started. This script runs no model and
 sends no key; the plugin reads the Go key itself, this script never does. The TUI also starts the user's
@@ -285,7 +286,7 @@ they have open.
   `roster.json`), which then replaces the shipped file.
 - **It needs the cache writer installed** for that CLI: the agy and Cursor
   caches are written by the user's statusline scripts, the opencode-go one by
-  aadev's go-usage plugin (opencode 2), not by the CLIs themselves. Without
+  the go-usage plugin shipped in `opencode-plugin/go-usage` (opencode 2), not by the CLIs themselves. Without
   one, the started CLI rewrites nothing and the record says so.
 - **What the record says.** A refresh that worked adds nothing; the record is
   as fresh as the rewritten cache. (opencode-go: the plugin also rewrites the
@@ -354,8 +355,10 @@ they have open.
 
 ## `opencode_go_cache`
 
-- **Who writes it:** the user's OpenCode plugin
-  (`${XDG_CACHE_HOME}/opencode-go/usage.json`, schema 1). `XDG_CACHE_HOME` is
+- **Who writes it:** the go-usage OpenCode plugin shipped in this suite
+  (`opencode-plugin/go-usage`, installed by [`install-opencode-go-usage.sh`](../../../scripts/install-opencode-go-usage.sh);
+  opencode 2 only), which is the only code here that reads the Go key;
+  it writes `${XDG_CACHE_HOME}/opencode-go/usage.json` (schema 1). `XDG_CACHE_HOME` is
   used only when set, non-empty and absolute, else `~/.cache`.
 - **Two clocks in one file:** `fetched_at` and `usage` are the last SUCCESSFUL
   read and survive later failures; `attempted_at`, `error` and `http_status`
@@ -369,8 +372,8 @@ they have open.
   401 or 403 or the error `no opencode-go key`, else `network_error`; the
   windows from the last success are still reported. The error text is never
   copied.
-- **Writer change, 2026-10-19:** the plugin (aadev
-  `agent/opencode/plugin/go-usage.ts`) no longer writes `no opencode-go key`:
+- **Writer change, 2026-10-19:** the plugin (then in the
+  author's aadev repo, now `opencode-plugin/go-usage`) no longer writes `no opencode-go key`:
   a process without a key leaves the cache alone. On success it records the
   response's real HTTP status. The collector still maps that string, for
   caches an older writer left behind.
