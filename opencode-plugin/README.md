@@ -27,5 +27,7 @@ replace a link or directory it did not make unless given `--force`, and then
 removes a link (never its target) or renames a directory aside, never deletes it.
 
 `quota-snapshot.py --refresh` on a host whose `quota-sources.json` sets
-`"refresh": "tmux_spawn"` on the opencode-go source starts a bare `opencode` TUI
-so this plugin gets to poll when no TUI is open.
+`"refresh": "tmux_spawn"` on the opencode-go source starts `opencode --standalone` (a TUI with a private server, so the plugin is
+loaded fresh and polls 5 s later) so this plugin gets to poll when no TUI is open.
+A plain TUI would attach to opencode's background service, whose already-loaded
+plugin polls only every 10 minutes.

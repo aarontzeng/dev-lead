@@ -458,10 +458,13 @@ REFRESH_TMUX_SPAWN = "tmux_spawn"
 REFRESH_COMMANDS = {
     "agy_quota_cache": ("agy", ["agy"]),
     "cursor_usage_cache": ("cursor", ["cursor-agent", "--trust"]),
-    # opencode 2: the go-usage plugin polls 5 s after the TUI starts and writes
-    # usage.json itself (it reads the Go key; this script never does). A bare
-    # `opencode serve` does not load it (measured by a peer, 2.1.4), so the TUI is the trigger.
-    "opencode_go_cache": ("opencode", ["opencode"]),
+    # opencode 2: the go-usage plugin polls 5 s after its server loads it and writes
+    # usage.json itself (it reads the Go key; this script never does). --standalone
+    # is required: a plain TUI attaches to opencode's background service, whose plugin
+    # is already loaded and polls only every 10 minutes, so a refresh would wait for
+    # nothing (measured 2.1.4: 30 s without it, 5-6 s with it, and no service is left).
+    # A bare `opencode serve` does not load the plugin at all (measured by a peer).
+    "opencode_go_cache": ("opencode", ["opencode", "--standalone"]),
 }
 
 

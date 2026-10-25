@@ -210,12 +210,13 @@ The agy and Cursor caches are written only by their CLIs' interactive status
 lines, and an idle TUI never rewrites them. A TUI that starts does (measured
 2026-10-19): agy writes its quota cache within about 4 s, already at its
 folder-trust prompt, and `cursor-agent --trust` re-fetches a cache 300 s or
-older within about 6 s. A TUI `opencode` (v2, with the go-usage plugin from `opencode-plugin/`, installed by
-[`install-opencode-go-usage.sh`](../../../scripts/install-opencode-go-usage.sh)) runs the
-plugin's first poll 5 s after it starts and rewrites `usage.json`; a bare `opencode serve` does
-not load the plugin (measured by a peer on 2.1.4), so only the TUI is started. This script runs no model and
+older within about 6 s. `opencode --standalone` (a TUI with its own private server; opencode 2, with the go-usage plugin from `opencode-plugin/`, installed by
+[`install-opencode-go-usage.sh`](../../../scripts/install-opencode-go-usage.sh)) loads the
+plugin, whose first poll comes 5 s later and rewrites `usage.json`. Without `--standalone` the TUI attaches to
+opencode's background service, whose plugin is already loaded and polls only every 10 minutes, so nothing
+would be rewritten (measured on 2.1.4); a bare `opencode serve` does not load the plugin at all (measured by a peer). This script runs no model and
 sends no key; the plugin reads the Go key itself, this script never does. The TUI also starts the user's
-configured MCP servers while it is up.
+configured MCP servers while it is up, and the private server stops with it.
 
 So `--refresh`, for a source whose config sets `"refresh": "tmux_spawn"` (only
 `agy_quota_cache`, `cursor_usage_cache` and `opencode_go_cache` may) and whose cache is missing,

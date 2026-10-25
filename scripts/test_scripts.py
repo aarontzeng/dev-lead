@@ -3606,8 +3606,8 @@ def test_quota_snapshot_tui_refresh(tmp):
 
     r, recs, calls = scenario("opencode-go stale", "opencode_go_cache")
     oc = recs[0] if recs else {}
-    check("tui refresh: a stale opted-in opencode-go cache starts a bare `opencode` the same way",
-          verbs(calls) == ["new-session", "kill-server"] and argv(calls[0])[-1:] == ["opencode"]
+    check("tui refresh: a stale opted-in opencode-go cache starts `opencode --standalone` the same way",
+          verbs(calls) == ["new-session", "kill-server"] and argv(calls[0])[-2:] == ["opencode", "--standalone"]
           and private(calls) and not any("send-keys" in c for c in calls), calls)
     check("tui refresh: ...and the new opencode-go weekly figure is read, fresh",
           oc.get("freshness") == "fresh" and (_qs_win(oc, "weekly") or {}).get("used_pct") == 7, oc)
