@@ -1,7 +1,7 @@
 # opencode-plugin/go-usage
 
 An opencode 2 plugin that polls the opencode Go usage endpoint every 10 minutes
-(first poll 5 s after opencode starts) and keeps the answer in
+(first poll 5 s after the plugin is loaded (opencode starts its own server)) and keeps the answer in
 `~/.cache/opencode-go/usage.json` (owner-only, schema 1). It also toasts the
 figures in the TUI.
 

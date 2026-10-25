@@ -13,7 +13,7 @@ and what is still a guess.
 
 **Nothing consumes the output yet.** The collector changes no dispatch
 behaviour. It is read-only except for one opt-in action: `--refresh` on a host
-that asks for it starts `agy`, `cursor-agent --trust` or `opencode` in a tmux server of
+that asks for it starts `agy`, `cursor-agent --trust` or `opencode --standalone` in a tmux server of
 its own so that a cache that is missing, stale, or without a usable time is
 rewritten (*Refreshing a TUI cache* below).
 
@@ -89,7 +89,7 @@ What each kind can produce, and when:
 
 - **Read-only.** It never runs a model and never reads a credential. It
   starts `codex app-server` and ends that one itself; with `--refresh` on a
-  host that opts in it may also start `agy`, `cursor-agent --trust` or `opencode` in a
+  host that opts in it may also start `agy`, `cursor-agent --trust` or `opencode --standalone` in a
   private tmux server (*Refreshing a TUI cache*).
 - **No invented values.** A value that is missing, a boolean, a string, not
   finite or out of range is reported as `null` with `limit_state` `unknown`
@@ -216,12 +216,13 @@ plugin, whose first poll comes 5 s later and rewrites `usage.json`. Without `--s
 opencode's background service, whose plugin is already loaded and polls only every 10 minutes, so nothing
 would be rewritten (measured on 2.1.4); a bare `opencode serve` does not load the plugin at all (measured by a peer). This script runs no model and
 sends no key; the plugin reads the Go key itself, this script never does. The TUI also starts the user's
-configured MCP servers while it is up, and the private server stops with it.
+configured MCP servers while it is up, and the private server stops with it (it is not detached; a child that outlives `kill-server` by its
+own 1-3 s force-kill window is not waited for, and the stray-server check names only tmux sockets -- a known limit, not seen in practice).
 
 So `--refresh`, for a source whose config sets `"refresh": "tmux_spawn"` (only
 `agy_quota_cache`, `cursor_usage_cache` and `opencode_go_cache` may) and whose cache is missing,
 older than its TTL, more than 60 s in the future, or has an mtime that cannot
-be read as a time, starts `agy`, `cursor-agent --trust` or `opencode` detached in a tmux server of its own (`tmux -L
+be read as a time, starts `agy`, `cursor-agent --trust` or `opencode --standalone` detached in a tmux server of its own (`tmux -L
 dev-lead-quota-<pid>-<cli> -f /dev/null`: no tmux config is read, since the
 person's `~/.tmux.conf` could run commands, and `TMUX` / `TMUX_PANE` are
 dropped from tmux's environment), in a fixed directory of dev-lead's

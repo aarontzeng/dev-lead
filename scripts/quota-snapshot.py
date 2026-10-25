@@ -26,7 +26,7 @@ Contract:
   * It never runs a model and never reads a credential. It starts `codex
     app-server` and reaps it itself. Opt-in twice over -- with --refresh, AND
     on a host whose config marks the source `"refresh": "tmux_spawn"` -- it
-    also starts `agy`, `cursor-agent --trust` or `opencode` when that cache is missing,
+    also starts `agy`, `cursor-agent --trust` or `opencode --standalone` when that cache is missing,
     older than its TTL, more than 60 s in the future, or has an mtime that is
     not a usable time, detached in a tmux
     server of its own, until the CLI rewrites its cache, then kills that
@@ -1220,7 +1220,7 @@ def parse_args(argv):
                         help="for a source whose config sets refresh to tmux_spawn (agy, cursor, opencode-go) "
                              "and whose cache is missing, older than its TTL, more than 60 s "
                              "in the future or of an unusable mtime, start that CLI (cursor-agent "
-                             "with --trust; opencode bare) detached in a private tmux server until it rewrites "
+                             "with --trust; opencode with --standalone) detached in a private tmux server until it rewrites "
                              "the cache, then kill that server; it never types a key and never "
                              "touches your own tmux server; one refresh runs at a time, and "
                              "the empty directory it starts in is moved aside and emptied "
