@@ -13,7 +13,7 @@ and what is still a guess.
 
 **Nothing consumes the output yet.** The collector changes no dispatch
 behaviour. It is read-only except for one opt-in action: `--refresh` on a host
-that asks for it starts `agy` or `cursor-agent --trust` in a tmux server of
+that asks for it starts `agy`, `cursor-agent --trust` or `opencode` in a tmux server of
 its own so that a cache that is missing, stale, or without a usable time is
 rewritten (*Refreshing a TUI cache* below).
 
@@ -89,7 +89,7 @@ What each kind can produce, and when:
 
 - **Read-only.** It never runs a model and never reads a credential. It
   starts `codex app-server` and ends that one itself; with `--refresh` on a
-  host that opts in it may also start `agy` or `cursor-agent --trust` in a
+  host that opts in it may also start `agy`, `cursor-agent --trust` or `opencode` in a
   private tmux server (*Refreshing a TUI cache*).
 - **No invented values.** A value that is missing, a boolean, a string, not
   finite or out of range is reported as `null` with `limit_state` `unknown`
@@ -210,13 +210,16 @@ The agy and Cursor caches are written only by their CLIs' interactive status
 lines, and an idle TUI never rewrites them. A TUI that starts does (measured
 2026-10-19): agy writes its quota cache within about 4 s, already at its
 folder-trust prompt, and `cursor-agent --trust` re-fetches a cache 300 s or
-older within about 6 s. Neither calls a model.
+older within about 6 s. A TUI `opencode` (v2, with aadev's go-usage plugin) runs the
+plugin's first poll 5 s after it starts and rewrites `usage.json`; a bare `opencode serve` does
+not load the plugin (measured by a peer on 2.1.4), so only the TUI is started. This script runs no model and
+sends no key; the plugin reads the Go key itself, this script never does. The TUI also starts the user's
+configured MCP servers while it is up.
 
 So `--refresh`, for a source whose config sets `"refresh": "tmux_spawn"` (only
-`agy_quota_cache` and `cursor_usage_cache` may) and whose cache is missing,
+`agy_quota_cache`, `cursor_usage_cache` and `opencode_go_cache` may) and whose cache is missing,
 older than its TTL, more than 60 s in the future, or has an mtime that cannot
-be read as a time, starts `agy` or
-`cursor-agent --trust` detached in a tmux server of its own (`tmux -L
+be read as a time, starts `agy`, `cursor-agent --trust` or `opencode` detached in a tmux server of its own (`tmux -L
 dev-lead-quota-<pid>-<cli> -f /dev/null`: no tmux config is read, since the
 person's `~/.tmux.conf` could run commands, and `TMUX` / `TMUX_PANE` are
 dropped from tmux's environment), in a fixed directory of dev-lead's
@@ -280,11 +283,16 @@ they have open.
   the source. The shipped `data/` file never does; a host opts in with its own
   `quota-sources.json` in dev-lead's plugin data directory (beside
   `roster.json`), which then replaces the shipped file.
-- **It needs the status line installed** for that CLI: the caches are written
-  by the user's statusline scripts, not by the CLIs themselves. Without one,
-  the started CLI rewrites nothing and the record says so.
+- **It needs the cache writer installed** for that CLI: the agy and Cursor
+  caches are written by the user's statusline scripts, the opencode-go one by
+  aadev's go-usage plugin (opencode 2), not by the CLIs themselves. Without
+  one, the started CLI rewrites nothing and the record says so.
 - **What the record says.** A refresh that worked adds nothing; the record is
-  as fresh as the rewritten cache. Otherwise every record of that source gets
+  as fresh as the rewritten cache. (opencode-go: the plugin also rewrites the
+  file after a FAILED poll, so a refresh can "work" while `fetched_at` stays
+  old; the record then carries the plugin's own `latest read attempt failed`
+  line, and because the file's mtime is new, another `--refresh` inside the
+  TTL starts nothing. Known limit.) Otherwise every record of that source gets
   one problem: `<cli> refresh skipped: tmux is not available`, `<cli> refresh
   failed: tmux could not start <command>`, `<cli> refresh failed: <command>
   did not rewrite its cache within N s`, or one about the working directory

@@ -3045,6 +3045,13 @@ def test_quota_snapshot_tui_refresh(tmp):
                           "3p-5h": entry, "3p-weekly": entry})
     cur_new = json.dumps({"schema": 2, "unified": True, "weekly_pct": 12.5, "weekly_reset": QS_WEEK})
     cur_old = json.dumps({"schema": 2, "unified": True, "weekly_pct": 3.0, "weekly_reset": QS_WEEK})
+    def go_cache(fetched_ago, weekly):
+        e = lambda pct, reset: {"status": "ok", "percent": pct, "resetsAt": reset}
+        return json.dumps({"schema": 1, "fetched_at": _qs_iso(now_epoch - fetched_ago), "attempted_at": QS_NOW,
+                           "error": None, "http_status": 200,
+                           "usage": {"rolling": e(4, QS_RESET), "weekly": e(weekly, QS_WEEK),
+                                     "monthly": e(69, "2026-11-08T08:38:38Z")}})
+    oc_old, oc_new = go_cache(7200, 1), go_cache(5, 7)
     home = tmp / "refresh-home"
     home.mkdir()
 
@@ -3054,7 +3061,8 @@ def test_quota_snapshot_tui_refresh(tmp):
         d = tmp / ("refresh-" + label.replace(" ", "-"))
         d.mkdir()
         cache_file = d / "cache.json"
-        old, new = (agy_old, agy_new) if kind == "agy_quota_cache" else (cur_old, cur_new)
+        old, new = {"agy_quota_cache": (agy_old, agy_new), "opencode_go_cache": (oc_old, oc_new)}.get(
+            kind, (cur_old, cur_new))
         cache_file.write_text(old)
         os.utime(cache_file, (now_epoch - age, now_epoch - age))
         src = _qs_source(kind, cache_file)
@@ -3401,6 +3409,13 @@ def test_quota_snapshot_tui_refresh(tmp):
           and all(any("may still be running (dev-lead-quota-424242-cursor)" in p and "not empty" in p
                       for p in x["problems"]) for x in recs), (r.returncode, calls, recs))
     (stray_dir / "dev-lead-quota-424242-cursor").unlink()
+    (stray_dir / "dev-lead-quota-424242-opencode").write_text("")
+    r, recs, calls = scenario("stray opencode server", env_extra={"TMUX_TMPDIR": str(tmp / "tmuxtmp-stray")})
+    check("tui refresh: ...an opencode refresh's leftover private server stops a crowded clean-up the same way",
+          calls == [] and (workdir / "late.txt").exists()
+          and all(any("may still be running (dev-lead-quota-424242-opencode)" in p for p in x["problems"])
+                  for x in recs), (calls, recs))
+    (stray_dir / "dev-lead-quota-424242-opencode").unlink()
     for odd in ("dev-lead-quota-x-agy", "dev-lead-quota-1-other", "default", "dev-lead-quota-1-agy.bak",
                 "dev-lead-quota-12345678901-agy", "xdev-lead-quota-1-agy"):
         (stray_dir / odd).write_text("")
@@ -3430,6 +3445,19 @@ def test_quota_snapshot_tui_refresh(tmp):
           and private(calls), calls)
     check("tui refresh: ...and the new cursor weekly figure is read, fresh",
           cur.get("freshness") == "fresh" and (_qs_win(cur, "weekly") or {}).get("used_pct") == 12.5, cur)
+
+    r, recs, calls = scenario("opencode-go stale", "opencode_go_cache")
+    oc = recs[0] if recs else {}
+    check("tui refresh: a stale opted-in opencode-go cache starts a bare `opencode` the same way",
+          verbs(calls) == ["new-session", "kill-server"] and argv(calls[0])[-1:] == ["opencode"]
+          and private(calls) and not any("send-keys" in c for c in calls), calls)
+    check("tui refresh: ...and the new opencode-go weekly figure is read, fresh",
+          oc.get("freshness") == "fresh" and (_qs_win(oc, "weekly") or {}).get("used_pct") == 7, oc)
+    r, recs, calls = scenario("opencode-go no rewrite", "opencode_go_cache", rewrite=False)
+    oc = recs[0] if recs else {}
+    check("tui refresh: an opencode that never rewrites usage.json is a problem line, not a hang",
+          verbs(calls) == ["new-session", "kill-server"]
+          and any("opencode did not rewrite its cache" in p for p in oc.get("problems", [])), (calls, oc))
 
     for label, kw in (("not opted in", dict(refresh=None)), ("no --refresh", dict(flag=False)),
                       ("fresh cache", dict(age=10))):

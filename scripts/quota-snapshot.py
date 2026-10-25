@@ -26,7 +26,7 @@ Contract:
   * It never runs a model and never reads a credential. It starts `codex
     app-server` and reaps it itself. Opt-in twice over -- with --refresh, AND
     on a host whose config marks the source `"refresh": "tmux_spawn"` -- it
-    also starts `agy` or `cursor-agent --trust` when that cache is missing,
+    also starts `agy`, `cursor-agent --trust` or `opencode` when that cache is missing,
     older than its TTL, more than 60 s in the future, or has an mtime that is
     not a usable time, detached in a tmux
     server of its own, until the CLI rewrites its cache, then kills that
@@ -458,6 +458,10 @@ REFRESH_TMUX_SPAWN = "tmux_spawn"
 REFRESH_COMMANDS = {
     "agy_quota_cache": ("agy", ["agy"]),
     "cursor_usage_cache": ("cursor", ["cursor-agent", "--trust"]),
+    # opencode 2: the go-usage plugin polls 5 s after the TUI starts and writes
+    # usage.json itself (it reads the Go key; this script never does). A bare
+    # `opencode serve` does not load it (measured by a peer, 2.1.4), so the TUI is the trigger.
+    "opencode_go_cache": ("opencode", ["opencode"]),
 }
 
 
@@ -757,7 +761,7 @@ def _tmux_socket_dir():
     return os.path.join(os.environ.get("TMUX_TMPDIR") or "/tmp", "tmux-%d" % os.geteuid())
 
 
-_PRIVATE_SOCKET = re.compile(r"dev-lead-quota-[0-9]{1,10}-(?:agy|cursor)\Z")
+_PRIVATE_SOCKET = re.compile(r"dev-lead-quota-[0-9]{1,10}-(?:agy|cursor|opencode)\Z")
 
 
 def _stray_server():
@@ -863,6 +867,9 @@ def collect_agy(src, ctx):
 # ------------------------------------------------------------- opencode go ----
 def collect_opencode_go(src, ctx):
     rec = new_record(src, ctx, "opencode-go", None, "unknown")
+    why = _refresh_problem(src, ctx)
+    if why:
+        rec["problems"].append(why)
     doc, _mtime = load(src, [rec])
     if doc is None:
         return [rec]
@@ -1207,10 +1214,10 @@ def parse_args(argv):
                         help="bounds the codex exchange; reaping the process adds at "
                              "most about 2 s (default 20)")
     parser.add_argument("--refresh", action="store_true",
-                        help="for a source whose config sets refresh to tmux_spawn (agy, cursor) "
+                        help="for a source whose config sets refresh to tmux_spawn (agy, cursor, opencode-go) "
                              "and whose cache is missing, older than its TTL, more than 60 s "
                              "in the future or of an unusable mtime, start that CLI (cursor-agent "
-                             "with --trust) detached in a private tmux server until it rewrites "
+                             "with --trust; opencode bare) detached in a private tmux server until it rewrites "
                              "the cache, then kill that server; it never types a key and never "
                              "touches your own tmux server; one refresh runs at a time, and "
                              "the empty directory it starts in is moved aside and emptied "
