@@ -283,15 +283,16 @@ the leg inside the frozen target, in a subshell so your own cwd is kept:
 ```bash
 python3 "$DEV_LEAD/scripts/review-prompt.py" --adapter opencode --base "$BASE" \
   --target "$REVIEW_TARGET_DIR" < "$RUN_DIR/prompt.md" > "$RUN_DIR/framed-prompt.md" && \
-( cd "$REVIEW_TARGET_DIR" && opencode run --print-logs --log-level INFO \
-    -m opencode/<free-model> --variant <effort> \
+( cd "$REVIEW_TARGET_DIR" && opencode run --print-logs --log-level info \
+    -m 'opencode/<free-model>#<effort>' \
     < "$RUN_DIR/framed-prompt.md" ) > "$RUN_DIR/review.log" 2>&1
 ```
 
 `$RUN_DIR` must be absolute (leg-cmd exports it that way) and outside the
 target; the lock-down `opencode.json` must already be in the target.
 
-- **`--variant` is the effort knob** — this family's `--effort`. Pass it
+- **The `#<effort>` suffix on `-m` is the effort knob** (opencode 2; v1 had
+  `--variant`, which v2 rejects) — this family's `--effort`. Pass it
   explicitly; omitting it takes the provider default, and there is no
   `reasoningEffort` key in `opencode.json` to set instead (runtime file).
   The free pool costs no quota, so this is the one leg where you can spend

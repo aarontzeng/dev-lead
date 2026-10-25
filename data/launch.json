@@ -241,11 +241,9 @@
           "run",
           "--print-logs",
           "--log-level",
-          "INFO",
+          "info",
           "-m",
-          "{MODEL}",
-          "--variant",
-          "{EFFORT}"
+          "{MODEL}#{EFFORT}"
         ],
         "prompt_delivery": "stdin",
         "verified": "2026-09-08 probed live; framed since 0.6.30 (equivalence test 2026-09-24, opencode-runtime.md)",
@@ -256,11 +254,9 @@
           "run",
           "--print-logs",
           "--log-level",
-          "INFO",
+          "info",
           "-m",
-          "{MODEL}",
-          "--variant",
-          "{EFFORT}"
+          "{MODEL}#{EFFORT}"
         ],
         "prompt_delivery": "stdin",
         "verified": "transcribed from the matching skill; not probed"
@@ -268,7 +264,8 @@
     },
     "effort": {
       "mechanism": "flag",
-      "flag": "--variant",
+      "flag": "-m",
+      "flag_hint": "-m <model>#<effort>: opencode 2 has no --variant; the effort is a suffix of the model id",
       "examples": [
         "xhigh",
         "high",
@@ -279,12 +276,13 @@
     },
     "not_flags": [],
     "gotchas": [
+      "opencode 2 (probed 2.1.4, 2026-10-25): the effort is a `#<variant>` suffix on the model id, which this launcher builds as `-m {MODEL}#{EFFORT}`; `--variant` is rejected and `--log-level` is lowercase. The lock-down opencode.json held under 2.1.4. opencode 1 hosts need the old spelling instead: `--log-level INFO` and `-m {MODEL} --variant {EFFORT}`.",
       "The review brief is the LENS: review-prompt.py wraps it in the opencode framing (skills/opencode-adversarial-review/references/adversarial-framing.md). --base and --target are required, and the emitted command runs the leg INSIDE --target, in a subshell -- the lock-down opencode.json must already be there.",
       "`-m` needs a PROVIDER-QUALIFIED id -- ANY provider: `opencode/<model>` for the native pool, `openrouter/<vendor>/<model>` or `google/<model>` for the others this CLI serves. Never prepend `opencode/` to an id that already names a provider. A bare model name is accepted by the CLI and then fails server-side with `UnknownError: Unexpected server error`, step=0, nothing read, exit 1 -- it reads exactly like a provider outage. Measured 2026-09-14: the identical model works with no `-m` at all (it is the default) and with `-m opencode/<model>`, and fails every time with `-m <model>`.",
       "The prompt goes on STDIN. An argv prompt over ~1-2 KB hangs before the session is created.",
       "Capture stdout and stderr in ONE file (`> review.log 2>&1`, as the launch example in skills/opencode-adversarial-review/SKILL.md does; the command leg-cmd.sh emits leaves the redirect to you): the report goes to stdout and --print-logs to stderr, so leg-log-check on a stderr-only file says no verdict however good the review was (a peer session, 2026-10-22: stdout ended with the verdict, the check ran on the stderr file).",
       "`tokens.output=0` is a broken counter, not an empty run -- grep the log for your required section headers before discarding it.",
-      "An invalid --variant is NOT refused and the log never echoes the variant applied, so a completed run is no evidence the effort you asked for is the effort you got (measured 2026-09-15: bogus values completed normally in 9-38s). Use values you have seen work; treat the flag as write-only.",
+      "An invalid variant (opencode 1: --variant; opencode 2: the #<variant> suffix, untested) is NOT refused and the log never echoes the variant applied, so a completed run is no evidence the effort you asked for is the effort you got (measured 2026-09-15: bogus values completed normally in 9-38s). Use values you have seen work; treat the flag as write-only.",
       "A read outside the cwd is auto-rejected headless when external_directory is left at `ask`, and the leg then ends with empty output (a peer session 2026-09-22, twice); the SKILL's lock-down config denies it instead, which returns an error to the model and the leg goes on. Keep the brief and all context inside the frozen target, and run `scripts/leg-log-check.sh opencode <log>` after every run: it passes only a log whose report carries a verdict word, so a silent failure is reported as a missing leg, not read as a verdict."
     ],
     "verified": "review probed 2026-09-08; other roles transcribed",

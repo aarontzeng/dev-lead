@@ -121,7 +121,7 @@ if reason:
         "config_only": ".\n  it reads %s from %s -- read that file and REPORT the value, do not assert one."
                        % (eff.get("config_key"), eff.get("config_file")),
         "flag": " (it becomes %s); examples: %s"
-                % ((eff.get("flag_by_role") or {}).get(role, eff.get("flag", "--effort")),
+                % (eff.get("flag_hint") or (eff.get("flag_by_role") or {}).get(role, eff.get("flag", "--effort")),
                    ", ".join(eff.get("examples", []))),
         "none": " (its CLI default applies; see data/launch.json); --model selects the tier",
     }

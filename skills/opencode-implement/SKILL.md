@@ -89,13 +89,13 @@ checking costs one grep.
 # RUN_DIR was created in the worktree step above.
 # Write the task prompt to "$RUN_DIR/task.md" in its own FOREGROUND step.
 
-cd "$WORKTREE" && opencode run --print-logs --log-level INFO \
-  -m opencode/<free-model> \
-  --variant <effort> \
+cd "$WORKTREE" && opencode run --print-logs --log-level info \
+  -m 'opencode/<free-model>#<effort>' \
   < "$RUN_DIR/task.md" > "$RUN_DIR/impl.log" 2>&1
 ```
 
-**`--variant` is not optional here either.** Omitting it silently takes the
+**The `#<effort>` suffix is not optional here either** (opencode 2 has no
+`--variant` flag; the effort rides on the model id). Omitting it silently takes the
 provider default -- measured on the review side 2026-09-08, where the default
 returned 8 findings against `xhigh`'s 10 on an identical brief and frozen
 commit. This launch block lacked it until a lint rule caught the omission.

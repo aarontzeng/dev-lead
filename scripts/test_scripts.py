@@ -786,6 +786,22 @@ def test_lint_launch():
     check("launch: flags a continuation-style launch missing its depth knob",
           any("omits '--variant'" in e for e in got), f"got {got}")
 
+    # 1b. opencode 2: the depth knob is a #suffix on -m's value; -m alone is
+    #     always present, so it must not satisfy the omission check.
+    FLAG_M = {"mechanism": "flag", "flag": "-m"}
+    got = run_against(fence("opencode run -m opencode/x --print-logs\n"),
+                      "opencode", "implement", FLAG_M, "opencode")
+    check("launch: opencode 2 launch with -m but no #effort suffix is flagged",
+          any("omits '-m'" in e for e in got), f"got {got}")
+    got = run_against(fence("opencode run -m 'opencode/x#high' --print-logs\n"),
+                      "opencode", "implement", FLAG_M, "opencode")
+    check("launch: opencode 2 launch with the #effort suffix passes",
+          not any("omits" in e for e in got), f"got {got}")
+    got = run_against(fence("opencode run -m opencode/x --variant high\n"),
+                      "opencode", "implement", FLAG_M, "opencode")
+    check("launch: opencode 2 launch still carrying --variant is flagged",
+          any("wrong-flag-name" in e for e in got), f"got {got}")
+
     # 2. `cd "$WORKTREE" && cli ...` — the other shipped shape
     got = run_against(fence('cd "$WORKTREE" && agy -p "x" --effort high\n'),
                       "agy", "implement", SUFFIX, "agy")
@@ -5488,7 +5504,7 @@ def test_leg_cmd():
     check("leg-cmd: another provider's qualified id is accepted",
           r.returncode == 0, r.stderr)
     check("leg-cmd: and reaches the command UNCHANGED",
-          "-m openrouter/nvidia/nemotron-3.5-lightning:free" in r.stdout, r.stdout)
+          "-m 'openrouter/nvidia/nemotron-3.5-lightning:free#high'" in r.stdout, r.stdout)
 
     r = subprocess.run([str(script), "opencode", "review", "--model",
                         "muse-spark-1.3-contributor-free", "--effort", "xhigh"],

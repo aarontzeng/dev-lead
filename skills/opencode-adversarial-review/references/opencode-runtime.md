@@ -299,8 +299,8 @@ see the carve-out above; it needs the key but not spend.)
 ## Headless invocation — the prompt goes on STDIN, never in argv
 
 ```bash
-cd "$TARGET" && opencode run --print-logs --log-level INFO \
-  -m opencode/<model> \
+cd "$TARGET" && opencode run --print-logs --log-level info \
+  -m 'opencode/<model>#<effort>' \
   < "$RUN_DIR/prompt.md" > "$RUN_DIR/out.log" 2>&1
 ```
 
@@ -326,7 +326,14 @@ congested in exactly the same way at the same moment, so uniform silence is
 a LOCAL fault. Confirm with a one-word probe: a trivial prompt answers in
 under 10 s even while argv-launched runs beside it are wedged.
 
-- **`--variant <effort>` is this family's reasoning-depth knob** — the
+- **opencode 2 (checked 2026-10-25, 2.1.4): the effort is a `#<variant>` suffix on
+  the model id (`-m 'opencode-go/glm-5.3-flash#high'`); `--variant` is rejected
+  (`Unrecognized flag`) and `--log-level` takes lowercase only (`info`).
+  `debug agent` is now `debug agents`. The lock-down config (`edit`, `bash`
+  allow-list, `external_directory` deny) was probed on 2.1.4 and held: shell
+  and out-of-cwd reads came back `Permission denied`, no file was created.
+  Everything below that says `--variant` is the v1 spelling.**
+- **`--variant <effort>` (v1) is this family's reasoning-depth knob** — the
   counterpart to codex's `--effort` / `model_reasoning_effort`, grok's
   `--effort`, and agy's model-name suffix (`-medium` / `-high`). `--help`
   calls it "model variant (provider-specific reasoning effort, e.g., high,
@@ -344,7 +351,7 @@ under 10 s even while argv-launched runs beside it are wedged.
   `-m provider/model`, `--agent <name>`, `--dir <path>`, `--format json`,
   and `--auto` (**never use it** — auto-approves anything not
   explicitly denied; this family's equivalent of a skip-permissions flag).
-- **Always pass `--print-logs --log-level INFO`** and capture to a file: the
+- **Always pass `--print-logs --log-level info`** (`INFO` on v1 only) and capture to a file: the
   INFO stream carries `projectID=` (config binding, below) and
   `evaluated permission=` (the per-tool-call audit trail).
 - Launch under the host's background mechanism with a generous timeout.
@@ -635,7 +642,7 @@ route, never about free models in general.
 
 ### This account's standing opencode leg (owner's instruction, 2026-09-14)
 
-    -m openrouter/nvidia/nemotron-3.5-lightning:free --variant high
+    -m 'openrouter/nvidia/nemotron-3.5-lightning:free#high'   (opencode 1: -m <id> --variant high)
 
 replacing `opencode/muse-spark-1.3-contributor-free --variant xhigh`. Two
 preconditions travel with it that did NOT apply to the old default:

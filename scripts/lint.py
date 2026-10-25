@@ -1176,7 +1176,13 @@ def _check_effort_spelling(skill, lineno, cmdline, adapter, role, eff, argv=None
                 err(f"{rel(skill)}:{lineno}",
                     f"launch passes '{other}', but {adapter}'s depth knob is "
                     f"'{want}' -- the wrong-flag-name mistake")
-        if want and not re.search(rf"(?:^|[\s\"']){re.escape(want)}(?:[=\s]|$)", cmdline):
+        if want == "-m":
+            # opencode 2: the effort is a #suffix on -m's value, so the flag alone
+            # (always present) proves nothing.
+            ok = re.search(r"(?:^|\s)-m\s+['\"]?[^\s'\"]*#", cmdline)
+        else:
+            ok = want and re.search(rf"(?:^|[\s\"']){re.escape(want)}(?:[=\s]|$)", cmdline)
+        if want and not ok:
             err(f"{rel(skill)}:{lineno}",
                 f"launch omits '{want}'; {adapter} silently takes the provider "
                 f"default without it")
