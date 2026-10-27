@@ -38,7 +38,11 @@ before AND after the run — are in
 [dev-lead Phase 2](../dev-lead/SKILL.md), and the reasoning is in
 [methodology.md](../../docs/methodology.md) §7. Everything below assumes
 `$REVIEW_TARGET_DIR` is that frozen directory and `$REVIEW_HEAD` is the SHA it
-was frozen at.
+was frozen at. A cursor leg can leave the memory plugin's `.remember/` in that
+directory (it runs the lead's plugin hooks): after the leg returns and before the
+closing `verify-target.sh`, run `clear-host-residue.sh "$REVIEW_TARGET_DIR"` (same
+helper directory); the reason and what it will and will not remove are in the
+dev-lead Phase 2 note.
 
 ## Launch one ask-mode review run
 

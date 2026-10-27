@@ -5299,7 +5299,7 @@ def test_common(tmp):
     r = subprocess.run(["bash", str(prog), "repo", str(repo)], capture_output=True, text=True)
     check("lib.sh: a git repo passes", r.returncode == 0 and r.stdout.strip() == "ok", r)
     # every helper that dies goes through the one copy now
-    for name in ("freeze-target.sh", "verify-target.sh", "snapshot-refs.sh", "release.sh", "leg-cmd.sh"):
+    for name in ("freeze-target.sh", "verify-target.sh", "snapshot-refs.sh", "release.sh", "leg-cmd.sh", "clear-host-residue.sh"):
         body = (SCRIPTS / name).read_text()
         check("lib.sh: %s sources it instead of defining die()" % name,
               '. "$here/lib.sh"' in body and "\ndie() {" not in body)
@@ -11679,9 +11679,70 @@ def test_leg_log_check(tmp):
     check("leg-log-check: --expect accepts it",
           run(script, "opencode", log, "--expect", "VERDICT-OK").returncode == 0)
 
+# ------------------------------------------------------- clear-host-residue ----
+def test_clear_host_residue(tmp):
+    clear, verify = SCRIPTS / "clear-host-residue.sh", SCRIPTS / "verify-target.sh"
+    repo = tmp / "residue-repo"
+    (sha,) = make_repo(repo)
+
+    def plant(root, marker="This file marks when remember was first bootstrapped here.\n", ignore="*\n"):
+        d = root / ".remember"
+        (d / "logs").mkdir(parents=True)
+        (d / "tmp").mkdir()
+        (d / ".install-marker").write_text(marker)
+        (d / ".gitignore").write_text(ignore)
+        (d / "logs" / "memory.log").write_text("hook\n")
+        return d
+
+    r = run(clear, repo)
+    check("residue: nothing to remove exits 0", r.returncode == 0 and "nothing to remove" in r.stdout, r.stderr)
+
+    d = plant(repo)
+    # the premise: a plain status is clean, the verify bracket is not
+    check("residue: git status alone hides it", git(repo, "status", "--porcelain").stdout == "")
+    r = run(verify, repo, sha)
+    check("residue: verify-target reports it", r.returncode != 0 and ".remember" in r.stderr, r.stderr)
+    r = run(clear, repo)
+    check("residue: the plugin's own directory is removed", r.returncode == 0 and not d.exists(), r.stderr)
+    r = run(verify, repo, sha)
+    check("residue: verify-target then certifies the tree", r.returncode == 0, r.stderr)
+
+    # anything it cannot identify stays, and the bracket still reports it
+    for name, kw in (("no marker", {"marker": "something else\n"}), ("foreign .gitignore", {"ignore": "*.log\n"})):
+        d = plant(repo, **kw)
+        r = run(clear, repo)
+        check("residue: %s is left in place with exit 1" % name, r.returncode == 1 and d.exists(), r.stderr)
+        check("residue: %s is still reported by verify-target" % name, run(verify, repo, sha).returncode != 0)
+        run("rm", "-rf", d)
+
+    d = plant(repo)
+    git(repo, "add", "-f", ".remember/logs/memory.log")
+    r = run(clear, repo)
+    check("residue: a tracked file inside keeps the directory", r.returncode == 1 and d.exists(), r.stderr)
+    git(repo, "rm", "-q", "--cached", "-r", ".remember")
+    run("rm", "-rf", d)
+
+    elsewhere = tmp / "residue-elsewhere"
+    elsewhere.mkdir()
+    (elsewhere / "keep.txt").write_text("x\n")
+    (repo / ".remember").symlink_to(elsewhere)
+    r = run(clear, repo)
+    check("residue: a symlink is never followed or removed",
+          r.returncode == 1 and (elsewhere / "keep.txt").exists() and (repo / ".remember").is_symlink(), r.stderr)
+    (repo / ".remember").unlink()
+
+    # only the top level of the target
+    sub = repo / "sub"
+    plant(sub)
+    r = run(clear, repo)
+    check("residue: a nested .remember is not touched", r.returncode == 0 and (sub / ".remember").exists(), r.stderr)
+    run("rm", "-rf", sub)
+    check("residue: a non-repo is refused", run(clear, tmp / "no-such-dir").returncode == 1)
+
+
 def main():
     for script in ("freeze-target.sh", "verify-target.sh", "snapshot-refs.sh",
-                   "await-codex-job.sh", "renorm-only.sh", "leg-log-check.sh"):
+                   "await-codex-job.sh", "renorm-only.sh", "leg-log-check.sh", "clear-host-residue.sh"):
         p = SCRIPTS / script
         if not p.is_file():
             print(f"  FAIL missing script: {script}")
@@ -11705,6 +11766,8 @@ def main():
         test_await_codex_job(tmp)
         print("renorm-only.sh (freeze/verify line-ending renormalization)")
         test_renorm(tmp)
+        print("clear-host-residue.sh")
+        test_clear_host_residue(tmp)
         test_freeze_refusal_cleans_up(tmp)
         test_freeze_clone(tmp)
         test_agy_review_refuses_worktree_target(tmp)

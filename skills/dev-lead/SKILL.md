@@ -653,6 +653,17 @@ two rounds and would have run a third on no principle at all.
    "$DEV_LEAD/scripts/verify-target.sh" "$FROZEN_DIR" "$REVIEW_HEAD"   # before AND after
    ```
 
+   **A cursor leg can leave the memory plugin's `.remember/` in the frozen tree.**
+   cursor-agent runs the lead's Claude Code plugin hooks, and the `remember`
+   plugin writes `<cwd>/.remember/` (a `.gitignore` of `*`, so `git status` is
+   clean while the closing `verify-target.sh` reports `!! .remember/`; the plugin
+   has no off switch, and whether a host does it varies). After the leg has
+   returned and before the closing check, run
+   `"$DEV_LEAD/scripts/clear-host-residue.sh" "$FROZEN_DIR"`: it removes only a
+   directory it can identify as that plugin's own (real directory, untracked, the
+   plugin's marker, a `.gitignore` of exactly `*`) and exits 1 on any other
+   `.remember`, which the check then reports. Nothing else is touched.
+
    **An agy leg needs a self-contained clone, not the worktree:** add `--clone` as
    the fourth argument (`"$DEV_LEAD/scripts/freeze-target.sh" "$REPO" "$SHA" "$FROZEN_DIR" --clone`).
    A worktree's `.git` is a pointer file outside the directories agy may read,
