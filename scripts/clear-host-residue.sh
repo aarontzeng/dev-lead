@@ -34,7 +34,9 @@ here=$(cd -- "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}" 2>/dev/null || 
 [ $# -eq 1 ] || die "usage: clear-host-residue.sh <dir>"
 dir=$1
 require_git_repo "$dir" "target dir"
-[ ! -L "${dir%/}" ] || die "$dir is a symlink; name the real directory"
+# every trailing slash goes (`link//` still resolves the link), but never the whole of "/"
+trimmed=${dir%"${dir##*[!/]}"}
+[ ! -L "${trimmed:-/}" ] || die "$dir is a symlink; name the real directory"
 
 residue=$dir/.remember
 if [ ! -e "$residue" ] && [ ! -L "$residue" ]; then
@@ -50,11 +52,16 @@ fi
 [ -f "$residue/.gitignore" ] && [ ! -L "$residue/.gitignore" ] \
   && { printf '*\n' | cmp -s - "$residue/.gitignore" || printf '*' | cmp -s - "$residue/.gitignore"; } \
   || die "$residue/.gitignore is not the plugin's own; left in place"
+# a missing index lists as "nothing tracked" with exit 0, so its absence is refused first
+index=$(git -C "$dir" rev-parse --git-path index) || die "cannot locate the index of $dir; $residue left in place"
+[ -f "$(cd "$dir" && realpath -m -- "$index")" ] || die "$dir has no index file; $residue left in place"
 # a failed listing must not read as "nothing tracked": capture it on its own so set -e sees the status
 tracked=$(git -C "$dir" ls-files -- .remember) || die "cannot list tracked files in $dir; $residue left in place"
 [ -z "$tracked" ] || die "$residue holds tracked files; left in place"
-# rm -rf unlinks the children before the directory, so a target whose root is not writable would be emptied and then fail
+# rm -rf unlinks the children before the directory, so a target root or a directory inside .remember that cannot be
+# written would leave it half emptied; refuse before anything is removed
 [ -w "$dir" ] || die "$dir is not writable; $residue left in place"
+[ -z "$(find "$residue" -type d ! -perm -u+w -print -quit)" ] || die "a directory inside $residue is not writable; left in place"
 
 rm -rf -- "$residue"
 echo "clear-host-residue: removed the remember plugin's $residue"

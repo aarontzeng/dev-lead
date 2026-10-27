@@ -11758,22 +11758,51 @@ def test_clear_host_residue(tmp):
     check("residue: a failing git listing keeps the directory", r.returncode == 1 and d.exists(), r.stderr)
 
     # a target root that cannot be written would be emptied by rm -rf and then fail: refuse first
-    d = plant(repo)
-    repo.chmod(0o555)
-    try:
-        r = run(clear, repo)
-    finally:
-        repo.chmod(0o755)
-    check("residue: a read-only target root leaves the directory whole",
-          r.returncode == 1 and (d / "logs" / "memory.log").exists(), r.stderr)
-    run("rm", "-rf", d)
+    if os.geteuid() != 0:          # root writes through mode bits, so these preconditions do not hold for it
+        d = plant(repo)
+        repo.chmod(0o555)
+        try:
+            r = run(clear, repo)
+        finally:
+            repo.chmod(0o755)
+        check("residue: a read-only target root leaves the directory whole",
+              r.returncode == 1 and (d / "logs" / "memory.log").exists() and (d / ".gitignore").exists(), r.stderr)
+        run("rm", "-rf", d)
+        d = plant(repo)
+        (d / "logs").chmod(0o555)
+        try:
+            r = run(clear, repo)
+        finally:
+            (d / "logs").chmod(0o755)
+        check("residue: a locked directory inside leaves everything in place",
+              r.returncode == 1 and (d / ".install-marker").exists() and (d / ".gitignore").exists()
+              and (d / "logs" / "memory.log").exists(), r.stderr)
+        run("rm", "-rf", d)
 
     link = tmp / "residue-link"
     link.symlink_to(repo)
     d = plant(repo)
     r = run(clear, link)
     check("residue: a symlinked target is refused", r.returncode == 1 and d.exists(), r.stderr)
+    for spelling in (str(link) + "/", str(link) + "//", str(link) + "///"):
+        r = run(clear, spelling)
+        check("residue: a symlinked target spelled %r is refused" % spelling[len(str(tmp)):],
+              r.returncode == 1 and d.exists(), r.stderr)
     run("rm", "-rf", d)
+
+    # a missing index lists as "nothing tracked" with exit 0: refuse it
+    d = plant(repo)
+    (repo / ".git" / "index").rename(tmp / "index.saved")
+    try:
+        r = run(clear, repo)
+    finally:
+        (tmp / "index.saved").rename(repo / ".git" / "index")
+    check("residue: a missing index keeps the directory", r.returncode == 1 and d.exists(), r.stderr)
+    run("rm", "-rf", d)
+    d = plant(repo, ignore="*")
+    r = run(clear, str(repo) + "/")
+    check("residue: a .gitignore of * with no newline, and a trailing slash, are accepted",
+          r.returncode == 0 and not d.exists(), r.stderr)
 
     # only the top level of the target
     sub = repo / "sub"
