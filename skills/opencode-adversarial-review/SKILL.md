@@ -182,7 +182,9 @@ reviewing instead of dying.
 
 The emitted `leg-cmd.sh` command begins with
 [`check-opencode-lockdown.py`](../../scripts/check-opencode-lockdown.py) on the target and stops the run when
-`opencode.json` is missing or `edit`, `external_directory` or `bash` is not denied. Without the file opencode runs as
+`opencode.json` is missing or `edit`, `external_directory` or `bash` is not denied, or when something could reopen
+them (a later `write`/`patch`/`shell` allow, a catch-all allow pattern, `agent.*.permission`, an `opencode.jsonc` or
+`.opencode/opencode.json`, `OPENCODE_CONFIG*` in the environment, a target without a commit). Without the file opencode runs as
 the build agent with edit and bash open (a peer session ran three legs that way before this check existed).
 `leg-cmd.sh --help` prints which of `--target`, `--base`, `--prompt-file` and `--add-dir` each adapter takes.
 

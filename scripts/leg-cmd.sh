@@ -341,6 +341,9 @@ def _emit(t):
     return shlex.quote(t)
 cmd = r.get("cli", spec["cli"]) + " " + " ".join(_emit(t) for t in argv)
 frame = r.get("prompt_frame")
+if r.get("requires_lockdown") and not frame:
+    sys.exit("leg-cmd: %s/%s sets requires_lockdown without prompt_frame; the check rides on the framed command, "
+             "so this launch would run unchecked" % (a, role))
 if frame:
     # The brief is a LENS: wrap it in this adapter's framing first, then hand
     # the leg the FRAMED prompt, the same way it would have read the brief. The

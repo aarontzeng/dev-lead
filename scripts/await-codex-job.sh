@@ -60,7 +60,7 @@ while [ "$SECONDS" -lt "$deadline" ]; do
                     echo "NOTE: a failed job may have left a usable working tree -- 'git status' and 'git diff' in $WT before deciding."
                     if [ -n "$log" ] && [ -f "$log" ]; then
                         echo "--- last lines of $log ---"
-                        tail -n 15 "$log" | cut -c1-300
+                        tail -c 20000 "$log" | tail -n 15 | tr -d '\000-\010\013-\037\177' | cut -c1-300
                     fi
                     ;;
             esac

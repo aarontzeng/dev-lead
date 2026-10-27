@@ -4882,12 +4882,16 @@ def test_await_codex_job(tmp):
         (c / "codex-companion.mjs").write_text(f"console.log('- task-n | {state} | rescue | Codex Task');\n")
         jd = nh / ".claude/plugins/data/codex-openai-codex/state/s1/jobs"
         jd.mkdir(parents=True, exist_ok=True)
-        (jd / "task-n.log").write_text("\n".join("line %d" % i for i in range(40)) + "\nLAST-AGENT-MESSAGE\n")
+        (jd / "task-n.log").write_text("\n".join("line %d" % i for i in range(40)) + "\n\x1b[31mRED\x00\x07\n" + "x" * 1000
+                                       + "\nLAST-AGENT-MESSAGE\n")
         r = subprocess.run(["bash", str(await_sh), "task-n", str(tmp), "1"], capture_output=True, text=True,
                            timeout=180, env=dict(os.environ, HOME=str(nh)))
         out = r.stdout
         check(f"await-codex-job.sh: a {state} job {'prints' if want_note else 'does not print'} the log tail and the diff-first note",
-              r.returncode == 0 and (("git diff" in out and "LAST-AGENT-MESSAGE" in out and "line 0\n" not in out)
+              r.returncode == 0 and (("git diff" in out and "LAST-AGENT-MESSAGE" in out and "line 27\n" not in out
+                                      and "line 28\n" in out and "x" * 301 not in out and "x" * 300 in out
+                                      and "\x1b" not in out and "\x00" not in out and "\x07" not in out
+                                      and "RED" in out)
                                      if want_note else ("NOTE" not in out and "LAST-AGENT-MESSAGE" not in out)),
               out[:300])
     nh = tmp / "note-home-nolog"
@@ -4941,14 +4945,20 @@ def test_opencode_lockdown(tmp):
     opencode has no read-only mode, so a target without the lock-down opencode.json must stop the run."""
     chk = SCRIPTS / "check-opencode-lockdown.py"
 
-    def run(cfg, mode="file"):
+    def run(cfg, mode="file", extra=(), env=None, repo=True):
         t = Path(tempfile.mkdtemp(dir=tmp))
+        if repo:
+            make_repo(t)
         if mode == "file" and cfg is not None:
             (t / "opencode.json").write_text(cfg if isinstance(cfg, str) else json.dumps(cfg))
         elif mode == "link":
             (t / "real.json").write_text(LOCKDOWN_JSON)
             (t / "opencode.json").symlink_to(t / "real.json")
-        return subprocess.run([sys.executable, str(chk), str(t)], capture_output=True, text=True)
+        for rel in extra:
+            (t / rel).parent.mkdir(parents=True, exist_ok=True)
+            (t / rel).write_text("{}")
+        return subprocess.run([sys.executable, str(chk), str(t)], capture_output=True, text=True,
+                              env=dict(os.environ, **(env or {})))
 
     good = json.loads(LOCKDOWN_JSON)
     r = run(good)
@@ -4977,6 +4987,46 @@ def test_opencode_lockdown(tmp):
         cfg["permission"][key] = ok
         r = run(cfg)
         check("lockdown: permission.%s = %r passes" % (key, ok), r.returncode == 0, r.stderr)
+    # what a later rule, a later source or an unbound project does to the file's deny (opencode keeps the
+    # LAST match, merges later sources after the project file, and ignores the file with zero commits)
+    for label, cfg_edit in (
+            ("write allowed after edit deny", lambda c: c["permission"].update({"write": "allow"})),
+            ("patch allowed", lambda c: c["permission"].update({"patch": "allow"})),
+            ("apply_patch allowed", lambda c: c["permission"].update({"apply_patch": "allow"})),
+            ("shell allowed after bash deny", lambda c: c["permission"].update({"shell": "allow"})),
+            ("bash '**' allowed after '*' deny", lambda c: c["permission"]["bash"].update({"**": "allow"})),
+            ("bash '?*' allowed", lambda c: c["permission"]["bash"].update({"?*": "allow"})),
+            ("bash '.*' allowed", lambda c: c["permission"]["bash"].update({".*": "allow"})),
+            ("bash '* *' allowed", lambda c: c["permission"]["bash"].update({"* *": "allow"})),
+            ("external_directory '/*' allowed",
+             lambda c: c["permission"].update({"external_directory": {"*": "deny", "/*": "allow"}})),
+            ("external_directory '**' allowed",
+             lambda c: c["permission"].update({"external_directory": {"*": "deny", "**": "allow"}})),
+            ("agent.build.permission present",
+             lambda c: c.update({"agent": {"build": {"permission": {"edit": "allow"}}}}))):
+        cfg = json.loads(LOCKDOWN_JSON)
+        cfg_edit(cfg)
+        r = run(cfg)
+        check("lockdown: %s is refused" % label, r.returncode == 1, r.stderr + r.stdout)
+    for label, key in (("write", "write"), ("shell", "shell")):
+        cfg = json.loads(LOCKDOWN_JSON)
+        cfg["permission"][key] = "deny"
+        check("lockdown: %s denied passes" % label, run(cfg).returncode == 0)
+    for rel in ("opencode.jsonc", ".opencode/opencode.json"):
+        r = run(good, extra=(rel,))
+        check("lockdown: a %s in the target is refused" % rel, r.returncode == 1 and rel in r.stderr, r.stderr)
+    for var in ("OPENCODE_CONFIG", "OPENCODE_CONFIG_CONTENT"):
+        r = run(good, env={var: "/elsewhere/opencode.json"})
+        check("lockdown: %s in the environment is refused" % var, r.returncode == 1 and var in r.stderr, r.stderr)
+    r = run(good, repo=False)
+    check("lockdown: a target that is not a git checkout is refused (the file would be ignored)",
+          r.returncode == 1 and "projectID=global" in r.stderr, r.stderr)
+    t0 = Path(tempfile.mkdtemp(dir=tmp))
+    subprocess.run(["git", "-C", str(t0), "init", "-q"], check=True)
+    (t0 / "opencode.json").write_text(LOCKDOWN_JSON)
+    r = subprocess.run([sys.executable, str(chk), str(t0)], capture_output=True, text=True)
+    check("lockdown: a git checkout with zero commits is refused", r.returncode == 1 and "projectID=global" in r.stderr,
+          r.stderr)
     r = subprocess.run([sys.executable, str(chk)], capture_output=True, text=True)
     check("lockdown: no argument is a usage error", r.returncode == 2, r.stderr)
 
@@ -5009,6 +5059,28 @@ def test_opencode_lockdown(tmp):
         (tgt / "opencode.json").write_text(json.dumps({"permission": {"edit": "allow"}}))
         out = subprocess.run(["bash", "-c", 'eval "$(cat)"'], input=emitted, capture_output=True, text=True, env=env)
         check("lockdown: an edit-allowed config stops the run again", "LEG-RAN" not in out.stdout, out.stdout)
+        sp = Path(td) / "with space" / "frozen"
+        sp_shas = make_repo(sp, commits=2)
+        (sp / "opencode.json").write_text(LOCKDOWN_JSON)
+        e = subprocess.run([str(script), "opencode", "review", "--model", "opencode/x", "--effort", "high",
+                            "--base", sp_shas[0], "--target", str(sp), "--run-dir", str(rdir),
+                            "--no-triage", "test fixture", "--head", "HEAD"], capture_output=True, text=True).stdout
+        out = subprocess.run(["bash", "-c", 'eval "$(cat)"'], input=e, capture_output=True, text=True, env=env)
+        check("lockdown: a target path with a space is checked and the leg runs", "LEG-RAN" in out.stdout,
+              out.stdout + out.stderr)
+        (sp / "opencode.json").unlink()
+        out = subprocess.run(["bash", "-c", 'eval "$(cat)"'], input=e, capture_output=True, text=True, env=env)
+        check("lockdown: ...and the same space-path target without the file is stopped",
+              "LEG-RAN" not in out.stdout and "build agent" in out.stderr, out.stdout + out.stderr)
+        spec = json.load(open(SCRIPTS.parent / "data" / "launch.json"))
+        spec["opencode"]["role"]["implement"]["requires_lockdown"] = True
+        alt = Path(td) / "launch-alt.json"
+        alt.write_text(json.dumps(spec))
+        r = subprocess.run([str(script), "opencode", "implement", "--model", "opencode/x", "--effort", "high",
+                            "--run-dir", str(rdir)], capture_output=True, text=True,
+                           env=dict(os.environ, DEV_LEAD_LAUNCH=str(alt)))
+        check("lockdown: requires_lockdown on a role without prompt_frame is refused, not run unchecked",
+              r.returncode != 0 and "requires_lockdown" in r.stderr and not r.stdout, r.stdout + r.stderr)
         for adapter, model, extra in (("agy", "gemini-3.8-flash-high", []), ("codex", "gpt-6.1-sol", [])):
             e = subprocess.run([str(script), adapter, "review", "--model", model, "--base", shas[0],
                                 "--target", str(tgt), "--run-dir", str(rdir), "--no-triage", "test fixture",
@@ -5022,9 +5094,14 @@ def test_opencode_lockdown(tmp):
     check("leg-cmd --help: one row per adapter and role", r.returncode == 0 and len(rows) == 12, r.stdout)
     check("leg-cmd --help: the table says codex review takes --target and --base, not --prompt-file or --add-dir",
           rows[("codex", "review")].split()[2:6] == ["yes", "yes", "-", "-"], rows.get(("codex", "review")))
-    check("leg-cmd --help: grok takes --prompt-file, cursor takes --add-dir, claude review needs a cd",
-          rows[("grok", "review")].split()[4] == "yes" and rows[("cursor", "review")].split()[5] == "yes"
-          and "cd into the target" in rows[("claude", "review")], r.stdout)
+    check("leg-cmd --help: grok takes --prompt-file, cursor takes --add-dir",
+          rows[("grok", "review")].split()[4] == "yes" and rows[("cursor", "review")].split()[5] == "yes", r.stdout)
+    check("leg-cmd --help: claude review takes neither --target nor --base and runs in the caller's cwd",
+          rows[("claude", "review")].split()[2:4] == ["-", "-"]
+          and "runs in the CALLER's cwd" in rows[("claude", "review")], rows.get(("claude", "review")))
+    check("leg-cmd --help: opencode review takes --target and --base and cds into the target itself",
+          rows[("opencode", "review")].split()[2:4] == ["yes", "yes"]
+          and "the command cd's into --target" in rows[("opencode", "review")], rows.get(("opencode", "review")))
 
 
 def test_common(tmp):
@@ -10506,7 +10583,7 @@ def test_triage_fix_round(tmp):
               got.stdout + got.stderr)
     got = run(triage, "scope", "--base", base, "--target", repo, "--fix-of", base, env=env)
     check("triage fix: a head with no record is told the exact way to record it (a Gerrit patchset has none)",
-          "git worktree add --detach" in got.stderr and "--fix-of %s" % base[:12] in got.stderr
+          "git worktree add --detach <dir> %s" % base[:12] in got.stderr and "--fix-of %s" % base[:12] in got.stderr
           and "triage.py scope --base" in got.stderr, got.stderr)
     got = run(triage, "scope", "--files", "src/app.py", "--fix-of", r1, env=env)
     check("triage fix: --fix-of with --files is refused (it sizes a committed range)",
