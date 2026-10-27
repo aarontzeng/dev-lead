@@ -292,12 +292,12 @@ the builder, then the leg inside the frozen target, in a subshell so your own cw
 is kept:
 
 ```bash
-python3 "$DEV_LEAD/scripts/check-opencode-lockdown.py" "$REVIEW_TARGET_DIR" && \
-python3 "$DEV_LEAD/scripts/review-prompt.py" --adapter opencode --base "$BASE" \
-  --target "$REVIEW_TARGET_DIR" < "$RUN_DIR/prompt.md" > "$RUN_DIR/framed-prompt.md" && \
-( cd "$REVIEW_TARGET_DIR" && opencode run --print-logs --log-level info \
-    -m 'opencode/<free-model>#<effort>' \
-    < "$RUN_DIR/framed-prompt.md" ) > "$RUN_DIR/review.log" 2>&1
+{ python3 "$DEV_LEAD/scripts/check-opencode-lockdown.py" "$REVIEW_TARGET_DIR" && \
+  python3 "$DEV_LEAD/scripts/review-prompt.py" --adapter opencode --base "$BASE" \
+    --target "$REVIEW_TARGET_DIR" < "$RUN_DIR/prompt.md" > "$RUN_DIR/framed-prompt.md" && \
+  ( cd "$REVIEW_TARGET_DIR" && opencode run --print-logs --log-level info \
+      -m 'opencode/<free-model>#<effort>' \
+      < "$RUN_DIR/framed-prompt.md" ); } > "$RUN_DIR/review.log" 2>&1
 ```
 
 `$RUN_DIR` must be absolute (leg-cmd exports it that way) and outside the
