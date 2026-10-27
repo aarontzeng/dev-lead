@@ -2943,6 +2943,13 @@ if state.get("server_gone") and ("kill-server" in args or "list-sessions" in arg
     # the CLI ended by itself and took its one-session server along
     sys.stderr.write("no server running on /tmp/tmux-1000/%s\n" % args[1])
     sys.exit(1)
+if state.get("gone_enoent") and "kill-server" in args:
+    sys.exit(1)
+if state.get("gone_enoent") and "list-sessions" in args:
+    # the socket is already unlinked: tmux prints strerror(ENOENT), in the caller's locale unless it is forced to C
+    reason = "No such file or directory" if os.environ.get("LC_ALL") == "C" else "Datei oder Verzeichnis nicht gefunden"
+    sys.stderr.write("error connecting to /tmp/tmux-1000/%s (%s)\n" % (args[1], reason))
+    sys.exit(1)
 if state.get("probe_denied") and "kill-server" in args:
     sys.exit(1)
 if state.get("probe_denied") and "list-sessions" in args:
@@ -3324,6 +3331,12 @@ def test_quota_snapshot_tui_refresh(tmp):
                               extra_state={"server_gone": True})
     check("tui refresh: a CLI that wrote its cache and then exited still counts as a successful refresh",
           recs and all(x.get("problems") == [] for x in recs), recs)
+    r, recs, calls = scenario("cli exits early, socket already unlinked", kind="opencode_go_cache", rewrite=False,
+                              env_extra={"LANG": "de_DE.UTF-8", "LC_ALL": "de_DE.UTF-8"},
+                              extra_state={"gone_enoent": True})
+    check("tui refresh: a vanished server whose socket is already gone is recognised, whatever the caller's locale "
+          "(the probe forces LC_ALL=C)",
+          recs and all(any("exited before it wrote its cache" in p for p in x["problems"]) for x in recs), recs)
     for tag, st in (("permission denied", {"probe_denied": True}), ("no sessions", {"probe_no_sessions": True})):
         r, recs, calls = scenario("probe " + tag, kind="opencode_go_cache", rewrite=False, extra_state=st)
         check("tui refresh: a list-sessions failure that is not tmux's 'no server' (%s) is no proof the server is "

@@ -515,6 +515,7 @@ def _server_gone(ctx, socket):
     other failure is not proof.
     """
     env = {k: v for k, v in os.environ.items() if k not in ("TMUX", "TMUX_PANE")}
+    env["LC_ALL"] = "C"                      # the ENOENT text is strerror(): translated in other locales
     try:
         done = subprocess.run([ctx.tmux_bin, "-L", socket, "-f", os.devnull, "list-sessions"],
                               capture_output=True, text=True, timeout=_tmux_timeout(),
