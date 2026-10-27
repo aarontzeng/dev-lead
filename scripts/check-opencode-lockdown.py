@@ -4,27 +4,32 @@
 opencode has no read-only mode: the lock-down config at the project root is
 the whole boundary, and without it `opencode run` starts as the build agent
 with edit and bash open. leg-cmd.sh puts this check at the head of the
-emitted command, so it runs against the tree the leg will really run in.
+emitted command, so it runs against the tree the leg will really use.
 
     check-opencode-lockdown.py <target-dir>
 
-Exit 0 when <target>/opencode.json is a regular file whose permission block has
-  edit: "deny"
-  external_directory: "deny" (or an object whose FIRST rule is "*": "deny")
-  bash: "deny" (or an object whose FIRST rule is "*": "deny")
-and nothing can append a later rule that reopens a door. opencode keeps the LAST
-matching rule, merges later config sources after the project file, and maps the
-aliases write/patch/apply_patch to edit and shell to bash, so the check also refuses
-  - a later alias key that is not "deny",
-  - an allow rule in a bash or external_directory object that is not a literal
-    prefix (a pattern such as "**" or "?*" matches everything),
-  - any agent.*.permission block in the file,
-  - a target that is not a git checkout with a commit (opencode binds a project's
-    config only then: with zero commits the log says projectID=global and every
-    rule in the file is silently ignored),
-  - an opencode.jsonc or .opencode/opencode.json in the target, or OPENCODE_CONFIG /
-    OPENCODE_CONFIG_CONTENT in the environment (sources merged after this file).
-Exit 1 with the reason otherwise. The allow list of the file is the lead's own scaffold.
+This is an ALLOW-list of the one shape the review skill documents, not a list of
+known ways to reopen a door: opencode keeps the LAST matching rule, merges later
+config sources after the project file, and has aliases and array forms of the
+same permissions, so a deny-list is never finished. Exit 0 only when ALL hold:
+  - <target> is the root of a git checkout with a commit (opencode binds a
+    project's config only there; with zero commits the log says projectID=global
+    and every rule is silently ignored; in a subdirectory the file is not read);
+  - <target>/opencode.json is a regular file whose top-level keys are only
+    "$schema" and "permission", and permission has only the keys edit,
+    external_directory and bash, plus write/patch/apply_patch/shell if "deny";
+  - edit is "deny";
+  - external_directory is "deny", or an object whose FIRST rule is "*": "deny"
+    and whose other rules are "deny" or an "allow" of a literal absolute path
+    (no "..", no wildcard but a trailing "/*");
+  - bash is "deny", or an object whose FIRST rule is "*": "deny" and whose other
+    rules are "deny" or an "allow" of one of READ_ONLY_BASH (the skill's list);
+  - no opencode.jsonc, no .opencode entry in the target, and no OPENCODE_CONFIG*
+    or OPENCODE_DISABLE* variable in the environment (sources merged after, or
+    switches that drop, this file).
+Known limit: a managed config the host administrator installs outside the target
+(/etc/opencode) is merged after the project file and is not read here.
+Exit 1 with the reason otherwise.
 """
 import json
 import os
@@ -34,20 +39,26 @@ import sys
 
 TEMPLATE = "skills/opencode-adversarial-review/SKILL.md (the opencode.json block under \"The read-only boundary\")"
 
+# The skill's own allow list: five read-only git commands (a trailing * matches their options,
+# so `git diff --output=<path>` is the documented limit of this boundary, see the SKILL).
+READ_ONLY_BASH = frozenset(("git status*", "git log*", "git diff*", "git show*", "git rev-parse*"))
+EXTRA_DENY_ONLY = ("write", "patch", "apply_patch", "shell")   # aliases of edit / bash
+# an absolute path of 2+ literal segments, optionally ending in /*
+_PATH_ALLOW = re.compile(r"(?:/[A-Za-z0-9_.@+~-]+){2,}(?:/\*)?\Z")
 
-ALIASES = ("write", "patch", "apply_patch", "shell")
-# a literal prefix, optionally ending in one "*": "git status*", "/ctx/*"; not "**", "?*" or "/*"
-_BASH_ALLOW = re.compile(r"[A-Za-z][^*?\[\]{}]*\*?\Z")
-_PATH_ALLOW = re.compile(r"/[^*?\[\]{}/][^*?\[\]{}]*\*?\Z")
 
-
-def _denied(rule, allow_ok):
+def _rules(rule, allowed):
+    """Why `rule` is not a deny-by-default rule list, or None. `allowed(key)` says which allow keys pass."""
     if rule == "deny":
-        return True
+        return None
     if not isinstance(rule, dict) or next(iter(rule.items()), None) != ("*", "deny"):
-        return False
-    return all(v in ("allow", "deny", "ask") and (v != "allow" or allow_ok.match(k))
-               for k, v in list(rule.items())[1:])
+        return "must be \"deny\" or an object whose first rule is \"*\": \"deny\""
+    for key, value in list(rule.items())[1:]:
+        if value == "deny":
+            continue
+        if value != "allow" or not allowed(key):
+            return "rule %r: %r is not an allowed rule" % (key, value)
+    return None
 
 
 def problem(target):
@@ -59,33 +70,41 @@ def problem(target):
             cfg = json.load(fh)
     except (OSError, UnicodeDecodeError, ValueError) as exc:
         return "cannot read %s: %s" % (path, exc)
-    git = subprocess.run(["git", "-C", target, "rev-parse", "--verify", "-q", "HEAD^{commit}"],
-                         capture_output=True, text=True)
-    if git.returncode != 0:
-        return "%s is not a git checkout with a commit; opencode ignores opencode.json there (projectID=global)" % target
-    perm = cfg.get("permission") if isinstance(cfg, dict) else None
+    top = subprocess.run(["git", "-C", target, "rev-parse", "--show-toplevel"], capture_output=True, text=True)
+    commit = subprocess.run(["git", "-C", target, "rev-parse", "--verify", "-q", "HEAD^{commit}"],
+                            capture_output=True, text=True)
+    if top.returncode != 0 or commit.returncode != 0 \
+            or os.path.realpath(top.stdout.strip()) != os.path.realpath(target):
+        return ("%s is not the root of a git checkout with a commit; opencode reads opencode.json only there "
+                "(projectID=global otherwise)" % target)
+    if not isinstance(cfg, dict):
+        return "%s: the config must be a JSON object" % path
+    extra = sorted(set(cfg) - {"$schema", "permission"})
+    if extra:
+        return "%s: unexpected top-level key(s) %s; only \"$schema\" and \"permission\" are allowed" % (path, extra)
+    perm = cfg.get("permission")
     if not isinstance(perm, dict):
         return "%s has no permission block" % path
+    extra = sorted(set(perm) - {"edit", "external_directory", "bash"} - set(EXTRA_DENY_ONLY))
+    if extra:
+        return "%s: unexpected permission key(s) %s" % (path, extra)
     if perm.get("edit") != "deny":
         return "%s: permission.edit must be \"deny\"" % path
-    if not _denied(perm.get("external_directory"), _PATH_ALLOW):
-        return ("%s: permission.external_directory must be \"deny\" (or an object starting with \"*\": \"deny\" "
-                "whose allow rules are literal paths)" % path)
-    if not _denied(perm.get("bash"), _BASH_ALLOW):
-        return ("%s: permission.bash must be \"deny\" or an object starting with \"*\": \"deny\" "
-                "whose allow rules are literal command prefixes" % path)
-    for key in ALIASES:
+    why = _rules(perm.get("external_directory"), lambda k: bool(_PATH_ALLOW.match(k)) and ".." not in k.split("/"))
+    if why:
+        return "%s: permission.external_directory %s (allow rules: literal absolute paths)" % (path, why)
+    why = _rules(perm.get("bash"), lambda k: k in READ_ONLY_BASH)
+    if why:
+        return "%s: permission.bash %s (allow rules: %s)" % (path, why, ", ".join(sorted(READ_ONLY_BASH)))
+    for key in EXTRA_DENY_ONLY:
         if key in perm and perm[key] != "deny":
             return "%s: permission.%s is an alias of edit/bash and must be \"deny\" if present" % (path, key)
-    for name, agent in (cfg.get("agent") or {}).items():
-        if isinstance(agent, dict) and "permission" in agent:
-            return "%s: agent.%s.permission is applied after the top-level rules and could reopen them" % (path, name)
-    for extra in ("opencode.jsonc", os.path.join(".opencode", "opencode.json")):
+    for extra in ("opencode.jsonc", ".opencode"):
         if os.path.lexists(os.path.join(target, extra)):
             return "%s is merged after opencode.json and could reopen a door; remove it from the review target" % os.path.join(target, extra)
-    for var in ("OPENCODE_CONFIG", "OPENCODE_CONFIG_CONTENT"):
-        if os.environ.get(var):
-            return "%s is set and is merged after the project file; unset it for the review leg" % var
+    for var in sorted(os.environ):
+        if os.environ[var] and (var.startswith("OPENCODE_CONFIG") or var.startswith("OPENCODE_DISABLE")):
+            return "%s is set and changes which config opencode reads; unset it for the review leg" % var
     return None
 
 

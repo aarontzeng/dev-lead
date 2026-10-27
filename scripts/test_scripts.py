@@ -4882,7 +4882,8 @@ def test_await_codex_job(tmp):
         (c / "codex-companion.mjs").write_text(f"console.log('- task-n | {state} | rescue | Codex Task');\n")
         jd = nh / ".claude/plugins/data/codex-openai-codex/state/s1/jobs"
         jd.mkdir(parents=True, exist_ok=True)
-        (jd / "task-n.log").write_text("\n".join("line %d" % i for i in range(40)) + "\n\x1b[31mRED\x00\x07\n" + "x" * 1000
+        (jd / "task-n.log").write_text("OLD-HEAD-MARKER\n" + ("pad line\n" * 4000)
+                                       + "\n".join("line %d" % i for i in range(40)) + "\n\x1b[31mRED\x00\x07\n" + "x" * 1000
                                        + "\nLAST-AGENT-MESSAGE\n")
         r = subprocess.run(["bash", str(await_sh), "task-n", str(tmp), "1"], capture_output=True, text=True,
                            timeout=180, env=dict(os.environ, HOME=str(nh)))
@@ -4891,7 +4892,7 @@ def test_await_codex_job(tmp):
               r.returncode == 0 and (("git diff" in out and "LAST-AGENT-MESSAGE" in out and "line 27\n" not in out
                                       and "line 28\n" in out and "x" * 301 not in out and "x" * 300 in out
                                       and "\x1b" not in out and "\x00" not in out and "\x07" not in out
-                                      and "RED" in out)
+                                      and "RED" in out and "OLD-HEAD-MARKER" not in out)
                                      if want_note else ("NOTE" not in out and "LAST-AGENT-MESSAGE" not in out)),
               out[:300])
     nh = tmp / "note-home-nolog"
@@ -4982,7 +4983,7 @@ def test_opencode_lockdown(tmp):
         r = run(cfg)
         check("lockdown: permission.%s = %r is refused" % (key, bad),
               r.returncode == 1 and ("permission.%s" % key) in r.stderr, r.stderr)
-    for key, ok in (("bash", "deny"), ("external_directory", {"*": "deny", "/ctx/*": "allow"})):
+    for key, ok in (("bash", "deny"), ("external_directory", {"*": "deny", "/ctx/dir/*": "allow"})):
         cfg = json.loads(LOCKDOWN_JSON)
         cfg["permission"][key] = ok
         r = run(cfg)
@@ -5002,30 +5003,53 @@ def test_opencode_lockdown(tmp):
              lambda c: c["permission"].update({"external_directory": {"*": "deny", "/*": "allow"}})),
             ("external_directory '**' allowed",
              lambda c: c["permission"].update({"external_directory": {"*": "deny", "**": "allow"}})),
+            ("bash 'git *' allowed (matches git push)", lambda c: c["permission"]["bash"].update({"git *": "allow"})),
+            ("bash 'b*' allowed", lambda c: c["permission"]["bash"].update({"b*": "allow"})),
+            ("bash 'git status; *' allowed", lambda c: c["permission"]["bash"].update({"git status; *": "allow"})),
+            ("bash '**' ask", lambda c: c["permission"]["bash"].update({"**": "ask"})),
+            ("external_directory '/../*' allowed",
+             lambda c: c["permission"].update({"external_directory": {"*": "deny", "/../*": "allow"}})),
+            ("external_directory '/tmp/../*' allowed",
+             lambda c: c["permission"].update({"external_directory": {"*": "deny", "/tmp/../*": "allow"}})),
+            ("external_directory one-segment '/ctx/*' allowed",
+             lambda c: c["permission"].update({"external_directory": {"*": "deny", "/ctx/*": "allow"}})),
+            ("permission.webfetch key", lambda c: c["permission"].update({"webfetch": "allow"})),
+            ("a permissions array", lambda c: c.update({"permissions": [{"action": "*", "resource": "*", "effect": "allow"}]})),
+            ("agents.build.permissions", lambda c: c.update({"agents": {"build": {"permissions": []}}})),
+            ("agent given as a string (no crash)", lambda c: c.update({"agent": "build"})),
             ("agent.build.permission present",
              lambda c: c.update({"agent": {"build": {"permission": {"edit": "allow"}}}}))):
         cfg = json.loads(LOCKDOWN_JSON)
         cfg_edit(cfg)
         r = run(cfg)
-        check("lockdown: %s is refused" % label, r.returncode == 1, r.stderr + r.stdout)
+        check("lockdown: %s is refused" % label, r.returncode == 1 and "Traceback" not in r.stderr,
+              r.stderr + r.stdout)
     for label, key in (("write", "write"), ("shell", "shell")):
         cfg = json.loads(LOCKDOWN_JSON)
         cfg["permission"][key] = "deny"
         check("lockdown: %s denied passes" % label, run(cfg).returncode == 0)
-    for rel in ("opencode.jsonc", ".opencode/opencode.json"):
+    for rel in ("opencode.jsonc", ".opencode/opencode.json", ".opencode/opencode.jsonc"):
         r = run(good, extra=(rel,))
-        check("lockdown: a %s in the target is refused" % rel, r.returncode == 1 and rel in r.stderr, r.stderr)
-    for var in ("OPENCODE_CONFIG", "OPENCODE_CONFIG_CONTENT"):
+        check("lockdown: a %s in the target is refused" % rel, r.returncode == 1 and rel.split("/")[0] in r.stderr, r.stderr)
+    for var in ("OPENCODE_CONFIG", "OPENCODE_CONFIG_CONTENT", "OPENCODE_DISABLE_PROJECT_CONFIG",
+                "OPENCODE_CONFIG_PROJECT_DISABLE"):
         r = run(good, env={var: "/elsewhere/opencode.json"})
         check("lockdown: %s in the environment is refused" % var, r.returncode == 1 and var in r.stderr, r.stderr)
     r = run(good, repo=False)
     check("lockdown: a target that is not a git checkout is refused (the file would be ignored)",
           r.returncode == 1 and "projectID=global" in r.stderr, r.stderr)
+    sub_root = Path(tempfile.mkdtemp(dir=tmp))
+    make_repo(sub_root)
+    (sub_root / "pkg").mkdir()
+    (sub_root / "pkg" / "opencode.json").write_text(LOCKDOWN_JSON)
+    r = subprocess.run([sys.executable, str(chk), str(sub_root / "pkg")], capture_output=True, text=True)
+    check("lockdown: a subdirectory of a checkout is refused (opencode reads the project ROOT's file)",
+          r.returncode == 1 and "root of a git checkout" in r.stderr, r.stderr)
     t0 = Path(tempfile.mkdtemp(dir=tmp))
     subprocess.run(["git", "-C", str(t0), "init", "-q"], check=True)
     (t0 / "opencode.json").write_text(LOCKDOWN_JSON)
     r = subprocess.run([sys.executable, str(chk), str(t0)], capture_output=True, text=True)
-    check("lockdown: a git checkout with zero commits is refused", r.returncode == 1 and "projectID=global" in r.stderr,
+    check("lockdown: a git checkout with zero commits is refused", r.returncode == 1 and "git checkout" in r.stderr,
           r.stderr)
     r = subprocess.run([sys.executable, str(chk)], capture_output=True, text=True)
     check("lockdown: no argument is a usage error", r.returncode == 2, r.stderr)
