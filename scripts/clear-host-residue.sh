@@ -18,7 +18,11 @@
 # still reports it. Run it AFTER the leg has returned and BEFORE the closing
 # verify-target.sh; never while a leg is running. It does not touch any other
 # path, so a leg that wrote anywhere else still fails the bracket.
-# Known limit: anything a leg wrote inside the identified `.remember/` goes with it.
+# Known limits: anything a leg wrote inside the identified `.remember/` goes with it (the
+# helper cannot tell which leg made the directory); and it adds no check of its own to
+# verify-target.sh, so that script's own limits (e.g. a tracked file marked
+# `skip-worktree`, which `git status` omits) apply unchanged. A symlinked <dir> is refused;
+# a symlink among its ancestors is not detected.
 #
 # Usage: clear-host-residue.sh <dir>
 # Exit:  0 nothing to remove, or removed; 1 a `.remember` it will not remove.
@@ -30,6 +34,7 @@ here=$(cd -- "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}" 2>/dev/null || 
 [ $# -eq 1 ] || die "usage: clear-host-residue.sh <dir>"
 dir=$1
 require_git_repo "$dir" "target dir"
+[ ! -L "${dir%/}" ] || die "$dir is a symlink; name the real directory"
 
 residue=$dir/.remember
 if [ ! -e "$residue" ] && [ ! -L "$residue" ]; then
@@ -41,9 +46,15 @@ fi
 [ -f "$residue/.install-marker" ] && [ ! -L "$residue/.install-marker" ] \
   && grep -q "remember was first bootstrapped" "$residue/.install-marker" \
   || die "$residue has no remember plugin marker; left in place"
-[ -f "$residue/.gitignore" ] && [ ! -L "$residue/.gitignore" ] && [ "$(cat "$residue/.gitignore")" = "*" ] \
+# the plugin writes `*` and a newline; compare the bytes, not a $(...) that strips every trailing newline
+[ -f "$residue/.gitignore" ] && [ ! -L "$residue/.gitignore" ] \
+  && { printf '*\n' | cmp -s - "$residue/.gitignore" || printf '*' | cmp -s - "$residue/.gitignore"; } \
   || die "$residue/.gitignore is not the plugin's own; left in place"
-[ -z "$(git -C "$dir" ls-files -- .remember)" ] || die "$residue holds tracked files; left in place"
+# a failed listing must not read as "nothing tracked": capture it on its own so set -e sees the status
+tracked=$(git -C "$dir" ls-files -- .remember) || die "cannot list tracked files in $dir; $residue left in place"
+[ -z "$tracked" ] || die "$residue holds tracked files; left in place"
+# rm -rf unlinks the children before the directory, so a target whose root is not writable would be emptied and then fail
+[ -w "$dir" ] || die "$dir is not writable; $residue left in place"
 
 rm -rf -- "$residue"
 echo "clear-host-residue: removed the remember plugin's $residue"

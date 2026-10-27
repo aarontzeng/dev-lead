@@ -11734,6 +11734,47 @@ def test_clear_host_residue(tmp):
           r.returncode == 1 and (elsewhere / "keep.txt").exists() and (repo / ".remember").is_symlink(), r.stderr)
     (repo / ".remember").unlink()
 
+    # a .gitignore that is `*` plus extra newlines is not the plugin's own (a $(...) compare would accept it)
+    d = plant(repo, ignore="*\n\n")
+    r = run(clear, repo)
+    check("residue: a .gitignore of * plus blank lines is left in place", r.returncode == 1 and d.exists(), r.stderr)
+    run("rm", "-rf", d)
+
+    # valid residue beside an edit to the reviewed content: only the residue goes, the bracket still fails
+    d = plant(repo)
+    (repo / "f0.txt").write_text("edited by a leg\n")
+    r = run(clear, repo)
+    check("residue: the residue goes and a tracked edit stays", r.returncode == 0 and not d.exists()
+          and (repo / "f0.txt").read_text() == "edited by a leg\n", r.stderr)
+    check("residue: verify-target still fails on the edit", run(verify, repo, sha).returncode != 0)
+    git(repo, "checkout", "--", "f0.txt")
+
+    # a listing that fails must not read as "nothing tracked"
+    broken = tmp / "residue-broken-index"
+    (bsha,) = make_repo(broken)
+    d = plant(broken)
+    (broken / ".git" / "index").write_bytes(b"not an index")
+    r = run(clear, broken)
+    check("residue: a failing git listing keeps the directory", r.returncode == 1 and d.exists(), r.stderr)
+
+    # a target root that cannot be written would be emptied by rm -rf and then fail: refuse first
+    d = plant(repo)
+    repo.chmod(0o555)
+    try:
+        r = run(clear, repo)
+    finally:
+        repo.chmod(0o755)
+    check("residue: a read-only target root leaves the directory whole",
+          r.returncode == 1 and (d / "logs" / "memory.log").exists(), r.stderr)
+    run("rm", "-rf", d)
+
+    link = tmp / "residue-link"
+    link.symlink_to(repo)
+    d = plant(repo)
+    r = run(clear, link)
+    check("residue: a symlinked target is refused", r.returncode == 1 and d.exists(), r.stderr)
+    run("rm", "-rf", d)
+
     # only the top level of the target
     sub = repo / "sub"
     plant(sub)

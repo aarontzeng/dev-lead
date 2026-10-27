@@ -662,7 +662,9 @@ two rounds and would have run a third on no principle at all.
    `"$DEV_LEAD/scripts/clear-host-residue.sh" "$FROZEN_DIR"`: it removes only a
    directory it can identify as that plugin's own (real directory, untracked, the
    plugin's marker, a `.gitignore` of exactly `*`) and exits 1 on any other
-   `.remember`, which the check then reports. Nothing else is touched.
+   `.remember`, which the check then reports. Nothing else is touched. Its limit:
+   anything a leg wrote inside that identified directory goes with it, and the helper
+   cannot tell which leg made the directory.
 
    **An agy leg needs a self-contained clone, not the worktree:** add `--clone` as
    the fourth argument (`"$DEV_LEAD/scripts/freeze-target.sh" "$REPO" "$SHA" "$FROZEN_DIR" --clone`).

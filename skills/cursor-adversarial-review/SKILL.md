@@ -114,11 +114,13 @@ Role-specific choices:
   A response without `request_id` is not sufficiently auditable to serve as
   the accounting gate — retain it as an extra eye only and report the gap.
 
-Verify the target again after the run:
+Verify the target again after the run (plain `git status` hides an ignored
+`.remember/` or any other ignored write, so the closing check is the suite's):
 
 ```bash
-git -C "$REVIEW_TARGET_DIR" rev-parse HEAD        # must equal $REVIEW_HEAD
-git -C "$REVIEW_TARGET_DIR" status --porcelain=v1 # must be empty
+DEV_LEAD=${DEV_LEAD_ROOT:-$(ls -d "$HOME"/.claude/plugins/cache/dev-lead/dev-lead/* 2>/dev/null | sort -V | tail -1)}
+"$DEV_LEAD/scripts/clear-host-residue.sh" "$REVIEW_TARGET_DIR" || exit 1
+"$DEV_LEAD/scripts/verify-target.sh" "$REVIEW_TARGET_DIR" "$REVIEW_HEAD"   # HEAD unmoved AND tree clean
 ```
 
 - **Materializing evidence the frozen tree does not contain** — another
