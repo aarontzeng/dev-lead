@@ -11725,6 +11725,9 @@ def test_clear_host_residue(tmp):
     elsewhere = tmp / "residue-elsewhere"
     elsewhere.mkdir()
     (elsewhere / "keep.txt").write_text("x\n")
+    # a complete look-alike, so only the link check can refuse it
+    (elsewhere / ".install-marker").write_text("This file marks when remember was first bootstrapped here.\n")
+    (elsewhere / ".gitignore").write_text("*\n")
     (repo / ".remember").symlink_to(elsewhere)
     r = run(clear, repo)
     check("residue: a symlink is never followed or removed",
