@@ -2010,7 +2010,10 @@ def _reviewed_record(reviewed):
     except FileNotFoundError:
         raise InputError("triage scope: no triage record for the reviewed head %s. A fix round is sized "
                          "against the round that reviewed it; triage that head first, or run scope without "
-                         "--fix-of and take the full legs." % reviewed)
+                         "--fix-of and take the full legs.\n"
+                         "  A head that was pushed for team review without a local round (a Gerrit patchset) has none: "
+                         "git worktree add --detach <dir> %s, then triage.py scope --base <base> --target <dir>, "
+                         "then rerun this with --fix-of %s." % (reviewed, reviewed[:12], reviewed[:12]))
     except OSError as exc:
         raise InputError("triage scope: cannot reach the record %s (%s); fix the permissions of %s"
                          % (path, exc, path.parent))

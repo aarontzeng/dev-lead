@@ -38,6 +38,35 @@ DATA="${DEV_LEAD_LAUNCH:-$HERE/../data/launch.json}"   # override: test seam onl
 [ -z "${DEV_LEAD_LAUNCH:-}" ] || echo "leg-cmd: launch data overridden by DEV_LEAD_LAUNCH=$DATA" >&2
 [ -f "$DATA" ] || die "cannot find data/launch.json at $DATA"
 
+case "${1:-}" in
+  -h|--help)
+    # The table is computed from data/launch.json, so it cannot drift from what the
+    # launcher really accepts: each option below is refused where the adapter lacks it.
+    DATA="$DATA" python3 - <<'PY'
+import json, os
+d = json.load(open(os.environ["DATA"]))
+print("leg-cmd.sh <adapter> <role> --model <model> [--effort <e>] [options]   (header of this script has the full usage)\n")
+print("%-9s %-10s %-8s %-6s %-14s %-9s %s" % ("adapter", "role", "--target", "--base", "--prompt-file", "--add-dir", "brief / working directory"))
+for a, spec in d.items():
+    if a.startswith("_"):
+        continue
+    for role, r in spec["role"].items():
+        t = " ".join(r["argv"])
+        framed = bool(r.get("prompt_frame"))
+        tgt = "yes" if "{TARGET}" in t or framed else "-"
+        base = "yes" if "{BASE}" in t or framed else "-"
+        pf = "yes" if "{PROMPT_FILE}" in t else "-"
+        add = "yes" if spec.get("add_dir_flag") else "-"
+        brief = ("--prompt-file" if pf == "yes" else "$RUN_DIR/%s (--run-dir)" % ("task.md" if role == "implement" else "prompt.md"))
+        where = ("--target is handed to the CLI" if "{TARGET}" in t
+                 else "the command cd's into --target" if tgt == "yes"
+                 else "runs in the CALLER's cwd: cd into the target first")
+        print("%-9s %-10s %-8s %-6s %-14s %-9s %s; %s" % (a, role, tgt, base, pf, add, brief, where))
+print("\nAn option marked '-' is REFUSED for that adapter, never dropped. agy review refuses a git worktree target: freeze with freeze-target.sh --clone.")
+print("opencode has no add-dir: copy context files INTO the frozen target. opencode review also needs the lock-down opencode.json in --target (checked when the command runs).")
+PY
+    exit 0 ;;
+esac
 [ $# -ge 2 ] || die "usage: leg-cmd.sh <adapter> <role> --model <model> [--effort <e>] [--target <dir>] [--base <ref>] [--prompt-file <f>] [--run-dir <dir>] [--add-dir <dir> ...] [--allow-bash <prefix> ...] [--head <rev>] [--no-triage <reason>] [--check]  (each option only where the adapter takes it; see the header of this script)"
 ADAPTER=$1; ROLE=$2; shift 2
 
@@ -334,6 +363,13 @@ if frame:
         # be: a subshell, so the caller's own cwd is left alone under eval.
         cmd = "( cd %s && %s )" % (shlex.quote(os.environ.get("TARGET", "")), cmd)
     cmd = '%s < %s > "$RUN_DIR/framed-prompt.md" && %s' % (builder, BRIEF, cmd)
+    if r.get("requires_lockdown"):
+        # opencode's read-only boundary is a file in the target, not a mode; a launch
+        # without it runs as the build agent (edit and bash open). Checked when the
+        # command RUNS, in the tree the leg will use, and a failure stops the paid run.
+        cmd = "python3 %s %s && %s" % (
+            shlex.quote(os.path.join(os.environ["HERE"], "check-opencode-lockdown.py")),
+            shlex.quote(os.environ.get("TARGET", "")), cmd)
 elif r["prompt_delivery"] == "stdin":
     cmd += ' < %s' % BRIEF
 

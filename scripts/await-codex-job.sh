@@ -51,6 +51,19 @@ while [ "$SECONDS" -lt "$deadline" ]; do
     case "$line" in
         *"| completed |"*|*"| failed |"*|*"| cancelled |"*|*"| error |"*)
             echo "TERMINAL: $line"
+            case "$line" in
+                *"| failed |"*|*"| error |"*)
+                    # A failed job can still leave a usable tree (a measured run wrote ~30 files and
+                    # failed in its last build step), and `result` shows only the final progress
+                    # lines: print the log's tail and say so, so the lead diffs before discarding.
+                    log=$(find_log)
+                    echo "NOTE: a failed job may have left a usable working tree -- 'git status' and 'git diff' in $WT before deciding."
+                    if [ -n "$log" ] && [ -f "$log" ]; then
+                        echo "--- last lines of $log ---"
+                        tail -n 15 "$log" | cut -c1-300
+                    fi
+                    ;;
+            esac
             exit 0
             ;;
     esac

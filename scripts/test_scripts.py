@@ -4874,6 +4874,31 @@ def test_await_codex_job(tmp):
               r.returncode == 0 and "TERMINAL" in (r.stdout + r.stderr),
               f"rc={r.returncode} out={(r.stdout + r.stderr)[:120]}")
 
+    # A failed job can leave a usable tree: the waiter prints the log's tail and says to diff first.
+    for state, want_note in (("failed", True), ("error", True), ("completed", False), ("cancelled", False)):
+        nh = tmp / f"note-home-{state}"
+        c = nh / ".claude/plugins/cache/openai-codex/codex/9.9.9/scripts"
+        c.mkdir(parents=True, exist_ok=True)
+        (c / "codex-companion.mjs").write_text(f"console.log('- task-n | {state} | rescue | Codex Task');\n")
+        jd = nh / ".claude/plugins/data/codex-openai-codex/state/s1/jobs"
+        jd.mkdir(parents=True, exist_ok=True)
+        (jd / "task-n.log").write_text("\n".join("line %d" % i for i in range(40)) + "\nLAST-AGENT-MESSAGE\n")
+        r = subprocess.run(["bash", str(await_sh), "task-n", str(tmp), "1"], capture_output=True, text=True,
+                           timeout=180, env=dict(os.environ, HOME=str(nh)))
+        out = r.stdout
+        check(f"await-codex-job.sh: a {state} job {'prints' if want_note else 'does not print'} the log tail and the diff-first note",
+              r.returncode == 0 and (("git diff" in out and "LAST-AGENT-MESSAGE" in out and "line 0\n" not in out)
+                                     if want_note else ("NOTE" not in out and "LAST-AGENT-MESSAGE" not in out)),
+              out[:300])
+    nh = tmp / "note-home-nolog"
+    c = nh / ".claude/plugins/cache/openai-codex/codex/9.9.9/scripts"
+    c.mkdir(parents=True, exist_ok=True)
+    (c / "codex-companion.mjs").write_text("console.log('- task-n | failed | rescue | Codex Task');\n")
+    r = subprocess.run(["bash", str(await_sh), "task-n", str(tmp), "1"], capture_output=True, text=True,
+                       timeout=180, env=dict(os.environ, HOME=str(nh)))
+    check("await-codex-job.sh: a failed job with no log still prints the note and exits 0",
+          r.returncode == 0 and "NOTE" in r.stdout and "last lines" not in r.stdout, r.stdout[:200])
+
     body = await_sh.read_text()
     check("await-codex-job.sh resolves the companion under $HOME/.claude",
           "plugins/cache/openai-codex/codex" in body)
@@ -4905,6 +4930,101 @@ def test_await_codex_job(tmp):
           "(32 bytes)" in r.stdout, r.stdout[:160])
     check("await-codex-job.sh reads the size with the one spelling both platforms share",
           'size=$(wc -c < "$log"' in body, "the size read is not `wc -c` any more")
+
+
+LOCKDOWN_JSON = json.dumps({"permission": {"bash": {"*": "deny", "git status*": "allow"},
+                                            "edit": "deny", "external_directory": "deny"}})
+
+
+def test_opencode_lockdown(tmp):
+    """check-opencode-lockdown.py and its place at the head of the emitted opencode review command:
+    opencode has no read-only mode, so a target without the lock-down opencode.json must stop the run."""
+    chk = SCRIPTS / "check-opencode-lockdown.py"
+
+    def run(cfg, mode="file"):
+        t = Path(tempfile.mkdtemp(dir=tmp))
+        if mode == "file" and cfg is not None:
+            (t / "opencode.json").write_text(cfg if isinstance(cfg, str) else json.dumps(cfg))
+        elif mode == "link":
+            (t / "real.json").write_text(LOCKDOWN_JSON)
+            (t / "opencode.json").symlink_to(t / "real.json")
+        return subprocess.run([sys.executable, str(chk), str(t)], capture_output=True, text=True)
+
+    good = json.loads(LOCKDOWN_JSON)
+    r = run(good)
+    check("lockdown: the documented config passes", r.returncode == 0, r.stderr)
+    r = run(None)
+    check("lockdown: a target without opencode.json is refused, naming the file",
+          r.returncode == 1 and "opencode.json" in r.stderr and "build agent" in r.stderr, r.stderr)
+    r = run(None, mode="link")
+    check("lockdown: a symlinked opencode.json is refused", r.returncode == 1, r.stderr)
+    r = run("{nope")
+    check("lockdown: unparseable JSON is refused", r.returncode == 1 and "cannot read" in r.stderr, r.stderr)
+    r = run([1])
+    check("lockdown: a non-object config is refused", r.returncode == 1, r.stderr)
+    for key, bad in (("edit", "allow"), ("edit", None), ("external_directory", "ask"), ("external_directory", None),
+                     ("bash", "allow"), ("bash", {"git status*": "allow", "*": "deny"}), ("bash", None)):
+        cfg = json.loads(LOCKDOWN_JSON)
+        if bad is None:
+            del cfg["permission"][key]
+        else:
+            cfg["permission"][key] = bad
+        r = run(cfg)
+        check("lockdown: permission.%s = %r is refused" % (key, bad),
+              r.returncode == 1 and ("permission.%s" % key) in r.stderr, r.stderr)
+    for key, ok in (("bash", "deny"), ("external_directory", {"*": "deny", "/ctx/*": "allow"})):
+        cfg = json.loads(LOCKDOWN_JSON)
+        cfg["permission"][key] = ok
+        r = run(cfg)
+        check("lockdown: permission.%s = %r passes" % (key, ok), r.returncode == 0, r.stderr)
+    r = subprocess.run([sys.executable, str(chk)], capture_output=True, text=True)
+    check("lockdown: no argument is a usage error", r.returncode == 2, r.stderr)
+
+    script = SCRIPTS / "leg-cmd.sh"
+    with tempfile.TemporaryDirectory() as td:
+        tgt = Path(td) / "frozen"
+        shas = make_repo(tgt, commits=2)
+        rdir = Path(td) / "run"
+        rdir.mkdir()
+        (rdir / "prompt.md").write_text("THE LENS\n")
+        fake = Path(td) / "bin"
+        fake.mkdir()
+        (fake / "opencode").write_text('#!/bin/sh\necho LEG-RAN\n')
+        (fake / "opencode").chmod(0o755)
+        emitted = subprocess.run([str(script), "opencode", "review", "--model", "opencode/x", "--effort", "high",
+                                  "--base", shas[0], "--target", str(tgt), "--run-dir", str(rdir),
+                                  "--no-triage", "test fixture", "--head", "HEAD"],
+                                 capture_output=True, text=True).stdout
+        check("lockdown: the emitted opencode review command checks the target first",
+              "check-opencode-lockdown.py" in emitted
+              and emitted.index("check-opencode-lockdown.py") < emitted.index("opencode run"), emitted)
+        env = dict(os.environ, PATH="%s:%s" % (fake, os.environ["PATH"]))
+        out = subprocess.run(["bash", "-c", 'eval "$(cat)"'], input=emitted, capture_output=True, text=True, env=env)
+        check("lockdown: without the config the paid run never starts",
+              "LEG-RAN" not in out.stdout and "build agent" in out.stderr, out.stdout + out.stderr)
+        (tgt / "opencode.json").write_text(LOCKDOWN_JSON)
+        out = subprocess.run(["bash", "-c", 'eval "$(cat)"'], input=emitted, capture_output=True, text=True, env=env)
+        check("lockdown: with the config the leg runs", "LEG-RAN" in out.stdout, out.stdout + out.stderr)
+        # the guard follows the file, not a fixed result: break it again after a pass
+        (tgt / "opencode.json").write_text(json.dumps({"permission": {"edit": "allow"}}))
+        out = subprocess.run(["bash", "-c", 'eval "$(cat)"'], input=emitted, capture_output=True, text=True, env=env)
+        check("lockdown: an edit-allowed config stops the run again", "LEG-RAN" not in out.stdout, out.stdout)
+        for adapter, model, extra in (("agy", "gemini-3.8-flash-high", []), ("codex", "gpt-6.1-sol", [])):
+            e = subprocess.run([str(script), adapter, "review", "--model", model, "--base", shas[0],
+                                "--target", str(tgt), "--run-dir", str(rdir), "--no-triage", "test fixture",
+                                "--head", "HEAD", *extra], capture_output=True, text=True).stdout
+            check("lockdown: %s review is not given the opencode check" % adapter,
+                  "check-opencode-lockdown" not in e, e)
+
+    r = subprocess.run([str(script), "--help"], capture_output=True, text=True)
+    rows = {tuple(l.split()[:2]): l for l in r.stdout.splitlines() if l.split()[:1] and l.split()[0] in ("agy", "codex", "cursor", "opencode", "grok", "claude")
+            and l.split()[1] in ("review", "implement")}
+    check("leg-cmd --help: one row per adapter and role", r.returncode == 0 and len(rows) == 12, r.stdout)
+    check("leg-cmd --help: the table says codex review takes --target and --base, not --prompt-file or --add-dir",
+          rows[("codex", "review")].split()[2:6] == ["yes", "yes", "-", "-"], rows.get(("codex", "review")))
+    check("leg-cmd --help: grok takes --prompt-file, cursor takes --add-dir, claude review needs a cd",
+          rows[("grok", "review")].split()[4] == "yes" and rows[("cursor", "review")].split()[5] == "yes"
+          and "cd into the target" in rows[("claude", "review")], r.stdout)
 
 
 def test_common(tmp):
@@ -5472,6 +5592,7 @@ def test_leg_cmd():
     with tempfile.TemporaryDirectory() as td:
         tgt = Path(td) / "frozen"
         shas = make_repo(tgt, commits=2)
+        (tgt / "opencode.json").write_text(LOCKDOWN_JSON)
         rdir = Path(td) / "run"
         rdir.mkdir()
         (rdir / "prompt.md").write_text("THE LENS\n")
@@ -10383,6 +10504,10 @@ def test_triage_fix_round(tmp):
         got = run(triage, "scope", "--base", base, "--target", repo, *args, env=env)
         check("triage fix: refuses %s" % label, got.returncode == 2 and needle in got.stderr,
               got.stdout + got.stderr)
+    got = run(triage, "scope", "--base", base, "--target", repo, "--fix-of", base, env=env)
+    check("triage fix: a head with no record is told the exact way to record it (a Gerrit patchset has none)",
+          "git worktree add --detach" in got.stderr and "--fix-of %s" % base[:12] in got.stderr
+          and "triage.py scope --base" in got.stderr, got.stderr)
     got = run(triage, "scope", "--files", "src/app.py", "--fix-of", r1, env=env)
     check("triage fix: --fix-of with --files is refused (it sizes a committed range)",
           got.returncode == 2 and "committed range" in got.stderr, got.stdout + got.stderr)
@@ -11418,6 +11543,9 @@ def main():
     with tempfile.TemporaryDirectory() as td:
         test_common(Path(td))
     test_leg_cmd()
+    print("check-opencode-lockdown.py and leg-cmd.sh --help")
+    with tempfile.TemporaryDirectory() as td:
+        test_opencode_lockdown(Path(td))
     print("leg-cmd.sh triage gate and review-prompt input")
     with tempfile.TemporaryDirectory() as td:
         test_triage_launch_gate(Path(td))

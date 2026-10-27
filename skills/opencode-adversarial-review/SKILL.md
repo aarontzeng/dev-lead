@@ -180,6 +180,12 @@ default agent with this config. A denied call comes back to the model as a
 message, so an over-curious reviewer reports MACHINE-DENIED and keeps
 reviewing instead of dying.
 
+The emitted `leg-cmd.sh` command begins with
+[`check-opencode-lockdown.py`](../../scripts/check-opencode-lockdown.py) on the target and stops the run when
+`opencode.json` is missing or `edit`, `external_directory` or `bash` is not denied. Without the file opencode runs as
+the build agent with edit and bash open (a peer session ran three legs that way before this check existed).
+`leg-cmd.sh --help` prints which of `--target`, `--base`, `--prompt-file` and `--add-dir` each adapter takes.
+
 The config file itself appears as untracked in the target, and this leg cannot
 move it out — it must sit at the project root to bind. **Declare it** to the
 certification instead of excusing it:
