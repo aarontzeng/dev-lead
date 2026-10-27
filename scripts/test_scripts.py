@@ -4958,8 +4958,9 @@ def test_opencode_lockdown(tmp):
         for rel in extra:
             (t / rel).parent.mkdir(parents=True, exist_ok=True)
             (t / rel).write_text("{}")
+        base_env = {k: v for k, v in os.environ.items() if not k.startswith("OPENCODE_")}
         return subprocess.run([sys.executable, str(chk), str(t)], capture_output=True, text=True,
-                              env=dict(os.environ, **(env or {})))
+                              env=dict(base_env, **(env or {})))
 
     good = json.loads(LOCKDOWN_JSON)
     r = run(good)
@@ -4983,6 +4984,9 @@ def test_opencode_lockdown(tmp):
         r = run(cfg)
         check("lockdown: permission.%s = %r is refused" % (key, bad),
               r.returncode == 1 and ("permission.%s" % key) in r.stderr, r.stderr)
+    cfg = json.loads(LOCKDOWN_JSON)
+    cfg["permission"]["external_directory"] = {"*": "deny", "/tmp/my dir/ctx/*": "allow"}
+    check("lockdown: a literal absolute path with a space passes", run(cfg).returncode == 0)
     for key, ok in (("bash", "deny"), ("external_directory", {"*": "deny", "/ctx/dir/*": "allow"})):
         cfg = json.loads(LOCKDOWN_JSON)
         cfg["permission"][key] = ok
@@ -5009,6 +5013,16 @@ def test_opencode_lockdown(tmp):
             ("bash '**' ask", lambda c: c["permission"]["bash"].update({"**": "ask"})),
             ("external_directory '/../*' allowed",
              lambda c: c["permission"].update({"external_directory": {"*": "deny", "/../*": "allow"}})),
+            ("external_directory '/././*' allowed (normalizes to /*)",
+             lambda c: c["permission"].update({"external_directory": {"*": "deny", "/././*": "allow"}})),
+            ("external_directory '/./ctx/*' allowed (normalizes to a one-segment path)",
+             lambda c: c["permission"].update({"external_directory": {"*": "deny", "/./ctx/*": "allow"}})),
+            ("external_directory '/ctx//dir/*' allowed (empty segment)",
+             lambda c: c["permission"].update({"external_directory": {"*": "deny", "/ctx//dir/*": "allow"}})),
+            ("external_directory '/ctx/dir/?*' allowed",
+             lambda c: c["permission"].update({"external_directory": {"*": "deny", "/ctx/dir/?*": "allow"}})),
+            ("bash 'git difftool*' allowed", lambda c: c["permission"]["bash"].update({"git difftool*": "allow"})),
+            ("bash 'git push*' allowed", lambda c: c["permission"]["bash"].update({"git push*": "allow"})),
             ("external_directory '/tmp/../*' allowed",
              lambda c: c["permission"].update({"external_directory": {"*": "deny", "/tmp/../*": "allow"}})),
             ("external_directory one-segment '/ctx/*' allowed",
@@ -5032,7 +5046,7 @@ def test_opencode_lockdown(tmp):
         r = run(good, extra=(rel,))
         check("lockdown: a %s in the target is refused" % rel, r.returncode == 1 and rel.split("/")[0] in r.stderr, r.stderr)
     for var in ("OPENCODE_CONFIG", "OPENCODE_CONFIG_CONTENT", "OPENCODE_DISABLE_PROJECT_CONFIG",
-                "OPENCODE_CONFIG_PROJECT_DISABLE"):
+                "OPENCODE_CONFIG_PROJECT_DISABLE", "OPENCODE_CONFIG_DIR", "OPENCODE_DISABLE_AUTOUPDATE"):
         r = run(good, env={var: "/elsewhere/opencode.json"})
         check("lockdown: %s in the environment is refused" % var, r.returncode == 1 and var in r.stderr, r.stderr)
     r = run(good, repo=False)
@@ -5123,6 +5137,8 @@ def test_opencode_lockdown(tmp):
     check("leg-cmd --help: claude review takes neither --target nor --base and runs in the caller's cwd",
           rows[("claude", "review")].split()[2:4] == ["-", "-"]
           and "runs in the CALLER's cwd" in rows[("claude", "review")], rows.get(("claude", "review")))
+    check("leg-cmd --help: agy implement takes --target but not --base",
+          rows[("agy", "implement")].split()[2:4] == ["yes", "-"], rows.get(("agy", "implement")))
     check("leg-cmd --help: opencode review takes --target and --base and cds into the target itself",
           rows[("opencode", "review")].split()[2:4] == ["yes", "yes"]
           and "the command cd's into --target" in rows[("opencode", "review")], rows.get(("opencode", "review")))

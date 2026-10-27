@@ -287,10 +287,12 @@ DEV_LEAD=${DEV_LEAD_ROOT:-$(ls -d "$HOME"/.claude/plugins/cache/dev-lead/dev-lea
             --base "$BASE" --target "$REVIEW_TARGET_DIR" --run-dir "$RUN_DIR")" > "$RUN_DIR/review.log" 2>&1
 ```
 
-What it runs, spelled out (for a lead without the script): the builder, then
-the leg inside the frozen target, in a subshell so your own cwd is kept:
+What it runs, spelled out (for a lead without the script): the lock-down check,
+the builder, then the leg inside the frozen target, in a subshell so your own cwd
+is kept:
 
 ```bash
+python3 "$DEV_LEAD/scripts/check-opencode-lockdown.py" "$REVIEW_TARGET_DIR" && \
 python3 "$DEV_LEAD/scripts/review-prompt.py" --adapter opencode --base "$BASE" \
   --target "$REVIEW_TARGET_DIR" < "$RUN_DIR/prompt.md" > "$RUN_DIR/framed-prompt.md" && \
 ( cd "$REVIEW_TARGET_DIR" && opencode run --print-logs --log-level info \

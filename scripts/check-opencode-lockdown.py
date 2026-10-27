@@ -21,7 +21,7 @@ same permissions, so a deny-list is never finished. Exit 0 only when ALL hold:
   - edit is "deny";
   - external_directory is "deny", or an object whose FIRST rule is "*": "deny"
     and whose other rules are "deny" or an "allow" of a literal absolute path
-    (no "..", no wildcard but a trailing "/*");
+    (2+ segments, none empty, "." or "..", no wildcard but a trailing "/*");
   - bash is "deny", or an object whose FIRST rule is "*": "deny" and whose other
     rules are "deny" or an "allow" of one of READ_ONLY_BASH (the skill's list);
   - no opencode.jsonc, no .opencode entry in the target, and no OPENCODE_CONFIG*
@@ -43,8 +43,19 @@ TEMPLATE = "skills/opencode-adversarial-review/SKILL.md (the opencode.json block
 # so `git diff --output=<path>` is the documented limit of this boundary, see the SKILL).
 READ_ONLY_BASH = frozenset(("git status*", "git log*", "git diff*", "git show*", "git rev-parse*"))
 EXTRA_DENY_ONLY = ("write", "patch", "apply_patch", "shell")   # aliases of edit / bash
-# an absolute path of 2+ literal segments, optionally ending in /*
-_PATH_ALLOW = re.compile(r"(?:/[A-Za-z0-9_.@+~-]+){2,}(?:/\*)?\Z")
+_SEGMENT = re.compile(r"[A-Za-z0-9_.@+~ -]+\Z")
+
+
+def _literal_path(key):
+    """An absolute path of 2+ literal segments, optionally ending in /*: no empty, "." or ".." segment
+    (they normalize to a broader path: "/././*" is "/*"), no other wildcard."""
+    parts = key.split("/")
+    if parts[0] != "":
+        return False
+    parts = parts[1:]
+    if parts and parts[-1] == "*":
+        parts = parts[:-1]
+    return len(parts) >= 2 and all(p not in (".", "..") and _SEGMENT.match(p) for p in parts)
 
 
 def _rules(rule, allowed):
@@ -90,7 +101,7 @@ def problem(target):
         return "%s: unexpected permission key(s) %s" % (path, extra)
     if perm.get("edit") != "deny":
         return "%s: permission.edit must be \"deny\"" % path
-    why = _rules(perm.get("external_directory"), lambda k: bool(_PATH_ALLOW.match(k)) and ".." not in k.split("/"))
+    why = _rules(perm.get("external_directory"), _literal_path)
     if why:
         return "%s: permission.external_directory %s (allow rules: literal absolute paths)" % (path, why)
     why = _rules(perm.get("bash"), lambda k: k in READ_ONLY_BASH)
