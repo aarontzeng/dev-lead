@@ -505,6 +505,27 @@ def _tmux(ctx, *args):
     return done.returncode == 0
 
 
+def _server_gone(ctx, socket):
+    """True only when tmux itself says there is no server behind `socket`.
+
+    list-sessions fails for other reasons with a server still alive (a socket it cannot connect to:
+    Permission denied; "no sessions" in a teardown window), so a bare non-zero status proves nothing.
+    The two answers that do prove it, from tmux 3.x: "no server running on <path>" and
+    "error connecting to <path> (No such file or directory)". A timeout, a missing tmux or any
+    other failure is not proof.
+    """
+    env = {k: v for k, v in os.environ.items() if k not in ("TMUX", "TMUX_PANE")}
+    try:
+        done = subprocess.run([ctx.tmux_bin, "-L", socket, "-f", os.devnull, "list-sessions"],
+                              capture_output=True, text=True, timeout=_tmux_timeout(),
+                              stdin=subprocess.DEVNULL, env=env)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    err = done.stderr or ""
+    return done.returncode != 0 and ("no server running" in err
+                                     or ("error connecting to" in err and "No such file or directory" in err))
+
+
 def _mtime_or_none(path):
     try:
         return os.lstat(path).st_mtime_ns
@@ -626,8 +647,8 @@ def _refresh_locked(ctx, kind, path, base):
             if not killed and started is True:
                 # the CLI may have ended by itself (a crash, a refused connection): its one-session
                 # server is gone with it and kill-server answers "no server running". tmux saying
-                # so is proof the server is stopped; a timeout or an answer proves nothing.
-                gone = _tmux(ctx, "-L", socket, "-f", os.devnull, "list-sessions") is False
+                # so is proof the server is stopped; a timeout, a permission error or any other answer proves nothing.
+                gone = _server_gone(ctx, socket)
                 exited_early = gone
                 killed = gone
             # a start that RAN and failed made no server, so a failed kill is expected; a

@@ -247,7 +247,8 @@ they have open.
   Claude Code session hooks in its workspace, and a memory plugin's
   SessionStart hook made `.remember/` there (measured 2026-10-19); left in
   place it would stop the CLI from starting in an empty directory. So once the private server is
-  confirmed stopped (a `kill-server` that succeeded; a timed-out one proves
+  confirmed stopped (a `kill-server` that succeeded, or a failed one followed by a `list-sessions` whose stderr is
+  tmux's own `no server running` / `error connecting ... (No such file or directory)`; a timed-out one proves
   nothing) the directory is MOVED aside (`quota-tui.gone.<pid>.<random>`, one rename of
   the final path component, which moves a link rather than following it), a
   fresh empty one takes its place, and the moved one is emptied through a
