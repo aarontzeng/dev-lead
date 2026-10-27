@@ -219,6 +219,12 @@ sends no key; the plugin reads the Go key itself, this script never does. The TU
 configured MCP servers while it is up, and the private server stops with it (it is not detached; a child that outlives `kill-server` by its
 own 1-3 s force-kill window is not waited for, and the stray-server check names only tmux sockets -- a known limit, not seen in practice).
 
+The opencode TUI connects to its own child server over `127.0.0.1`. A host that routes loopback elsewhere
+cannot run it: measured on a WSL host in `virtioproxy` networking mode (policy routing sends TCP to 127.0.0.1 out to
+Windows), the TUI died within a second with `ECONNREFUSED`. The refresh then reports
+`opencode exited before it wrote its cache (its tmux server was already gone)`; run
+`opencode --standalone` once in a terminal there to see the error, and leave `"refresh"` off for that source.
+
 So `--refresh`, for a source whose config sets `"refresh": "tmux_spawn"` (only
 `agy_quota_cache`, `cursor_usage_cache` and `opencode_go_cache` may) and whose cache is missing,
 older than its TTL, more than 60 s in the future, or has an mtime that cannot

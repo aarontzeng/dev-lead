@@ -607,6 +607,7 @@ def _refresh_locked(ctx, kind, path, base):
     before = _mtime_or_none(path)
     started = _tmux(ctx, "-L", socket, "-f", os.devnull, "new-session", "-d", "-s", "quota",
                     "-x", "200", "-y", "50", "-c", workdir, *command)
+    exited_early = False
     try:
         if started:
             # changed AND whole: the agy status line writes with a plain `>`,
@@ -622,6 +623,13 @@ def _refresh_locked(ctx, kind, path, base):
             # (tmux 3.2a), but nothing is left to that
             # `is True`: a kill that timed out (TMUX_TIMED_OUT is truthy) proves nothing
             killed = _tmux(ctx, "-L", socket, "-f", os.devnull, "kill-server") is True
+            if not killed and started is True:
+                # the CLI may have ended by itself (a crash, a refused connection): its one-session
+                # server is gone with it and kill-server answers "no server running". tmux saying
+                # so is proof the server is stopped; a timeout or an answer proves nothing.
+                gone = _tmux(ctx, "-L", socket, "-f", os.devnull, "list-sessions") is False
+                exited_early = gone
+                killed = gone
             # a start that RAN and failed made no server, so a failed kill is expected; a
             # start that timed out may have made one, so only a successful kill proves it gone
             stopped = killed or started is False
@@ -639,6 +647,9 @@ def _refresh_locked(ctx, kind, path, base):
         return "%s refresh failed: tmux could not start %s" % (label, command[0])
     if _rewritten(path, before):
         return None
+    if exited_early:
+        return ("%s refresh failed: %s exited before it wrote its cache (its tmux server was already gone); "
+                "run it once in a terminal to see why" % (label, command[0]))
     return "%s refresh failed: %s did not rewrite its cache within %g s" % (
         label, command[0], ctx.refresh_wait)
 

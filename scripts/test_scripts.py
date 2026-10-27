@@ -2939,6 +2939,8 @@ if state.get("fail"):
     sys.exit(1)
 if "kill-server" in args and state.get("fail_kill"):
     sys.exit(1)
+if state.get("server_gone") and ("kill-server" in args or "list-sessions" in args):
+    sys.exit(1)       # the CLI ended by itself and took its one-session server along: "no server running"
 if "kill-server" in args and state.get("sleep_kill"):
     import time as _t
     _t.sleep(state["sleep_kill"])
@@ -3284,6 +3286,28 @@ def test_quota_snapshot_tui_refresh(tmp):
                               extra_state={"fail_kill": True, "socket_dir": str(sockdir2)})
     check("tui refresh: ...and its socket is kept, the one way to reach that server later",
           calls and (sockdir2 / calls[0][1]).exists(), list(sockdir2.iterdir()) if sockdir2.exists() else None)
+
+    # a CLI that dies right after it starts takes its one-session server with it: kill-server then answers
+    # "no server running". That is a stopped server, and the problem is the CLI's early exit, not a stuck server.
+    sockdir3 = tmp / "tmuxtmp3" / ("tmux-%d" % os.geteuid())
+    r, recs, calls = scenario("cli exits early", kind="opencode_go_cache", rewrite=False,
+                              env_extra={"TMUX_TMPDIR": str(tmp / "tmuxtmp3")},
+                              extra_state={"server_gone": True, "socket_dir": str(sockdir3)})
+    check("tui refresh: a CLI that exited by itself is reported as such, not as a server that could not be stopped",
+          recs and all(any("exited before it wrote its cache" in p for p in x["problems"]) for x in recs)
+          and not any("could not be stopped" in p for x in recs for p in x["problems"]), recs)
+    check("tui refresh: ...kill-server was followed by a list-sessions probe, the proof the server is gone",
+          [next((a for a in c if a in ("new-session", "kill-server", "list-sessions")), "?") for c in calls]
+          == ["new-session", "kill-server", "list-sessions"], calls)
+    check("tui refresh: ...and the dead server's socket file is removed, not left for every later run",
+          calls and not (sockdir3 / calls[0][1]).exists(), list(sockdir3.iterdir()) if sockdir3.exists() else None)
+    r, recs, calls = scenario("cli exits early after writing", kind="opencode_go_cache",
+                              extra_state={"server_gone": True})
+    check("tui refresh: a CLI that wrote its cache and then exited still counts as a successful refresh",
+          recs and all(x.get("problems") == [] for x in recs), recs)
+    r, recs, calls = scenario("kill fails, server still answers", extra_state={"fail_kill": True})
+    check("tui refresh: a failed kill whose server still answers list-sessions stays 'could not be stopped'",
+          all(any("could not be stopped" in p for p in x["problems"]) for x in recs), recs)
 
     sockdir = tmp / "tmuxtmp" / ("tmux-%d" % os.geteuid())
     r, recs, calls = scenario("socket file", env_extra={"TMUX_TMPDIR": str(tmp / "tmuxtmp")},
