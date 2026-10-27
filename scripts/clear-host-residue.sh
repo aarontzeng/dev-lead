@@ -23,6 +23,11 @@
 # verify-target.sh, so that script's own limits (e.g. a tracked file marked
 # `skip-worktree`, which `git status` omits) apply unchanged. A symlinked <dir> is refused;
 # a symlink among its ancestors is not detected.
+# Also known: the writability preflight reads owner permission bits and the effective access to <dir>
+# only, so a directory inside .remember that is unreadable (mode 0600) or owned by someone else can
+# still leave it half emptied (exit 1, the closing verify-target.sh then fails); the index check needs
+# GNU `realpath -m` (without it a valid cleanup is refused, nothing is removed); the permission tests
+# assume the filesystem enforces chmod.
 #
 # Usage: clear-host-residue.sh <dir>
 # Exit:  0 nothing to remove, or removed; 1 a `.remember` it will not remove.
