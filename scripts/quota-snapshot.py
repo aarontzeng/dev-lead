@@ -515,7 +515,12 @@ def _server_gone(ctx, socket):
     other failure is not proof.
     """
     env = {k: v for k, v in os.environ.items() if k not in ("TMUX", "TMUX_PANE")}
-    env["LC_ALL"] = "C"                      # the ENOENT text is strerror(): translated in other locales
+    # the ENOENT text is strerror(), translated in other locales: ask for untranslated messages only.
+    # LC_ALL=C would also make the character set ASCII, and tmux refuses to run without a UTF-8 one.
+    env.pop("LANGUAGE", None)
+    if env.get("LC_ALL"):
+        env["LC_CTYPE"] = env.pop("LC_ALL")          # LC_ALL would override LC_MESSAGES below
+    env["LC_MESSAGES"] = "C"
     try:
         done = subprocess.run([ctx.tmux_bin, "-L", socket, "-f", os.devnull, "list-sessions"],
                               capture_output=True, text=True, timeout=_tmux_timeout(),
