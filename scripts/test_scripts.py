@@ -3250,10 +3250,17 @@ def test_quota_snapshot_windows(tmp):
           win.DEFAULT_CONFIG.name == "quota-sources.windows.json"
           and posix.DEFAULT_CONFIG.name == "quota-sources.json", (win.DEFAULT_CONFIG, posix.DEFAULT_CONFIG))
     wdefault = json.loads((SCRIPTS.parent / "data" / "quota-sources.windows.json").read_text())
-    check("quota-snapshot windows: the shipped Windows sources are codex and claude from ${TEMP}",
+    check("quota-snapshot windows: the shipped Windows sources are the five, with their Windows cache paths",
           [(x["name"], x["kind"], x.get("path")) for x in wdefault["sources"]]
           == [("codex", "codex_app_server", None),
-              ("claude", "claude_usage_cache", "${TEMP}/claude/statusline-usage-cache.json")], wdefault)
+              ("claude", "claude_usage_cache", "${TEMP}/claude/statusline-usage-cache.json"),
+              ("agy", "agy_quota_cache", "${TEMP}/gemini/statusline-quota-cache.json"),
+              ("cursor", "cursor_usage_cache", "${TEMP}/cursor/statusline-usage-cache.json"),
+              ("opencode-go", "opencode_go_cache", "${XDG_CACHE_HOME}/opencode-go/usage.json")], wdefault)
+    check("quota-snapshot windows: the Windows sources keep the Linux names, kinds, adapters, billing and TTLs",
+          [{k: v for k, v in x.items() if k != "path"} for x in wdefault["sources"]]
+          == [{k: v for k, v in x.items() if k != "path"} for x in
+              json.loads((SCRIPTS.parent / "data" / "quota-sources.json").read_text())["sources"]], wdefault)
     r, doc = _qs(["--source", "claude", "--config", SCRIPTS.parent / "data" / "quota-sources.windows.json"],
                  env=dict(os.environ, TEMP=str(tmp / "no-such-temp")))
     check("quota-snapshot windows: the Windows sources file is accepted by the loader",
@@ -3276,6 +3283,12 @@ def test_quota_snapshot_windows(tmp):
               status is None and isinstance(doc_, dict) and mtime is not None, (status, problem))
     finally:
         os.geteuid = real_geteuid
+    bom = tmp / "win-claude-bom.json"
+    bom.write_bytes(b"\xef\xbb\xbf" + good.read_bytes())
+    check("quota-snapshot windows: a UTF-8 BOM (PowerShell's UTF8) is tolerated on Windows, not on POSIX",
+          win.read_cache(str(bom))[2] is None and win.read_cache(str(bom))[0] == doc_
+          and posix.read_cache(str(bom))[2] == "parse_error",
+          (win.read_cache(str(bom))[2:], posix.read_cache(str(bom))[2:]))
 
     # paths
     saved_env = {k: os.environ.get(k) for k in ("TEMP", "LOCALAPPDATA")}

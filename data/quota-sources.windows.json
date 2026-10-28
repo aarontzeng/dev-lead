@@ -2,6 +2,9 @@
   "schema_version": 1,
   "sources": [
     {"name": "codex",       "kind": "codex_app_server",  "adapter": "codex",    "billing_provider": "chatgpt_subscription", "ttl_seconds": 300},
-    {"name": "claude",      "kind": "claude_usage_cache","adapter": "claude",   "billing_provider": "claude_subscription",  "ttl_seconds": 300, "path": "${TEMP}/claude/statusline-usage-cache.json"}
+    {"name": "claude",      "kind": "claude_usage_cache","adapter": "claude",   "billing_provider": "claude_subscription",  "ttl_seconds": 300, "path": "${TEMP}/claude/statusline-usage-cache.json"},
+    {"name": "agy",         "kind": "agy_quota_cache",   "adapter": "agy",      "billing_provider": "antigravity",          "ttl_seconds": 300, "path": "${TEMP}/gemini/statusline-quota-cache.json"},
+    {"name": "cursor",      "kind": "cursor_usage_cache","adapter": "cursor",   "billing_provider": "cursor_subscription",  "ttl_seconds": 300, "path": "${TEMP}/cursor/statusline-usage-cache.json"},
+    {"name": "opencode-go", "kind": "opencode_go_cache", "adapter": "opencode", "billing_provider": "opencode_go",          "ttl_seconds": 900, "path": "${XDG_CACHE_HOME}/opencode-go/usage.json"}
   ]
 }

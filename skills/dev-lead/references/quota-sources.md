@@ -178,10 +178,11 @@ What each kind can produce, and when:
 
 ## `agy_quota_cache`
 
-- **Who writes it:** only the interactive Antigravity TUI
-  (`/tmp/gemini/statusline-quota-cache.json`), so `support_level` is
-  `tui_only`. The TUI writes the file when it renders a status line that
-  carries a quota payload: when someone uses it, or when `/usage` is run in
+- **Who writes it:** the status-line script the interactive Antigravity TUI runs
+  (aadev's `statusline.sh` writes `/tmp/gemini/statusline-quota-cache.json` from the `.quota`
+  payload on its stdin; `statusline.ps1` writes `${TEMP}/gemini/statusline-quota-cache.json`
+  on Windows), so `support_level` is `tui_only`. The script runs when the TUI renders a
+  status line that carries a quota payload: when someone uses it, or when `/usage` is run in
   it. An idle TUI does not rewrite it (measured 2026-10-19 on two hosts: a TUI
   open since 08:20 left the file untouched from 10:34 for more than 26
   minutes, and `/usage` rewrote it at once). With no TUI the file is absent or
@@ -396,11 +397,16 @@ they have open.
 `quota-snapshot.py` runs under native Windows Python (`py -3`); nothing else in dev-lead does
 (the review scripts are bash). On `win32`:
 
-- **Sources.** [`data/quota-sources.windows.json`](../../../data/quota-sources.windows.json) is the shipped file: `codex` and `claude`
-  (`${TEMP}/claude/statusline-usage-cache.json`). The other writers have no Windows port yet;
-  add their sources to a `quota-sources.json` in the plugin data directory once a cache path
-  exists. `${TEMP}` and `${LOCALAPPDATA}` expand in a path (the variable when absolute, else
-  the temp directory / `~\AppData\Local`).
+- **Sources.** [`data/quota-sources.windows.json`](../../../data/quota-sources.windows.json) is the shipped file: all five sources,
+  with these Windows cache paths (proven on a real host, 2026-10-28): `claude`
+  `${TEMP}/claude/statusline-usage-cache.json`, `agy` `${TEMP}/gemini/statusline-quota-cache.json`,
+  `cursor` `${TEMP}/cursor/statusline-usage-cache.json` (the statusline scripts in aadev
+  write them, the same JSON shapes as on Linux) and `opencode-go` `${XDG_CACHE_HOME}/opencode-go/usage.json`
+  (the go-usage plugin; `~/.cache` when XDG_CACHE_HOME is unset). A source whose writer is not
+  installed reads `missing`. `${TEMP}`, `${LOCALAPPDATA}` and `${XDG_CACHE_HOME}` expand in a path (the variable
+  when a fully qualified path, else `~\AppData\Local[\Temp]`, or `~/.cache` for the last).
+- **A BOM is tolerated** in a cache file on Windows (PowerShell's `[Text.Encoding]::UTF8` writes one
+  and the file would read `parse_error`); the writers should still use `UTF8Encoding($false)`.
 - **No refresh.** `--refresh` yields `<cli> refresh is not supported on Windows` for an
   opted-in source and starts nothing; a cache past its TTL reads `stale`.
 - **Codex.** The pipe is read by a thread (a selector cannot wait on a Windows pipe) and the

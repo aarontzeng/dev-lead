@@ -20,7 +20,7 @@ its closed vocabularies, who writes each source, what was verified and what
 was not. Nothing consumes the output yet.
 
 Native Windows (added 0.6.89; the POSIX behaviour above is unchanged): the shipped sources
-are data/quota-sources.windows.json (codex and claude only; ${TEMP} and ${LOCALAPPDATA}
+are data/quota-sources.windows.json (all five sources; ${TEMP} and ${LOCALAPPDATA}
 expand in a path), --refresh is refused per source (no tmux, no fcntl), codex's pipe is
 read by a thread instead of a selector, and `codex` is looked up through PATHEXT (never in
 the current directory). Known limits there: the cache file's owner is not checked (no uid
@@ -431,7 +431,7 @@ def read_cache(path):
     if len(raw) > MAX_CACHE_BYTES:
         return refused("cache file is larger than 1 MiB")
     try:
-        doc = json.loads(raw.decode("utf-8"))
+        doc = json.loads(raw.decode("utf-8-sig" if IS_WINDOWS else "utf-8"))   # Windows PowerShell's UTF8 adds a BOM
     except (ValueError, RecursionError):
         return None, None, "parse_error", "cache file is not valid JSON"
     if not isinstance(doc, dict):
