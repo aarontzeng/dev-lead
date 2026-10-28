@@ -3667,6 +3667,299 @@ def test_quota_snapshot_windows(tmp):
           posix_out == (None, "missing", "codex binary not found"), posix_out)
 
 
+QS_FAKE_HIDDEN_CLI = r"""#!@PYTHON@
+import json, os, sys, time
+mode = os.environ["FAKE_MODE"]
+with open(os.environ["FAKE_LOG"], "a") as fh:
+    fh.write(json.dumps({"pid": os.getpid(), "cwd": os.getcwd(), "argv": sys.argv[1:]}) + "\n")
+if mode == "exit":
+    sys.exit(3)
+if mode.startswith("write"):
+    time.sleep(float(mode[5:] or 0))
+    cache = os.environ["FAKE_CACHE"]
+    with open(cache + ".tmp", "w") as fh:
+        json.dump({"schema": 2, "unified": True, "weekly_pct": 1.0, "weekly_reset": "2026-10-25T00:00:00Z"}, fh)
+    os.replace(cache + ".tmp", cache)
+    os.makedirs(".remember", exist_ok=True)               # what a session hook leaves in the working directory
+    open(".remember/x", "w").write("residue")
+    open("residue.txt", "w").write("residue")
+time.sleep(120)
+"""
+
+
+def test_quota_snapshot_windows_refresh(tmp):
+    """spawn_hidden: the Windows refresh, simulated on this host with fake CLIs and a flock-backed msvcrt."""
+    import importlib.util as _ilu
+    import types as _types
+    import fcntl as _fcntl
+
+    def load(name, windows):
+        spec = _ilu.spec_from_file_location(name, QS_SCRIPT)
+        mod = _ilu.module_from_spec(spec)
+        saved = (sys.platform, sys.modules.get("fcntl", "absent"))
+        sys.path.insert(0, str(SCRIPTS))
+        try:
+            if windows:
+                sys.platform = "win32"
+                sys.modules["fcntl"] = None
+            spec.loader.exec_module(mod)
+        finally:
+            sys.path.pop(0)
+            sys.platform = saved[0]
+            if saved[1] == "absent":
+                sys.modules.pop("fcntl", None)
+            else:
+                sys.modules["fcntl"] = saved[1]
+        return mod
+    win, posix = load("qs_winref_under_test", True), load("qs_posixref_under_test", False)
+
+    def flock_msvcrt():                                          # a byte-range lock with a real exclusion behaviour
+        def locking(fd, mode, n):
+            if mode == 2:                                        # LK_NBLCK
+                try:
+                    _fcntl.flock(fd, _fcntl.LOCK_EX | _fcntl.LOCK_NB)
+                except BlockingIOError as exc:
+                    raise OSError(13, "locked") from exc
+            else:
+                _fcntl.flock(fd, _fcntl.LOCK_UN)
+        return _types.SimpleNamespace(LK_NBLCK=2, LK_UNLCK=0, locking=locking)
+    win.msvcrt = flock_msvcrt()
+    real_spawn = win._spawn_hidden
+    win._spawn_hidden = lambda argv, cwd: subprocess.Popen(argv, cwd=cwd)    # creationflags exist on Windows only
+
+    home = tmp / "refresh-home"
+    (home / ".cache").mkdir(parents=True)
+    binary = tmp / "refresh-bin"
+    binary.mkdir()
+    log, cache = tmp / "hidden.log", tmp / "hidden-cache.json"
+
+    def fake(path):
+        path.write_text(QS_FAKE_HIDDEN_CLI.replace("@PYTHON@", sys.executable))
+        path.chmod(0o755)
+    for name in ("agy.EXE", "opencode.EXE"):
+        fake(binary / name)
+    (binary / "shimmed.CMD").write_text("@echo off")
+    saved = {k: os.environ.get(k) for k in ("HOME", "USERPROFILE", "PATH", "PATHEXT", "LOCALAPPDATA",
+                                            "FAKE_MODE", "FAKE_LOG", "FAKE_CACHE")}
+
+    def env(mode):
+        os.environ.update(HOME=str(home), PATH=str(binary), PATHEXT=".EXE;.CMD", LOCALAPPDATA=str(tmp / "localapp"),
+                          FAKE_MODE=mode, FAKE_LOG=str(log), FAKE_CACHE=str(cache))
+
+    def ctx(wait):
+        return win.Context(None, "codex", 5, "0.0.0", refresh=True, refresh_wait=wait)
+
+    def runs():
+        return [json.loads(x) for x in log.read_text().splitlines()] if log.exists() else []
+
+    def gone(pid):
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return True
+        except OSError:
+            return False
+        for _ in range(40):
+            if not Path("/proc/%d" % pid).exists():
+                return True
+            time.sleep(0.05)
+        return False
+    workdir = home / ".cache" / "dev-lead" / "quota-tui"
+    try:
+        # -- success: the CLI starts in the empty working directory, the cache moves, the process is ended and the directory cleared
+        env("write1")
+        why = win.refresh_hidden(ctx(8), "agy_quota_cache", str(cache))
+        got = runs()
+        check("quota-snapshot windows refresh: a CLI that rewrites its cache ends the refresh with no problem",
+              why is None and len(got) == 1 and cache.exists(), (why, got))
+        check("quota-snapshot windows refresh: it ran in dev-lead's own empty directory and was ended afterwards",
+              got and got[0]["cwd"] == str(workdir.resolve()) and gone(got[0]["pid"]) and not list(workdir.iterdir()), got)
+        check("quota-snapshot windows refresh: agy is started as its resolved executable, no arguments",
+              got and got[0]["argv"] == [], got)
+        # -- opencode gets --standalone
+        log.unlink()
+        cache.unlink()
+        why = win.refresh_hidden(ctx(8), "opencode_go_cache", str(cache))
+        check("quota-snapshot windows refresh: opencode is started with --standalone",
+              why is None and runs()[0]["argv"] == ["--standalone"], (why, runs()))
+        # -- never writes
+        log.unlink()
+        cache.unlink()
+        env("sleep")
+        started = time.monotonic()
+        why = win.refresh_hidden(ctx(1), "agy_quota_cache", str(cache))
+        got = runs()
+        check("quota-snapshot windows refresh: a CLI that never writes is ended at the wait and named",
+              why == "agy refresh failed: agy.EXE did not rewrite its cache within 1 s" and time.monotonic() - started < 10
+              and got and gone(got[0]["pid"]), (why, got))
+        # -- exits early
+        log.unlink()
+        env("exit")
+        why = win.refresh_hidden(ctx(8), "agy_quota_cache", str(cache))
+        check("quota-snapshot windows refresh: a CLI that exits before writing is reported at once",
+              why is not None and "exited before it wrote its cache" in why, why)
+        # -- cursor: the newest versions directory, node.exe + index.js, --trust, and the 45 s minimum (shortened here)
+        local = tmp / "localapp" / "cursor-agent" / "versions"
+        for name in ("2026.10.9-aaaaaaa", "2026.10.22-27dcf5f", "2026.10.22-10-20-30-bbbbbbb", "2026.10.23-cccccc", "junk", "2026.10.2x-dd"):
+            (local / name).mkdir(parents=True)
+        for name in ("2026.10.9-aaaaaaa", "2026.10.22-27dcf5f", "2026.10.22-10-20-30-bbbbbbb"):
+            fake(local / name / "node.exe")
+            (local / name / "index.js").write_text("")
+        (local / "2026.10.23-cccccc" / "index.js").write_text("")                     # newest, but no node.exe: skipped
+        argv, why0 = win._cursor_agent_command()
+        check("quota-snapshot windows refresh: cursor-agent is the newest versions directory that has node.exe and index.js",
+              argv == [str(local / "2026.10.22-10-20-30-bbbbbbb" / "node.exe"),
+                       str(local / "2026.10.22-10-20-30-bbbbbbb" / "index.js"), "--trust"] and why0 is None, (argv, why0))
+        os.environ["LOCALAPPDATA"] = str(tmp / "no-localapp")
+        none_argv, none_why = win._cursor_agent_command()
+        os.environ["LOCALAPPDATA"] = str(tmp / "localapp")
+        check("quota-snapshot windows refresh: no cursor-agent installation is a named skip, not a crash",
+              none_argv is None and "versions directory was not found" in none_why, none_why)
+        log.unlink()
+        env("write2")
+        win.WINDOWS_MIN_WAIT = {"cursor_usage_cache": 6.0}
+        why = win.refresh_hidden(ctx(1), "cursor_usage_cache", str(cache))
+        win.WINDOWS_MIN_WAIT = {"cursor_usage_cache": 45.0}
+        check("quota-snapshot windows refresh: cursor waits at least its own minimum even when --refresh-wait is shorter",
+              why is None and runs()[0]["argv"][-1] == "--trust", (why, runs()))
+        env("sleep")
+        started = time.monotonic()
+        why = win.refresh_hidden(ctx(1), "agy_quota_cache", str(cache))
+        check("quota-snapshot windows refresh: a kind without a minimum waits what it was given",
+              why is not None and "within 1 s" in why and time.monotonic() - started < 10, why)
+        # -- executable resolution
+        os.environ["PATH"] = str(binary)
+        resolved = win._windows_refresh_argv("agy_quota_cache")
+        os.environ["PATH"] = str(tmp / "empty-bin")
+        missing = win._windows_refresh_argv("agy_quota_cache")
+        os.environ["PATH"] = str(binary)
+        check("quota-snapshot windows refresh: agy is its resolved executable, a missing CLI is named",
+              resolved == ([str(binary / "agy.EXE")], None)
+              and missing == (None, "agy refresh skipped: agy was not found on PATH"), (resolved, missing))
+        (binary / "agy.EXE").rename(binary / "agy.CMD")
+        shim = win._windows_refresh_argv("agy_quota_cache")
+        (binary / "agy.CMD").rename(binary / "agy.EXE")
+        check("quota-snapshot windows refresh: agy resolving to a .cmd shim is refused",
+              shim == (None, "agy refresh skipped: agy is a shell shim, not an executable"), shim)
+        # -- the single-flight lock
+        log.unlink(missing_ok=True)
+        env("write1")
+        os.makedirs(home / ".cache" / "dev-lead", exist_ok=True)
+        holder = os.open(str(home / ".cache" / "dev-lead" / "quota-tui.lock"), os.O_RDWR | os.O_CREAT)
+        win.msvcrt.locking(holder, win.msvcrt.LK_NBLCK, 1)
+        why = win.refresh_hidden(ctx(8), "agy_quota_cache", str(cache))
+        started_any = log.exists()
+        win.msvcrt.locking(holder, win.msvcrt.LK_UNLCK, 1)
+        os.close(holder)
+        why_after = win.refresh_hidden(ctx(8), "agy_quota_cache", str(cache))
+        check("quota-snapshot windows refresh: a second refresh is refused while the first holds the lock, and runs after it",
+              why == "agy refresh skipped: another refresh is running" and not started_any and why_after is None, (why, why_after))
+        # -- the working directory: residue is cleared, links are removed and never followed, a link as the directory is refused
+        elsewhere = tmp / "elsewhere"
+        elsewhere.mkdir()
+        (elsewhere / "keep.txt").write_text("mine")
+        workdir.mkdir(parents=True, exist_ok=True)
+        (workdir / ".remember").mkdir()
+        (workdir / ".remember" / "x").write_text("residue")
+        (workdir / "linked").symlink_to(elsewhere)
+        (workdir / "file.txt").write_text("residue")
+        log.unlink(missing_ok=True)
+        cache.unlink(missing_ok=True)
+        why = win.refresh_hidden(ctx(8), "agy_quota_cache", str(cache))
+        check("quota-snapshot windows refresh: residue is cleared before the start and a link in it is not followed",
+              why is None and (elsewhere / "keep.txt").exists() and not list(workdir.iterdir())
+              and runs()[0]["cwd"] == str(workdir.resolve()), (why, runs()))
+        for child in workdir.iterdir():
+            child.unlink()
+        workdir.rmdir()
+        workdir.symlink_to(elsewhere)
+        log.unlink(missing_ok=True)
+        why = win.refresh_hidden(ctx(8), "agy_quota_cache", str(cache))
+        workdir.unlink()
+        check("quota-snapshot windows refresh: a link as the working directory is refused and nothing starts",
+              why == "agy refresh skipped: its working directory is not a plain directory" and not log.exists()
+              and (elsewhere / "keep.txt").exists(), why)
+        # -- a process that will not stop is named, and the working directory is still cleared
+        stuck = []
+        win._spawn_hidden = lambda argv, cwd: stuck.append(subprocess.Popen(argv, cwd=cwd)) or stuck[-1]
+        real_end = win._end_process
+        win._end_process = lambda proc: False
+        env("write1")
+        log.unlink(missing_ok=True)
+        cache.unlink(missing_ok=True)
+        try:
+            why = win.refresh_hidden(ctx(8), "agy_quota_cache", str(cache))
+        finally:
+            win._end_process = real_end
+            for proc in stuck:
+                real_end(proc)
+            win._spawn_hidden = lambda argv, cwd: subprocess.Popen(argv, cwd=cwd)
+        check("quota-snapshot windows refresh: a refresh whose process cannot be stopped says so",
+              why == "agy refresh failed: agy.EXE could not be stopped", why)
+        # -- stopping
+        class _Stuck:
+            def poll(self):
+                return None
+
+            def kill(self):
+                pass
+
+            def wait(self, timeout=None):
+                raise subprocess.TimeoutExpired("x", timeout)
+        check("quota-snapshot windows refresh: a process that will not die is reported as not stopped",
+              win._end_process(_Stuck()) is False)
+        # -- the real launch call: no window, no redirected handles
+        calls = []
+        real_popen = win.subprocess.Popen
+        win.subprocess.Popen = lambda *a, **kw: calls.append((a, kw)) or "proc"
+        try:
+            returned = real_spawn(["x.exe", "--trust"], str(workdir))
+        finally:
+            win.subprocess.Popen = real_popen
+        check("quota-snapshot windows refresh: the launch has no window, no redirected handles and is not inherited",
+              returned == "proc" and calls == [((["x.exe", "--trust"],), {"cwd": str(workdir), "creationflags": 0x08000000})],
+              calls)
+        # -- spawn_hidden elsewhere, tmux_spawn on Windows, the dispatch and the staleness gate
+        check("quota-snapshot windows refresh: spawn_hidden is refused off Windows, tmux_spawn on Windows names its replacement",
+              "spawn_hidden is the Windows mode" in posix.refresh_hidden(posix.Context(None, "c", 5, "0"), "agy_quota_cache", "x")
+              and "spawn_hidden is the Windows mode" in win.refresh_tui(ctx(1), "agy_quota_cache", "x"))
+        log.unlink(missing_ok=True)
+        cache.unlink(missing_ok=True)
+        env("write1")
+        from datetime import datetime as _dt, timezone as _tz
+        now_dt = _dt.now(_tz.utc)
+        srcs = [{"name": "agy", "kind": "agy_quota_cache", "ttl_seconds": 300, "path": str(cache), "refresh": "spawn_hidden"},
+                {"name": "cursor", "kind": "cursor_usage_cache", "ttl_seconds": 300, "path": str(tmp / "other.json"),
+                 "refresh": "tmux_spawn"}]
+        problems = win.refresh_sources(srcs, ctx(8), now_dt)
+        first_runs = len(runs())
+        problems_fresh = win.refresh_sources(srcs[:1], ctx(8), now_dt)               # the cache is fresh now: nothing starts
+        check("quota-snapshot windows refresh: refresh_sources dispatches by mode and skips a fresh cache",
+              list(problems) == ["cursor"] and "not supported on Windows" in problems["cursor"] and first_runs == 1
+              and problems_fresh == {} and len(runs()) == first_runs, (problems, first_runs, problems_fresh))
+        # -- the config loader and the BOM in the wait loop
+        os.environ["PATH"] = saved["PATH"] or os.defpath                       # the script runs below need python3
+        r, doc = _qs(["--config", _qs_config(tmp, "hidden-ok", [dict(_qs_source("cursor_usage_cache", tmp / "c.json"),
+                                                                    refresh="spawn_hidden")])])
+        r_bad, _doc = _qs(["--config", _qs_config(tmp, "hidden-bad", [dict(_qs_source("claude_usage_cache", tmp / "c.json"),
+                                                                           refresh="spawn_hidden")])])
+        r_other, _doc = _qs(["--config", _qs_config(tmp, "hidden-other", [dict(_qs_source("cursor_usage_cache", tmp / "c.json"),
+                                                                              refresh="spawn_visible")])])
+        check("quota-snapshot windows refresh: the loader accepts spawn_hidden on a refreshable kind and names both modes otherwise",
+              r.returncode == 0 and r_bad.returncode == 2 and "tmux_spawn or spawn_hidden" in r_bad.stderr
+              and r_other.returncode == 2, (r.stderr, r_bad.stderr, r_other.stderr))
+        bom_cache = tmp / "bom-cache.json"
+        bom_cache.write_bytes(b"\xef\xbb\xbf" + json.dumps({"a": 1}).encode())
+        check("quota-snapshot windows refresh: a cache with a BOM counts as rewritten on Windows only",
+              win._rewritten(str(bom_cache), None) is True and posix._rewritten(str(bom_cache), None) is False)
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+
 def test_quota_snapshot_tui_refresh(tmp):
     """--refresh starts agy / cursor-agent in a PRIVATE tmux server, only when both opt-ins hold and the cache is stale."""
     runs_before = len(QS_RUNS)
@@ -12402,6 +12695,9 @@ def main():
     print("quota-snapshot.py on native Windows (simulated)")
     with tempfile.TemporaryDirectory() as td:
         test_quota_snapshot_windows(Path(td))
+    print("quota-snapshot.py spawn_hidden refresh on native Windows (simulated)")
+    with tempfile.TemporaryDirectory() as td:
+        test_quota_snapshot_windows_refresh(Path(td))
     print("install-opencode-go-usage.sh")
     with tempfile.TemporaryDirectory() as td:
         test_install_opencode_go_usage(Path(td))

@@ -21,7 +21,9 @@ was not. Nothing consumes the output yet.
 
 Native Windows (added 0.6.89; the POSIX behaviour above is unchanged): the shipped sources
 are data/quota-sources.windows.json (all five sources; ${TEMP} and ${LOCALAPPDATA}
-expand in a path), --refresh is refused per source (no tmux, no fcntl), codex's pipe is
+expand in a path), --refresh: a tmux_spawn source is refused (no tmux, no fcntl) and a spawn_hidden
+source (agy, cursor, opencode-go; opt-in in a host's own config) starts the CLI hidden and ends
+that process, see refresh_hidden; codex's pipe is
 read by a thread instead of a selector, and `codex` is looked up through PATHEXT (never in
 the current directory). Known limits there: the cache file's owner is not checked (no uid
 on NTFS); it is still refused when it is a symlink, not regular or over 1 MiB, but there is
@@ -89,8 +91,12 @@ from _common import ROOT, declared_version
 
 try:
     import fcntl
-except ImportError:                               # native Windows has no fcntl: no refresh there
+except ImportError:                               # native Windows has no fcntl: tmux_spawn is refused there
     fcntl = None
+try:
+    import msvcrt                                 # Windows only: the single-flight lock of spawn_hidden
+except ImportError:
+    msvcrt = None
 
 IS_WINDOWS = sys.platform == "win32"
 
@@ -221,6 +227,11 @@ def status_problem(status):
     if isinstance(status, str) and _SAFE_TOKEN.fullmatch(status):
         return "status is %s, not ok" % status
     return "status is not ok"
+
+
+def _decode_cache(raw):
+    """A cache file's text: strict UTF-8, except on Windows, where PowerShell's UTF8 writes a BOM."""
+    return raw.decode("utf-8-sig" if IS_WINDOWS else "utf-8")
 
 
 def _not_ours(st):
@@ -431,7 +442,7 @@ def read_cache(path):
     if len(raw) > MAX_CACHE_BYTES:
         return refused("cache file is larger than 1 MiB")
     try:
-        doc = json.loads(raw.decode("utf-8-sig" if IS_WINDOWS else "utf-8"))   # Windows PowerShell's UTF8 adds a BOM
+        doc = json.loads(_decode_cache(raw))
     except (ValueError, RecursionError):
         return None, None, "parse_error", "cache file is not valid JSON"
     if not isinstance(doc, dict):
@@ -507,6 +518,11 @@ def collect_cursor(src, ctx):
 # cache to change, and kills that server. No key is typed into anything, and
 # no model is called.
 REFRESH_TMUX_SPAWN = "tmux_spawn"
+REFRESH_SPAWN_HIDDEN = "spawn_hidden"             # Windows: the same idea without tmux (see refresh_hidden)
+REFRESH_MODES = (REFRESH_TMUX_SPAWN, REFRESH_SPAWN_HIDDEN)
+# cursor-agent wrote its cache 27 s after a hidden start on Windows (measured 2026-10-28 by a peer): the
+# caller's --refresh-wait is raised to this where it is shorter (the 60 s cap still applies to the option)
+WINDOWS_MIN_WAIT = {"cursor_usage_cache": 45.0}
 REFRESH_COMMANDS = {
     "agy_quota_cache": ("agy", ["agy"]),
     "cursor_usage_cache": ("cursor", ["cursor-agent", "--trust"]),
@@ -600,7 +616,8 @@ def refresh_tui(ctx, kind, path):
     beside the first."""
     label = REFRESH_COMMANDS[kind][0]
     if IS_WINDOWS or fcntl is None:
-        return "%s refresh is not supported on Windows (it needs tmux and POSIX file locks)" % label
+        return ("%s refresh is not supported on Windows (tmux_spawn needs tmux and POSIX file locks; "
+                "spawn_hidden is the Windows mode)" % label)
     base = os.path.join(os.path.expanduser("~"), ".cache", "dev-lead")
     lock_path = os.path.join(base, "quota-tui.lock")
     try:
@@ -892,9 +909,174 @@ def _rewritten(path, before):
         return False
     try:
         with open(path, "rb") as fh:
-            return isinstance(json.loads(fh.read(MAX_CACHE_BYTES + 1).decode("utf-8")), dict)
+            return isinstance(json.loads(_decode_cache(fh.read(MAX_CACHE_BYTES + 1))), dict)
     except (OSError, ValueError, RecursionError):
         return False
+
+
+# Windows (spawn_hidden): no tmux, so the CLI is started with no window and a console of its own,
+# and ended by terminating THAT process only. Measured on Windows 11 by a peer, 2026-10-28:
+# agy.exe rewrote its cache 9 s after the start, `opencode --standalone` about 10 s, and cursor-agent
+# 27 s (node.exe + index.js; it needs a real console, so its standard handles are never redirected:
+# redirected, it falls into print mode and exits). None exits by itself. Starting a .cmd/.ps1 shim
+# would end the shell, not the CLI, so only a real executable is started, cursor-agent through the
+# newest versions\ directory the way its own launcher picks it.
+_CURSOR_VERSION_DIR = re.compile(r"(\d{4})\.(\d{1,2})\.(\d{1,2})(?:-(\d{2})-(\d{2})-(\d{2}))?-[a-f0-9]+\Z")
+_WINDOWS_SHIMS = (".cmd", ".bat", ".ps1")
+_REPARSE_POINT = 0x400                            # FILE_ATTRIBUTE_REPARSE_POINT: a junction or a link
+
+
+def _spawn_hidden(argv, cwd):
+    """Start argv with no window and a console of its own. Its standard handles are not redirected and
+    are not inherited (close_fds), so it cannot write into this collector's output."""
+    return subprocess.Popen(argv, cwd=cwd, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000))
+
+
+def _cursor_agent_command():
+    """([node.exe, index.js, --trust], None) from the newest versions\\ directory, or (None, why)."""
+    local = _windows_dir("LOCALAPPDATA") or os.path.join(os.path.expanduser("~"), "AppData", "Local")
+    root = os.path.join(local, "cursor-agent", "versions")
+    try:
+        names = os.listdir(root)
+    except OSError:
+        return None, "cursor refresh skipped: cursor-agent's versions directory was not found"
+    found = []
+    for name in names:
+        m = _CURSOR_VERSION_DIR.match(name)
+        if m:
+            found.append((tuple(int(g) if g else 0 for g in m.groups()), name))
+    for _key, name in sorted(found, reverse=True):
+        node, index = (os.path.join(root, name, f) for f in ("node.exe", "index.js"))
+        if os.path.isfile(node) and os.path.isfile(index):
+            return [node, index, "--trust"], None
+    return None, "cursor refresh skipped: no cursor-agent version with node.exe and index.js was found"
+
+
+def _windows_refresh_argv(kind):
+    """(argv, None) for the kind's CLI on Windows, or (None, why not)."""
+    label, command = REFRESH_COMMANDS[kind]
+    if kind == "cursor_usage_cache":
+        return _cursor_agent_command()
+    exe = _windows_which(command[0])
+    if exe is None:
+        return None, "%s refresh skipped: %s was not found on PATH" % (label, command[0])
+    if os.path.splitext(exe)[1].lower() in _WINDOWS_SHIMS:
+        return None, "%s refresh skipped: %s is a shell shim, not an executable" % (label, command[0])
+    return [exe] + command[1:], None
+
+
+def _windows_clear(workdir):
+    """Empty `workdir`: a link or junction is removed itself, never followed."""
+    try:
+        names = os.listdir(workdir)
+    except OSError:
+        return
+    for name in names:
+        full = os.path.join(workdir, name)
+        try:
+            st = os.lstat(full)
+            if stat.S_ISLNK(st.st_mode) or getattr(st, "st_file_attributes", 0) & _REPARSE_POINT:
+                try:
+                    os.unlink(full)
+                except OSError:
+                    os.rmdir(full)
+            elif stat.S_ISDIR(st.st_mode):
+                shutil.rmtree(full, ignore_errors=True)
+            else:
+                os.unlink(full)
+        except (OSError, RecursionError):
+            pass
+
+
+def _windows_workdir(label, workdir):
+    """None when `workdir` is a plain, empty directory of dev-lead's own, else why not. The CLI is
+    started trusting it (cursor-agent --trust), so it must not be a link or junction to somewhere else."""
+    try:
+        os.makedirs(workdir, exist_ok=True)
+        st = os.lstat(workdir)
+    except OSError as exc:
+        return "%s refresh failed: cannot create its working directory (%s)" % (label, errno_name(exc))
+    if stat.S_ISLNK(st.st_mode) or not stat.S_ISDIR(st.st_mode) \
+            or getattr(st, "st_file_attributes", 0) & _REPARSE_POINT:
+        return "%s refresh skipped: its working directory is not a plain directory" % label
+    _windows_clear(workdir)                       # what an earlier run or a hook left (cursor-agent runs session hooks)
+    try:
+        if os.listdir(workdir):
+            return "%s refresh skipped: its working directory is not empty" % label
+    except OSError as exc:
+        return "%s refresh failed: cannot list its working directory (%s)" % (label, errno_name(exc))
+    return None
+
+
+def _end_process(proc):
+    """Terminate the process this script started, and only it. True when it is gone."""
+    if proc.poll() is None:
+        proc.kill()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            return False
+    return True
+
+
+def refresh_hidden(ctx, kind, path):
+    """Windows: start the kind's CLI hidden until its cache changes; None, or why not.
+
+    One refresh at a time on a host, by an exclusive byte-range lock on a file of dev-lead's own
+    (msvcrt.locking, which the system releases when the process dies, so no stale lock)."""
+    label = REFRESH_COMMANDS[kind][0]
+    if not IS_WINDOWS or msvcrt is None:
+        return "%s refresh: spawn_hidden is the Windows mode (use tmux_spawn elsewhere)" % label
+    base = os.path.join(os.path.expanduser("~"), ".cache", "dev-lead")
+    try:
+        os.makedirs(base, exist_ok=True)
+        lock = os.open(os.path.join(base, "quota-tui.lock"), os.O_RDWR | os.O_CREAT | getattr(os, "O_BINARY", 0), 0o600)
+    except OSError as exc:
+        return "%s refresh failed: cannot create its lock (%s)" % (label, errno_name(exc))
+    try:
+        try:
+            msvcrt.locking(lock, msvcrt.LK_NBLCK, 1)
+        except OSError:
+            return "%s refresh skipped: another refresh is running" % label
+        return _hidden_locked(ctx, kind, path, base)
+    finally:
+        os.close(lock)                            # closing releases the lock
+
+
+def _hidden_locked(ctx, kind, path, base):
+    label = REFRESH_COMMANDS[kind][0]
+    argv, why = _windows_refresh_argv(kind)
+    if why:
+        return why
+    workdir = os.path.join(base, "quota-tui")
+    problem = _windows_workdir(label, workdir)
+    if problem:
+        return problem
+    wait = max(ctx.refresh_wait, WINDOWS_MIN_WAIT.get(kind, 0.0))
+    before = _mtime_or_none(path)
+    try:
+        proc = _spawn_hidden(argv, workdir)
+    except OSError as exc:
+        return "%s refresh failed: cannot start %s (%s)" % (label, os.path.basename(argv[0]), errno_name(exc))
+    exited_early = False
+    try:
+        deadline = time.monotonic() + wait
+        while time.monotonic() < deadline and not _rewritten(path, before):
+            if proc.poll() is not None:
+                exited_early = True
+                break
+            time.sleep(0.25)
+    finally:
+        stopped = _end_process(proc)
+        _windows_clear(workdir)
+    if not stopped:
+        return "%s refresh failed: %s could not be stopped" % (label, os.path.basename(argv[0]))
+    if _rewritten(path, before):                  # judged after the stop: a write that lands as it ends counts
+        return None
+    if exited_early:
+        return ("%s refresh failed: %s exited before it wrote its cache; run it once in a terminal to see why"
+                % (label, os.path.basename(argv[0])))
+    return "%s refresh failed: %s did not rewrite its cache within %g s" % (label, os.path.basename(argv[0]), wait)
 
 
 def refresh_sources(sources, ctx, when):
@@ -907,7 +1089,8 @@ def refresh_sources(sources, ctx, when):
     """
     problems = {}
     for src in sources:
-        if src.get("refresh") != REFRESH_TMUX_SPAWN:
+        mode = src.get("refresh")
+        if mode not in REFRESH_MODES:
             continue
         path = expand_path(src["path"])
         mtime = _mtime_or_none(path)
@@ -916,7 +1099,7 @@ def refresh_sources(sources, ctx, when):
             age = (when - updated).total_seconds()
             if -CLOCK_SKEW_SECONDS <= age <= src["ttl_seconds"]:
                 continue                          # fresh already: nothing to start
-        why = refresh_tui(ctx, src["kind"], path)
+        why = (refresh_hidden if mode == REFRESH_SPAWN_HIDDEN else refresh_tui)(ctx, src["kind"], path)
         if why:
             problems[src["name"]] = why
     return problems
@@ -1435,10 +1618,10 @@ def load_config(path):
             raise UsageError("%s: kind %s needs a path" % (where, src["kind"]))
         if src["name"] in seen:
             raise UsageError("%s: duplicate name %s" % (where, " ".join(src["name"].split())))
-        if "refresh" in src and not (src["refresh"] == REFRESH_TMUX_SPAWN
+        if "refresh" in src and not (src["refresh"] in REFRESH_MODES
                                      and src["kind"] in REFRESH_COMMANDS):
             raise UsageError("%s: refresh is only %s, and only on %s" % (
-                where, REFRESH_TMUX_SPAWN, " or ".join(sorted(REFRESH_COMMANDS))))
+                where, " or ".join(REFRESH_MODES), " or ".join(sorted(REFRESH_COMMANDS))))
         seen.add(src["name"])
     return sources
 

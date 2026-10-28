@@ -407,8 +407,25 @@ they have open.
   when a fully qualified path, else `~\AppData\Local[\Temp]`, or `~/.cache` for the last).
 - **A BOM is tolerated** in a cache file on Windows (PowerShell's `[Text.Encoding]::UTF8` writes one
   and the file would read `parse_error`); the writers should still use `UTF8Encoding($false)`.
-- **No refresh.** `--refresh` yields `<cli> refresh is not supported on Windows` for an
-  opted-in source and starts nothing; a cache past its TTL reads `stale`.
+- **Refresh is `spawn_hidden`, not `tmux_spawn`.** A source marked `"refresh": "tmux_spawn"` yields
+  `<cli> refresh is not supported on Windows` and starts nothing. A host opts in (twice, like tmux:
+  `--refresh` and the mark, in its own `quota-sources.json`; the shipped file never marks) with
+  `"refresh": "spawn_hidden"` on an agy, cursor or opencode-go source. A stale cache then starts the
+  CLI with no window and a console of its own, waits for the cache to be rewritten whole, and ends
+  that one process (`TerminateProcess` on its pid, no tree, so opencode's background service is left
+  alone). Measured on Windows 11 (2026-10-28, a peer): agy 9 s, `opencode --standalone` about 10 s,
+  cursor-agent 27 s. Details that matter: only a real executable is started (a `.cmd` / `.ps1` shim is
+  refused: ending it would end the shell, not the CLI); cursor-agent is `node.exe index.js --trust`
+  from the newest `%LOCALAPPDATA%\cursor-agent\versions\<date>-<hash>` directory that has both files,
+  and its standard handles are NOT redirected (redirected, it falls into print mode and exits); the
+  wait is at least 45 s for cursor whatever `--refresh-wait` says; the working directory is
+  `~/.cache/dev-lead/quota-tui`, emptied before and after (a link or junction in it is removed, never
+  followed; a link AS the directory is refused); one refresh at a time by an exclusive byte-range lock
+  (`msvcrt.locking`, released by the system when the process dies). No key is typed, no model is
+  called. Known limits: a CLI's own detached helpers (cursor's statusline background worker) are not
+  reached by ending the CLI; a console host process may linger briefly; nothing here has run on
+  Windows in this repo's own tests, only the simulation `test_quota_snapshot_windows_refresh`.
+  Without the mark, a cache past its TTL reads `stale`.
 - **Codex.** The pipe is read by a thread (a selector cannot wait on a Windows pipe) and the
   binary is looked up through `PATHEXT`. Ending a `codex.cmd` shim with `terminate()` may leave
   the node process under it running.
