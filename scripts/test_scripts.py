@@ -3347,6 +3347,23 @@ def test_quota_snapshot_windows(tmp):
           got == {"\\quota": None, "C:quota": None, "relative": None, "C:\\quota": "C:\\quota",
                   "\\\\server\\share\\q": "\\\\server\\share\\q", "empty": None}, got)
 
+    real_os = win.os
+    win.os = _NtOs()
+    saved_xdg = os.environ.get("XDG_CACHE_HOME")
+    try:
+        os.environ["XDG_CACHE_HOME"] = "\\quota"
+        xdg_rel = win.expand_path("${XDG_CACHE_HOME}/x")
+        os.environ["XDG_CACHE_HOME"] = "C:\\cache"
+        xdg_abs = win.expand_path("${XDG_CACHE_HOME}/x")
+    finally:
+        win.os = real_os
+        if saved_xdg is None:
+            os.environ.pop("XDG_CACHE_HOME", None)
+        else:
+            os.environ["XDG_CACHE_HOME"] = saved_xdg
+    check("quota-snapshot windows: XDG_CACHE_HOME follows the same fully-qualified rule on Windows",
+          xdg_rel == os.path.join(os.path.expanduser("~"), ".cache") + "/x" and xdg_abs == "C:\\cache/x", (xdg_rel, xdg_abs))
+
     # the reader thread, on a plain pipe
     def pipe_reader():
         rfd, wfd = os.pipe()
@@ -3398,24 +3415,49 @@ def test_quota_snapshot_windows(tmp):
     win._reap(proc, rd)
     held = not proc.stdout.closed and proc.stdin.closed
     os.close(wfd)
-    check("quota-snapshot windows: the pipe is not closed while the reader thread is still in a read",
-          held and rd.close() is True)
+    kept = (proc, rd) in win._LEAKED
+    win._LEAKED.clear()
+    check("quota-snapshot windows: the pipe is not closed while the reader thread is still in a read, and is kept alive",
+          held and kept and rd.close() is True)
     os.close(rfd)
+    exits, real_exit = [], os._exit
+    os._exit = lambda code: exits.append(code)
+    try:
+        win._finish()
+        win._LEAKED.append((None, None))
+        win._finish()
+    finally:
+        os._exit = real_exit
+        win._LEAKED.clear()
+    check("quota-snapshot windows: the process leaves without finalizers only when a reader thread was left in a read",
+          exits == [0], exits)
 
     # the process tree: Windows runs taskkill /T /F on the pid it started, then falls through to terminate()
     calls = []
     real_run = win.subprocess.run
-    win.subprocess.run = lambda argv, **kw: calls.append(argv) or subprocess.CompletedProcess(argv, 0)
+    win.subprocess.run = lambda argv, **kw: calls.append((argv, kw)) or subprocess.CompletedProcess(argv, 0)
+    saved_root = os.environ.get("SystemRoot")
+    os.environ["SystemRoot"] = str(tmp / "sysroot")
     sleeper = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
     try:
         win._stop(sleeper)
         posix._stop(subprocess.Popen([sys.executable, "-c", "pass"]))        # an exited-soon child: no taskkill on POSIX
+        os.environ.pop("SystemRoot")
+        other = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+        win._stop(other)
     finally:
         win.subprocess.run = real_run
-        sleeper.kill()
-        sleeper.wait()
-    check("quota-snapshot windows: the child's whole tree is ended with taskkill /T /F, and only on Windows",
-          calls == [["taskkill", "/PID", str(sleeper.pid), "/T", "/F"]], calls)
+        if saved_root is None:
+            os.environ.pop("SystemRoot", None)
+        else:
+            os.environ["SystemRoot"] = saved_root
+        for child in (sleeper, other):
+            child.kill()
+            child.wait()
+    check("quota-snapshot windows: the child's whole tree is ended with the SYSTEM taskkill /T /F, bounded, and only on Windows",
+          [c[0] for c in calls] == [[os.path.join(str(tmp / "sysroot"), "System32", "taskkill.exe"), "/PID", str(sleeper.pid), "/T", "/F"],
+                                    [os.path.join("C:\\Windows", "System32", "taskkill.exe"), "/PID", str(other.pid), "/T", "/F"]]
+          and all(c[1].get("timeout") == 5 and c[1].get("check") is False for c in calls), calls)
     real_run = win.subprocess.run
 
     def no_taskkill(argv, **kw):
@@ -3431,21 +3473,38 @@ def test_quota_snapshot_windows(tmp):
         sleeper.wait()
     check("quota-snapshot windows: without taskkill terminate() still ends the child", ended)
 
-    # shutil.which finds the current directory first on Windows: a binary planted there is not used
-    real_which, here = win.shutil.which, os.getcwd()
+    # the current directory is never searched, and the caller never gets a bare name back to start
+    cwd_dir, path_dir, rel_dir = tmp / "cwd", tmp / "pathdir", tmp / "relative-bin"
+    for d in (cwd_dir, path_dir, rel_dir):
+        d.mkdir()
+    (cwd_dir / "codex.EXE").write_text("planted")
+    (cwd_dir / "relative-bin").mkdir()
+    (cwd_dir / "relative-bin" / "codex.CMD").write_text("planted through a relative PATH entry")
+    saved_env = {k: os.environ.get(k) for k in ("PATH", "PATHEXT")}
+    saved_cwd = os.getcwd()
     try:
-        win.shutil.which = lambda name: os.path.join(here, "codex.cmd")
-        planted = win._windows_which("codex")
-        win.shutil.which = lambda name: os.path.join(str(tmp), "bin", "codex.cmd")
-        found = win._windows_which("codex")
+        os.chdir(cwd_dir)
+        os.environ["PATHEXT"] = ".EXE;.CMD"
+        os.environ["PATH"] = os.pathsep.join(["", ".", "relative-bin", str(cwd_dir)])
+        only_planted = win._windows_which("codex")
+        (path_dir / "codex.CMD").write_text("genuine")
+        os.environ["PATH"] = os.pathsep.join(["", ".", "relative-bin", str(cwd_dir), str(path_dir)])
+        genuine = win._windows_which("codex")
+        (path_dir / "codex.EXE").write_text("genuine exe")                 # PATHEXT order: .EXE before .CMD
+        ordered = win._windows_which("codex")
         given = win._windows_which(os.path.join(str(tmp), "my", "codex"))
-        win.shutil.which = lambda name: None
-        none = win._windows_which("codex")
+        with_ext = win._windows_which("codex.CMD")
     finally:
-        win.shutil.which = real_which
-    check("quota-snapshot windows: codex is never resolved to the current directory, a path is used as given",
-          planted == "codex" and found == os.path.join(str(tmp), "bin", "codex.cmd")
-          and given == os.path.join(str(tmp), "my", "codex") and none == "codex", (planted, found, given, none))
+        os.chdir(saved_cwd)
+        for k, v in saved_env.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+    check("quota-snapshot windows: codex is never found in the current directory, an empty or relative PATH entry; no bare name is returned",
+          only_planted is None and genuine == str(path_dir / "codex.CMD") and ordered == str(path_dir / "codex.EXE")
+          and given == os.path.join(str(tmp), "my", "codex") and with_ext == str(path_dir / "codex.CMD"),
+          (only_planted, genuine, ordered, given, with_ext))
 
     # the codex exchange through the thread reader
     def exchange(scenario, timeout=5, result=None):
@@ -3504,25 +3563,29 @@ def test_quota_snapshot_windows(tmp):
     check("quota-snapshot windows: more output than the cap is refused",
           out == (None, "network_error", "codex wrote too much before replying"), out)
     # Windows has to resolve `codex` itself (a codex.cmd shim is not found by Popen's own search)
-    fake = tmp / "win-fake-normal"
-    real_which = win.shutil.which
-    win.shutil.which = lambda name: str(fake) if name == "codex-shim-name" else real_which(name)
-    saved = {k: os.environ.get(k) for k in ("FAKE_CODEX_SCENARIO", "FAKE_CODEX_PIDFILE",
-                                            "FAKE_CODEX_LOG", "FAKE_CODEX_RESULT")}
+    shim_dir = tmp / "shimdir"
+    shim_dir.mkdir()
+    shutil.copy(tmp / "win-fake-normal", shim_dir / "codex-shim-name.CMD")
+    bare_dir = tmp / "baredir"
+    bare_dir.mkdir()
+    shutil.copy(tmp / "win-fake-normal", bare_dir / "codex-bare")                # runnable by a POSIX PATH search, not by ours
+    saved = {k: os.environ.get(k) for k in ("FAKE_CODEX_SCENARIO", "FAKE_CODEX_PIDFILE", "FAKE_CODEX_LOG",
+                                            "FAKE_CODEX_RESULT", "PATH", "PATHEXT")}
     os.environ.update(FAKE_CODEX_SCENARIO="normal", FAKE_CODEX_PIDFILE=str(tmp / "which.pid"),
-                      FAKE_CODEX_LOG=str(tmp / "which.log"), FAKE_CODEX_RESULT="{}")
+                      FAKE_CODEX_LOG=str(tmp / "which.log"), FAKE_CODEX_RESULT="{}",
+                      PATH=os.pathsep.join([str(shim_dir), str(bare_dir)]), PATHEXT=".CMD")
     try:
         out = win.codex_exchange(win.Context(None, "codex-shim-name", 5, "0.0.0"))
+        nowhere = win.codex_exchange(win.Context(None, "codex-bare", 5, "0.0.0"))
         posix_out = posix.codex_exchange(posix.Context(None, "codex-shim-name", 5, "0.0.0"))
     finally:
-        win.shutil.which = real_which
         for k, v in saved.items():
             if v is None:
                 os.environ.pop(k, None)
             else:
                 os.environ[k] = v
-    check("quota-snapshot windows: the codex binary is resolved through which()",
-          out == ({}, None, None), out)
+    check("quota-snapshot windows: the codex binary is found through PATH and PATHEXT, and a missing one is reported",
+          out == ({}, None, None) and nowhere == (None, "missing", "codex binary not found"), (out, nowhere))
     check("quota-snapshot windows: POSIX hands the name to Popen untouched (not found here)",
           posix_out == (None, "missing", "codex binary not found"), posix_out)
 

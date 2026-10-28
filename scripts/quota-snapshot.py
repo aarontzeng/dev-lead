@@ -26,8 +26,9 @@ read by a thread instead of a selector, and `codex` is looked up through PATHEXT
 the current directory). Known limits there: the cache file's owner is not checked (no uid
 on NTFS); it is still refused when it is a symlink, not regular or over 1 MiB, but there is
 no O_NOFOLLOW, so a symlink swapped in between the lstat and the open is caught only by
-the device/inode comparison; the codex process tree is ended with `taskkill /T /F` (terminate()
-is the fallback), and the reader thread's pipe is left open, not closed under it, when the
+the device/inode comparison; the codex process tree is ended with the system's `taskkill /T /F`
+while the launcher still runs (a launcher that exited and left a descendant is not reached: that
+needs a Job Object; terminate() is the fallback), and the reader thread's pipe is left open, not closed under it, when the
 thread has not ended 2 s after the process did; the pipe's binary mode is the one io.FileIO
 sets on the descriptor Popen hands it (not asserted here); none of this has run on Windows
 in this repo's own tests, only the simulation in test_quota_snapshot_windows.
@@ -227,15 +228,16 @@ def _not_ours(st):
     return hasattr(os, "geteuid") and st.st_uid != os.geteuid()
 
 
+def _is_abs(value):
+    """os.path.isabs(), except that on Windows a drive or a UNC share is required: before Python 3.13
+    isabs() is also true for \\quota, which depends on the current drive."""
+    return PureWindowsPath(value).is_absolute() if os.name == "nt" else os.path.isabs(value)
+
+
 def _windows_dir(name):
-    """The environment variable `name` when it is a fully qualified path, else None. On Windows
-    Python before 3.13 os.path.isabs() is also true for \\quota, which depends on the current
-    drive; a drive or a UNC share is required here."""
+    """The environment variable `name` when it is a fully qualified path, else None."""
     value = os.environ.get(name, "")
-    if not value:
-        return None
-    ok = PureWindowsPath(value).is_absolute() if os.name == "nt" else os.path.isabs(value)
-    return value if ok else None
+    return value if value and _is_abs(value) else None
 
 
 # ----------------------------------------------------------------- records ----
@@ -247,7 +249,7 @@ def expand_path(raw):
     probed or written) and a leading ~\\."""
     home = os.path.expanduser("~")
     xdg = os.environ.get("XDG_CACHE_HOME", "")
-    cache = xdg if xdg and os.path.isabs(xdg) else os.path.join(home, ".cache")
+    cache = xdg if xdg and _is_abs(xdg) else os.path.join(home, ".cache")
     path = raw.replace("${XDG_CACHE_HOME}", cache)
     if IS_WINDOWS:
         fallback = os.path.join(home, "AppData", "Local")
@@ -1078,7 +1080,8 @@ class _ThreadLineReader:
     A daemon thread blocks in os.read and queues what it gets; response() waits on the queue
     against the same deadline. The thread counts what it read and stops at MAX_CODEX_BYTES, so
     the queue holds at most that much; it also ends on EOF or an error, and the end is
-    remembered, so every later response() sees it again (as _LineReader's read does).
+    remembered, so every later response() sees it again (as _LineReader's read does, except
+    after the cap: the exchange ends at its first error, so a second wait never happens).
     _reap ends the process, then close() waits for the thread, and the pipe is only closed
     once the thread is gone: a descriptor number is never read after it was reused."""
 
@@ -1147,16 +1150,25 @@ class _ThreadLineReader:
 
 
 def _windows_which(name):
-    """`name` resolved through PATH and PATHEXT (codex is a codex.cmd shim there and Popen does not search
-    PATHEXT), but never to a file in the current directory, which shutil.which searches first on Windows:
-    a codex.exe planted next to wherever the collector runs would otherwise be started. A name with a
-    directory part is the caller's own choice and is used as given."""
+    """The absolute path of `name` found in the PATH directories with the PATHEXT extensions (codex is a
+    codex.cmd shim there and Popen searches neither), or None. The current directory is never searched
+    (shutil.which does that first on Windows, and so does CreateProcess for a bare name): an empty or
+    relative PATH entry and the current directory itself are skipped, and the caller always starts the
+    returned absolute path, never the bare name. A name with a directory part is the caller's own choice
+    and is used as given."""
     if os.path.dirname(name):
         return name
-    found = shutil.which(name)
-    if found and os.path.normcase(os.path.dirname(os.path.abspath(found))) == os.path.normcase(os.getcwd()):
-        return name
-    return found or name
+    here = os.path.normcase(os.path.abspath(os.getcwd()))
+    exts = [e for e in os.environ.get("PATHEXT", ".COM;.EXE;.BAT;.CMD").split(";") if e]
+    own = [name] if os.path.splitext(name)[1].upper() in [e.upper() for e in exts] else []
+    for entry in os.environ.get("PATH", "").split(os.pathsep):
+        if not _is_abs(entry) or os.path.normcase(os.path.abspath(entry)) == here:      # "" and "." are not absolute
+            continue
+        for candidate in [name + e for e in exts] + own:
+            full = os.path.join(entry, candidate)
+            if os.path.isfile(full):
+                return full
+    return None
 
 
 def _send(proc, message):
@@ -1180,7 +1192,8 @@ def _reap(proc, reader):
         reader.close()
     for pipe in (proc.stdin, proc.stdout):
         if pipe is proc.stdout and not gone:
-            continue                             # the reader thread still holds it: closing could hand its number to another file
+            _LEAKED.append((proc, reader))       # kept for the life of the process: a finalizer closing the descriptor
+            continue                             # under the blocked read could hand its number to another file
         try:
             pipe.close()
         except OSError:
@@ -1188,12 +1201,25 @@ def _reap(proc, reader):
     _stop(proc)
 
 
+_LEAKED = []        # (proc, reader) whose reader thread was still reading when the process was reaped
+
+
+def _finish():
+    """Leave without running finalizers when a reader thread is still blocked in a read: closing its pipe at
+    interpreter exit would block on Windows. Everything the collector prints has been written by then."""
+    if _LEAKED:
+        sys.stdout.flush()
+        os._exit(0)
+
+
 def _kill_tree(proc):
     """Windows: end the child AND what it started. codex is a codex.cmd shim there; terminate() ends the
     cmd.exe, and the node process under it would keep running (and keep the pipe open). The pid is the one
     Popen returned for the process this script started."""
-    try:
-        subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"], stdin=subprocess.DEVNULL,
+    root = _windows_dir("SystemRoot") or "C:\\Windows"
+    try:                                         # the system's own taskkill, never one found by a bare-name search
+        subprocess.run([os.path.join(root, "System32", "taskkill.exe"), "/PID", str(proc.pid), "/T", "/F"],
+                       stdin=subprocess.DEVNULL,
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5, check=False)
     except (OSError, subprocess.SubprocessError):
         pass                                     # terminate() below is the fallback
@@ -1228,6 +1254,8 @@ def codex_exchange(ctx):
     codex_bin = ctx.codex_bin
     if IS_WINDOWS:
         codex_bin = _windows_which(codex_bin)
+        if codex_bin is None:
+            return None, "missing", "codex binary not found"
     argv = [codex_bin, "app-server", "--listen", "stdio://"]
     try:
         proc = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
@@ -1480,6 +1508,7 @@ def main(argv=None):
         records.extend(collect(src, ctx))
     out = {"schema_version": SCHEMA_VERSION, "generated_at": fmt_ts(now), "records": records}
     sys.stdout.write(json.dumps(out, indent=2, allow_nan=False) + "\n")
+    _finish()
     return 0
 
 
