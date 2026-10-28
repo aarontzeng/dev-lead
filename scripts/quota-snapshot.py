@@ -19,6 +19,14 @@ references/quota-sources.md under skills/dev-lead gives the record shape and
 its closed vocabularies, who writes each source, what was verified and what
 was not. Nothing consumes the output yet.
 
+Native Windows (added 0.6.89; the POSIX behaviour above is unchanged): the shipped sources
+are data/quota-sources.windows.json (codex and claude only; ${TEMP} and ${LOCALAPPDATA}
+expand in a path), --refresh is refused per source (no tmux, no fcntl), codex's pipe is
+read by a thread instead of a selector, and `codex` is looked up through PATHEXT. Known
+limits there: the cache file's owner is not checked (no uid on NTFS) and the cache is
+still refused when it is a symlink, not regular or over 1 MiB; a codex.cmd shim is ended
+by terminate(), which may leave the node process under it running.
+
 Contract:
   * Exit 0 whenever the object was printed, even if every source failed (the
     failures are inside the records). Exit 2 for a usage or config error, with
@@ -55,24 +63,33 @@ from __future__ import annotations
 
 import argparse
 import errno
-import fcntl
 import json
 import math
 import os
+import queue
 import re
 import selectors
 import shutil
 import stat
 import subprocess
 import sys
+import tempfile
+import threading
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from _common import ROOT, declared_version
 
+try:
+    import fcntl
+except ImportError:                               # native Windows has no fcntl: no refresh there
+    fcntl = None
+
+IS_WINDOWS = sys.platform == "win32"
+
 SCHEMA_VERSION = 1
-DEFAULT_CONFIG = ROOT / "data" / "quota-sources.json"
+DEFAULT_CONFIG = ROOT / "data" / ("quota-sources.windows.json" if IS_WINDOWS else "quota-sources.json")
 CONFIG_ENV = "DEV_LEAD_QUOTA_SOURCES"
 LOCAL_CONFIG_NAME = "quota-sources.json"   # in dev-lead's plugin data dir, beside roster.json
 PLUGIN_NAME = "dev-lead"
@@ -200,13 +217,30 @@ def status_problem(status):
     return "status is not ok"
 
 
+def _not_ours(st):
+    """True when `st` belongs to another user. Windows has no uid (st_uid is always 0 there), so
+    nothing is ever refused on that ground: the owner checks are a POSIX defence only."""
+    return hasattr(os, "geteuid") and st.st_uid != os.geteuid()
+
+
 # ----------------------------------------------------------------- records ----
 def expand_path(raw):
-    """A leading ~ and ${XDG_CACHE_HOME}; the latter only when set, non-empty and absolute."""
+    """A leading ~ and ${XDG_CACHE_HOME}; the latter only when set, non-empty and absolute.
+
+    On Windows also ${TEMP} and ${LOCALAPPDATA} (the environment variable when it is an absolute
+    path, else the temp directory / ~\\AppData\\Local) and a leading ~\\."""
     home = os.path.expanduser("~")
     xdg = os.environ.get("XDG_CACHE_HOME", "")
     cache = xdg if xdg and os.path.isabs(xdg) else os.path.join(home, ".cache")
     path = raw.replace("${XDG_CACHE_HOME}", cache)
+    if IS_WINDOWS:
+        temp = os.environ.get("TEMP", "")
+        local = os.environ.get("LOCALAPPDATA", "")
+        path = path.replace("${TEMP}", temp if temp and os.path.isabs(temp) else tempfile.gettempdir())
+        path = path.replace("${LOCALAPPDATA}", local if local and os.path.isabs(local)
+                            else os.path.join(home, "AppData", "Local"))
+        if path.startswith("~\\"):
+            path = home + path[1:]
     if path == "~" or path.startswith("~/"):
         path = home + path[1:]
     return path
@@ -354,12 +388,13 @@ def read_cache(path):
         return refused("cache file is a symlink")
     if not stat.S_ISREG(before.st_mode):
         return refused("cache file is not a regular file")
-    if before.st_uid != os.geteuid():
+    if _not_ours(before):
         return refused("cache file is not owned by the current user")
     if before.st_size > MAX_CACHE_BYTES:
         return refused("cache file is larger than 1 MiB")
 
-    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0) \
+        | getattr(os, "O_BINARY", 0)              # Windows only: no newline or Ctrl-Z translation
     try:
         fd = os.open(path, flags)
     except FileNotFoundError:
@@ -373,7 +408,7 @@ def read_cache(path):
         if not stat.S_ISREG(after.st_mode) or \
                 (after.st_dev, after.st_ino) != (before.st_dev, before.st_ino):
             return refused("cache file changed while it was being opened")
-        if after.st_uid != os.geteuid():
+        if _not_ours(after):
             return refused("cache file is not owned by the current user")
         raw = fh.read(MAX_CACHE_BYTES + 1)
     if len(raw) > MAX_CACHE_BYTES:
@@ -547,12 +582,14 @@ def refresh_tui(ctx, kind, path):
     waits its turn by being refused ("another refresh is running"), never by running
     beside the first."""
     label = REFRESH_COMMANDS[kind][0]
+    if IS_WINDOWS or fcntl is None:
+        return "%s refresh is not supported on Windows (it needs tmux and POSIX file locks)" % label
     base = os.path.join(os.path.expanduser("~"), ".cache", "dev-lead")
     lock_path = os.path.join(base, "quota-tui.lock")
     try:
         os.makedirs(base, mode=0o700, exist_ok=True)
         st = os.lstat(base)
-        if not stat.S_ISDIR(st.st_mode) or st.st_uid != os.geteuid():
+        if not stat.S_ISDIR(st.st_mode) or _not_ours(st):
             return "%s refresh skipped: ~/.cache/dev-lead is not a plain directory of the user's" % label
         os.chmod(base, 0o700)                     # a looser mode would let another user swap the lock file
         lock = os.open(lock_path, os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), 0o600)
@@ -584,7 +621,7 @@ def _inspect_workdir(label, workdir):
     except OSError as exc:
         return None, False, "%s refresh failed: cannot create its working directory (%s)" % (
             label, errno_name(exc))
-    if not stat.S_ISDIR(st.st_mode) or st.st_uid != os.geteuid():
+    if not stat.S_ISDIR(st.st_mode) or _not_ours(st):
         return None, False, "%s refresh skipped: its working directory is not a plain directory of the user's" % label
     try:
         os.chmod(workdir, 0o700)                  # an older, looser mode would let someone else add to it
@@ -701,7 +738,7 @@ def _clear_dir(path, identity=None):
         return False
     try:
         st = os.fstat(fd)
-        if not stat.S_ISDIR(st.st_mode) or st.st_uid != os.geteuid():
+        if not stat.S_ISDIR(st.st_mode) or _not_ours(st):
             return False
         if identity is not None and (st.st_dev, st.st_ino) != identity:
             return False
@@ -826,7 +863,7 @@ def _remove_socket(name):
     path = os.path.join(_tmux_socket_dir(), name)
     try:
         st = os.lstat(path)
-        if stat.S_ISSOCK(st.st_mode) and st.st_uid == os.geteuid():
+        if stat.S_ISSOCK(st.st_mode) and not _not_ours(st):
             os.unlink(path)
     except OSError:
         pass
@@ -1021,6 +1058,62 @@ class _LineReader:
             self.buf += chunk
 
 
+class _ThreadLineReader:
+    """_LineReader's interface for Windows, where selectors cannot wait on a pipe.
+
+    A daemon thread blocks in os.read and queues what it gets; response() waits on the queue
+    against the same deadline. The thread ends when the process does (EOF or an error on the
+    pipe), so _reap ends the process before it closes the pipe."""
+
+    def __init__(self, fd):
+        self.fd = fd
+        self.buf = b""
+        self.total = 0
+        self.chunks = queue.Queue()
+        threading.Thread(target=self._pump, daemon=True).start()
+
+    def _pump(self):
+        while True:
+            try:
+                chunk = os.read(self.fd, 65536)
+            except OSError:
+                chunk = None                     # None: the read failed; b"": EOF
+            self.chunks.put(chunk if chunk is not None else OSError)
+            if not chunk:
+                return
+
+    def close(self):
+        pass
+
+    _response = staticmethod(_LineReader._response)
+
+    def response(self, awaited, deadline):
+        """(message, None), or (None, why) on EOF, deadline or too much output."""
+        while True:
+            while b"\n" in self.buf:
+                line, self.buf = self.buf.split(b"\n", 1)
+                msg = self._response(line, awaited)
+                if msg is not None:
+                    return msg, None
+            left = deadline - time.monotonic()
+            if left <= 0:
+                return None, "no reply within the timeout"
+            try:
+                chunk = self.chunks.get(timeout=left)
+            except queue.Empty:
+                continue
+            if chunk is OSError:
+                return None, "read from codex failed"
+            if not chunk:
+                msg = self._response(self.buf, awaited) if self.buf else None
+                self.buf = b""
+                return (msg, None) if msg is not None else (None, "codex closed the stream")
+            self.total += len(chunk)
+            if self.total > MAX_CODEX_BYTES:
+                return None, "codex wrote too much before replying"
+            self.buf += chunk
+
+
 def _send(proc, message):
     data = (json.dumps(message) + "\n").encode("utf-8")
     fd = proc.stdin.fileno()
@@ -1036,11 +1129,17 @@ def _reap(proc, reader):
     """
     if reader is not None:
         reader.close()
+    if IS_WINDOWS:
+        _stop(proc)                              # a thread may be blocked reading the pipe: the process ends first
     for pipe in (proc.stdin, proc.stdout):
         try:
             pipe.close()
         except OSError:
             pass
+    _stop(proc)
+
+
+def _stop(proc):
     if proc.poll() is None:
         proc.terminate()
         try:
@@ -1064,7 +1163,10 @@ def codex_exchange(ctx):
     ctx.timeout bounds the exchange; reaping the process adds at most about 2 s.
     """
     deadline = time.monotonic() + ctx.timeout
-    argv = [ctx.codex_bin, "app-server", "--listen", "stdio://"]
+    codex_bin = ctx.codex_bin
+    if IS_WINDOWS:
+        codex_bin = shutil.which(codex_bin) or codex_bin     # codex is a codex.cmd shim there; Popen does not search PATHEXT
+    argv = [codex_bin, "app-server", "--listen", "stdio://"]
     try:
         proc = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                 stderr=subprocess.DEVNULL)
@@ -1074,7 +1176,7 @@ def codex_exchange(ctx):
         return None, "error", "cannot start codex (%s)" % errno_name(exc)
     reader = None
     try:
-        reader = _LineReader(proc.stdout.fileno())
+        reader = (_ThreadLineReader if IS_WINDOWS else _LineReader)(proc.stdout.fileno())
         _send(proc, {"id": 1, "method": "initialize", "params": {
             "clientInfo": {"name": "dev_lead_quota", "version": ctx.version}}})
         msg, why = reader.response(1, deadline)

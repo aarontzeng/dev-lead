@@ -3216,6 +3216,175 @@ def test_install_opencode_go_usage(tmp):
           r.returncode == 0 and v1.read_text() == "a real file the user wrote", r.stderr)
 
 
+def test_quota_snapshot_windows(tmp):
+    """quota-snapshot.py on native Windows, simulated on this host: the module is loaded as win32 would
+    load it (no fcntl, sys.platform "win32"), and the codex exchange runs through the thread reader."""
+    import importlib.util as _ilu
+
+    def load(name, windows):
+        spec = _ilu.spec_from_file_location(name, QS_SCRIPT)
+        mod = _ilu.module_from_spec(spec)
+        saved = (sys.platform, sys.modules.get("fcntl", "absent"))
+        sys.path.insert(0, str(SCRIPTS))
+        try:
+            if windows:
+                sys.platform = "win32"
+                sys.modules["fcntl"] = None           # `import fcntl` raises ImportError, as on Windows
+            spec.loader.exec_module(mod)
+        finally:
+            sys.path.pop(0)
+            sys.platform = saved[0]
+            if saved[1] == "absent":
+                sys.modules.pop("fcntl", None)
+            else:
+                sys.modules["fcntl"] = saved[1]
+        return mod
+
+    win = load("qs_win_under_test", True)
+    posix = load("qs_posix_under_test", False)
+    check("quota-snapshot windows: the module imports without fcntl and knows it is on Windows",
+          win.fcntl is None and win.IS_WINDOWS is True)
+    check("quota-snapshot windows: the POSIX load is untouched (fcntl present, not Windows)",
+          posix.fcntl is not None and posix.IS_WINDOWS is False)
+    check("quota-snapshot windows: Windows ships its own default sources, POSIX the original",
+          win.DEFAULT_CONFIG.name == "quota-sources.windows.json"
+          and posix.DEFAULT_CONFIG.name == "quota-sources.json", (win.DEFAULT_CONFIG, posix.DEFAULT_CONFIG))
+    wdefault = json.loads((SCRIPTS.parent / "data" / "quota-sources.windows.json").read_text())
+    check("quota-snapshot windows: the shipped Windows sources are codex and claude from ${TEMP}",
+          [(x["name"], x["kind"], x.get("path")) for x in wdefault["sources"]]
+          == [("codex", "codex_app_server", None),
+              ("claude", "claude_usage_cache", "${TEMP}/claude/statusline-usage-cache.json")], wdefault)
+    r, doc = _qs(["--source", "claude", "--config", SCRIPTS.parent / "data" / "quota-sources.windows.json"],
+                 env=dict(os.environ, TEMP=str(tmp / "no-such-temp")))
+    check("quota-snapshot windows: the Windows sources file is accepted by the loader",
+          r.returncode == 0 and doc is not None and doc["records"][0]["read_status"] != "ok", r.stderr)
+
+    # the owner check: another user's file is refused on POSIX; Windows has no uid to compare
+    class _St:
+        st_uid = os.geteuid() + 1
+    check("quota-snapshot windows: POSIX still refuses another user's file", posix._not_ours(_St()) is True)
+    real_geteuid = os.geteuid
+    del os.geteuid
+    try:
+        check("quota-snapshot windows: with no geteuid nothing is refused as foreign-owned",
+              posix._not_ours(_St()) is False)
+        good = tmp / "win-claude.json"
+        good.write_text(json.dumps({"five_hour": {"utilization": 10, "resets_at": QS_RESET},
+                                    "seven_day": {"utilization": 20, "resets_at": QS_WEEK}}))
+        doc_, mtime, status, problem = win.read_cache(str(good))
+        check("quota-snapshot windows: a cache file is read where there is no geteuid",
+              status is None and isinstance(doc_, dict) and mtime is not None, (status, problem))
+    finally:
+        os.geteuid = real_geteuid
+
+    # paths
+    saved_env = {k: os.environ.get(k) for k in ("TEMP", "LOCALAPPDATA")}
+    try:
+        os.environ["TEMP"] = str(tmp / "t")
+        os.environ["LOCALAPPDATA"] = str(tmp / "l")
+        check("quota-snapshot windows: ${TEMP} and ${LOCALAPPDATA} expand from an absolute variable",
+              win.expand_path("${TEMP}/claude/x.json") == str(tmp / "t") + "/claude/x.json"
+              and win.expand_path("${LOCALAPPDATA}/oc/u.json") == str(tmp / "l") + "/oc/u.json")
+        check("quota-snapshot windows: POSIX leaves ${TEMP} alone",
+              posix.expand_path("${TEMP}/claude/x.json") == "${TEMP}/claude/x.json")
+        os.environ["TEMP"] = "relative"
+        os.environ.pop("LOCALAPPDATA")
+        check("quota-snapshot windows: a relative or missing variable falls back to a fixed directory",
+              win.expand_path("${TEMP}/c").startswith(win.tempfile.gettempdir())
+              and win.expand_path("${LOCALAPPDATA}/c").startswith(os.path.join(os.path.expanduser("~"), "AppData", "Local")))
+        check("quota-snapshot windows: a leading ~\\ means the home directory",
+              win.expand_path("~\\x") == os.path.expanduser("~") + "\\x")
+    finally:
+        for k, v in saved_env.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+    # no refresh: refused per source, nothing created
+    home = tmp / "win-home"
+    home.mkdir()
+    saved_home = os.environ.get("HOME")
+    os.environ["HOME"] = str(home)
+    try:
+        ctx = win.Context(None, "codex", 5, "0.0.0", refresh=True)
+        why = win.refresh_tui(ctx, "agy_quota_cache", str(tmp / "nope.json"))
+        check("quota-snapshot windows: --refresh is refused as unsupported and starts nothing",
+              isinstance(why, str) and "not supported on Windows" in why and not (home / ".cache").exists(), why)
+    finally:
+        if saved_home is None:
+            os.environ.pop("HOME", None)
+        else:
+            os.environ["HOME"] = saved_home
+
+    # the codex exchange through the thread reader
+    def exchange(scenario, timeout=5, result=None):
+        fake = tmp / ("win-fake-" + scenario)
+        fake.write_text(QS_FAKE_CODEX.replace("@PYTHON@", sys.executable))
+        fake.chmod(0o755)
+        pidfile, logfile = tmp / (scenario + ".pid"), tmp / (scenario + ".log")
+        saved = {k: os.environ.get(k) for k in ("FAKE_CODEX_SCENARIO", "FAKE_CODEX_PIDFILE",
+                                                "FAKE_CODEX_LOG", "FAKE_CODEX_RESULT")}
+        os.environ.update(FAKE_CODEX_SCENARIO=scenario, FAKE_CODEX_PIDFILE=str(pidfile),
+                          FAKE_CODEX_LOG=str(logfile), FAKE_CODEX_RESULT=json.dumps(result or {}))
+        started = time.monotonic()
+        try:
+            out = win.codex_exchange(win.Context(None, str(fake), timeout, "0.0.0"))
+        finally:
+            for k, v in saved.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+        return out, time.monotonic() - started, pidfile
+
+    out, took, pidfile = exchange("normal", result={"rateLimits": {"limitId": "codex"}})
+    check("quota-snapshot windows: the thread reader gets the rate-limits reply past the noise",
+          out == ({"rateLimits": {"limitId": "codex"}}, None, None), out)
+    check("quota-snapshot windows: the codex process is gone afterwards", _qs_pid_gone(pidfile))
+    out, took, pidfile = exchange("rpc_error")
+    check("quota-snapshot windows: a JSON-RPC error is reported as an error",
+          out[0] is None and out[1] == "error" and "RPC-ERROR-BODY" not in str(out), out)
+    out, took, pidfile = exchange("init_error")
+    check("quota-snapshot windows: an initialize error is reported as an error",
+          out[0] is None and out[1] == "error" and "INIT-ERROR-BODY" not in str(out), out)
+    out, took, pidfile = exchange("eof")
+    check("quota-snapshot windows: codex closing the stream is reported",
+          out == (None, "network_error", "codex closed the stream"), out)
+    out, took, pidfile = exchange("half_line", timeout=2)
+    check("quota-snapshot windows: a half line and silence ends at the deadline, process reaped",
+          out == (None, "network_error", "no reply within the timeout") and took < 6
+          and _qs_pid_gone(pidfile), (out, took))
+    out, took, pidfile = exchange("stubborn", timeout=2)
+    check("quota-snapshot windows: a codex that ignores SIGTERM is killed",
+          out[1] == "network_error" and took < 8 and _qs_pid_gone(pidfile), (out, took))
+    out, took, pidfile = exchange("flood")
+    check("quota-snapshot windows: more output than the cap is refused",
+          out == (None, "network_error", "codex wrote too much before replying"), out)
+    # Windows has to resolve `codex` itself (a codex.cmd shim is not found by Popen's own search)
+    fake = tmp / "win-fake-normal"
+    real_which = win.shutil.which
+    win.shutil.which = lambda name: str(fake) if name == "codex-shim-name" else real_which(name)
+    saved = {k: os.environ.get(k) for k in ("FAKE_CODEX_SCENARIO", "FAKE_CODEX_PIDFILE",
+                                            "FAKE_CODEX_LOG", "FAKE_CODEX_RESULT")}
+    os.environ.update(FAKE_CODEX_SCENARIO="normal", FAKE_CODEX_PIDFILE=str(tmp / "which.pid"),
+                      FAKE_CODEX_LOG=str(tmp / "which.log"), FAKE_CODEX_RESULT="{}")
+    try:
+        out = win.codex_exchange(win.Context(None, "codex-shim-name", 5, "0.0.0"))
+        posix_out = posix.codex_exchange(posix.Context(None, "codex-shim-name", 5, "0.0.0"))
+    finally:
+        win.shutil.which = real_which
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+    check("quota-snapshot windows: the codex binary is resolved through which()",
+          out == ({}, None, None), out)
+    check("quota-snapshot windows: POSIX hands the name to Popen untouched (not found here)",
+          posix_out == (None, "missing", "codex binary not found"), posix_out)
+
+
 def test_quota_snapshot_tui_refresh(tmp):
     """--refresh starts agy / cursor-agent in a PRIVATE tmux server, only when both opt-ins hold and the cache is stale."""
     runs_before = len(QS_RUNS)
@@ -11948,6 +12117,9 @@ def main():
     print("quota-snapshot.py")
     with tempfile.TemporaryDirectory() as td:
         test_quota_snapshot(Path(td))
+    print("quota-snapshot.py on native Windows (simulated)")
+    with tempfile.TemporaryDirectory() as td:
+        test_quota_snapshot_windows(Path(td))
     print("install-opencode-go-usage.sh")
     with tempfile.TemporaryDirectory() as td:
         test_install_opencode_go_usage(Path(td))

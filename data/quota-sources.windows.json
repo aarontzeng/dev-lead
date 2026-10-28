@@ -1,0 +1,7 @@
+{
+  "schema_version": 1,
+  "sources": [
+    {"name": "codex",       "kind": "codex_app_server",  "adapter": "codex",    "billing_provider": "chatgpt_subscription", "ttl_seconds": 300},
+    {"name": "claude",      "kind": "claude_usage_cache","adapter": "claude",   "billing_provider": "claude_subscription",  "ttl_seconds": 300, "path": "${TEMP}/claude/statusline-usage-cache.json"}
+  ]
+}

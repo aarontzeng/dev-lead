@@ -390,6 +390,25 @@ they have open.
   so family `null`, scope `unknown`); what statuses besides `ok` the endpoint
   can return; how often the plugin refreshes.
 
+## Native Windows
+
+`quota-snapshot.py` runs under native Windows Python (`py -3`); nothing else in dev-lead does
+(the review scripts are bash). On `win32`:
+
+- **Sources.** [`data/quota-sources.windows.json`](../../../data/quota-sources.windows.json) is the shipped file: `codex` and `claude`
+  (`${TEMP}/claude/statusline-usage-cache.json`). The other writers have no Windows port yet;
+  add their sources to a `quota-sources.json` in the plugin data directory once a cache path
+  exists. `${TEMP}` and `${LOCALAPPDATA}` expand in a path (the variable when absolute, else
+  the temp directory / `~\AppData\Local`).
+- **No refresh.** `--refresh` yields `<cli> refresh is not supported on Windows` for an
+  opted-in source and starts nothing; a cache past its TTL reads `stale`.
+- **Codex.** The pipe is read by a thread (a selector cannot wait on a Windows pipe) and the
+  binary is looked up through `PATHEXT`. Ending a `codex.cmd` shim with `terminate()` may leave
+  the node process under it running.
+- **Trust.** There is no uid on NTFS, so the "owned by the current user" refusal does not
+  apply; a symlink, a non-regular file and a file over 1 MiB are still refused.
+- The POSIX path takes none of this: the same checks and the same selector as before.
+
 ## For a reader of these records
 
 The next phase reads these records to inform dispatch. What it must hold to:
