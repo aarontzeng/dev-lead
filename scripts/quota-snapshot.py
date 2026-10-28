@@ -921,15 +921,24 @@ def _rewritten(path, before):
 # redirected, it falls into print mode and exits). None exits by itself. Starting a .cmd/.ps1 shim
 # would end the shell, not the CLI, so only a real executable is started, cursor-agent through the
 # newest versions\ directory the way its own launcher picks it.
-_CURSOR_VERSION_DIR = re.compile(r"(\d{4})\.(\d{1,2})\.(\d{1,2})(?:-(\d{2})-(\d{2})-(\d{2}))?-[a-f0-9]+\Z")
+_CURSOR_VERSION_DIR = re.compile(r"(\d{4})\.(\d{1,2})\.(\d{1,2})(?:-(\d{2})-(\d{2})-(\d{2}))?-[a-f0-9]+\Z", re.I)
 _WINDOWS_SHIMS = (".cmd", ".bat", ".ps1")
 _REPARSE_POINT = 0x400                            # FILE_ATTRIBUTE_REPARSE_POINT: a junction or a link
+
+
+def _is_cwd(directory):
+    """True when `directory` is the current directory (under any spelling) or cannot be told apart from it."""
+    try:
+        return os.path.samefile(directory, os.getcwd())
+    except OSError:
+        return False
 
 
 def _spawn_hidden(argv, cwd):
     """Start argv with no window and a console of its own. Its standard handles are not redirected and
     are not inherited (close_fds), so it cannot write into this collector's output."""
-    return subprocess.Popen(argv, cwd=cwd, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000))
+    return subprocess.Popen(argv, cwd=cwd, close_fds=True,
+                            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000))
 
 
 def _cursor_agent_command():
@@ -947,6 +956,8 @@ def _cursor_agent_command():
             found.append((tuple(int(g) if g else 0 for g in m.groups()), name))
     for _key, name in sorted(found, reverse=True):
         node, index = (os.path.join(root, name, f) for f in ("node.exe", "index.js"))
+        if _is_cwd(os.path.join(root, name)):
+            continue                              # nothing is started from the current directory
         if os.path.isfile(node) and os.path.isfile(index):
             return [node, index, "--trust"], None
     return None, "cursor refresh skipped: no cursor-agent version with node.exe and index.js was found"
@@ -988,30 +999,60 @@ def _windows_clear(workdir):
             pass
 
 
+def _plain_dir(path):
+    """True when `path` is a directory that is neither a link nor a junction (any reparse point)."""
+    try:
+        st = os.lstat(path)
+    except OSError:
+        return False
+    return stat.S_ISDIR(st.st_mode) and not stat.S_ISLNK(st.st_mode) \
+        and not getattr(st, "st_file_attributes", 0) & _REPARSE_POINT
+
+
 def _windows_workdir(label, workdir):
     """None when `workdir` is a plain, empty directory of dev-lead's own, else why not. The CLI is
-    started trusting it (cursor-agent --trust), so it must not be a link or junction to somewhere else."""
+    started trusting it (cursor-agent --trust) and it is emptied, so neither it nor the two directories
+    above it (~/.cache and ~/.cache/dev-lead) may be a link or junction to somewhere else."""
     try:
         os.makedirs(workdir, exist_ok=True)
-        st = os.lstat(workdir)
     except OSError as exc:
         return "%s refresh failed: cannot create its working directory (%s)" % (label, errno_name(exc))
-    if stat.S_ISLNK(st.st_mode) or not stat.S_ISDIR(st.st_mode) \
-            or getattr(st, "st_file_attributes", 0) & _REPARSE_POINT:
+    base = os.path.dirname(workdir)
+    if not (_plain_dir(workdir) and _plain_dir(base) and _plain_dir(os.path.dirname(base))):
         return "%s refresh skipped: its working directory is not a plain directory" % label
+    _windows_sweep(base)
     _windows_clear(workdir)                       # what an earlier run or a hook left (cursor-agent runs session hooks)
     try:
-        if os.listdir(workdir):
-            return "%s refresh skipped: its working directory is not empty" % label
+        if os.listdir(workdir):                   # something that will not go: move it aside, start in a fresh one
+            aside = "%s%s%d.%s" % (workdir, _GONE, os.getpid(), os.urandom(4).hex())
+            os.rename(workdir, aside)
+            os.mkdir(workdir)
+            if os.listdir(workdir):
+                return "%s refresh skipped: its working directory is not empty" % label
     except OSError as exc:
-        return "%s refresh failed: cannot list its working directory (%s)" % (label, errno_name(exc))
+        return "%s refresh failed: cannot reset its working directory (%s)" % (label, errno_name(exc))
     return None
+
+
+def _windows_sweep(base):
+    """Delete what an earlier run set aside and could not delete then."""
+    try:
+        names = [n for n in os.listdir(base) if n.startswith("quota-tui" + _GONE)]
+    except OSError:
+        return
+    for name in names:
+        entry = os.path.join(base, name)
+        if _plain_dir(entry):
+            shutil.rmtree(entry, ignore_errors=True)
 
 
 def _end_process(proc):
     """Terminate the process this script started, and only it. True when it is gone."""
     if proc.poll() is None:
-        proc.kill()
+        try:
+            proc.kill()
+        except OSError:
+            return proc.poll() is not None        # access denied, or it ended between the poll and the kill
         try:
             proc.wait(timeout=5)
         except subprocess.TimeoutExpired:
@@ -1028,9 +1069,14 @@ def refresh_hidden(ctx, kind, path):
     if not IS_WINDOWS or msvcrt is None:
         return "%s refresh: spawn_hidden is the Windows mode (use tmux_spawn elsewhere)" % label
     base = os.path.join(os.path.expanduser("~"), ".cache", "dev-lead")
+    lock_path = os.path.join(base, "quota-tui.lock")
     try:
         os.makedirs(base, exist_ok=True)
-        lock = os.open(os.path.join(base, "quota-tui.lock"), os.O_RDWR | os.O_CREAT | getattr(os, "O_BINARY", 0), 0o600)
+        if not (_plain_dir(base) and _plain_dir(os.path.dirname(base))):
+            return "%s refresh skipped: ~/.cache/dev-lead is not a plain directory" % label
+        if os.path.lexists(lock_path) and (os.path.islink(lock_path) or getattr(os.lstat(lock_path), "st_file_attributes", 0) & _REPARSE_POINT):
+            return "%s refresh skipped: its lock file is a link" % label
+        lock = os.open(lock_path, os.O_RDWR | os.O_CREAT | getattr(os, "O_BINARY", 0), 0o600)
     except OSError as exc:
         return "%s refresh failed: cannot create its lock (%s)" % (label, errno_name(exc))
     try:
@@ -1068,7 +1114,8 @@ def _hidden_locked(ctx, kind, path, base):
             time.sleep(0.25)
     finally:
         stopped = _end_process(proc)
-        _windows_clear(workdir)
+        if stopped:
+            _windows_clear(workdir)               # not under a CLI that may still be writing there
     if not stopped:
         return "%s refresh failed: %s could not be stopped" % (label, os.path.basename(argv[0]))
     if _rewritten(path, before):                  # judged after the stop: a write that lands as it ends counts

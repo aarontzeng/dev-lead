@@ -3817,6 +3817,8 @@ def test_quota_snapshot_windows_refresh(tmp):
               none_argv is None and "versions directory was not found" in none_why, none_why)
         log.unlink()
         env("write2")
+        check("quota-snapshot windows refresh: cursor's production minimum wait is 45 s (it wrote after 27 s on a real host)",
+              win.WINDOWS_MIN_WAIT == {"cursor_usage_cache": 45.0}, win.WINDOWS_MIN_WAIT)
         win.WINDOWS_MIN_WAIT = {"cursor_usage_cache": 6.0}
         why = win.refresh_hidden(ctx(1), "cursor_usage_cache", str(cache))
         win.WINDOWS_MIN_WAIT = {"cursor_usage_cache": 45.0}
@@ -3894,8 +3896,10 @@ def test_quota_snapshot_windows_refresh(tmp):
             for proc in stuck:
                 real_end(proc)
             win._spawn_hidden = lambda argv, cwd: subprocess.Popen(argv, cwd=cwd)
-        check("quota-snapshot windows refresh: a refresh whose process cannot be stopped says so",
-              why == "agy refresh failed: agy.EXE could not be stopped", why)
+        kept = sorted(c.name for c in workdir.iterdir())
+        check("quota-snapshot windows refresh: a refresh whose process cannot be stopped says so and leaves its directory alone",
+              why == "agy refresh failed: agy.EXE could not be stopped" and kept == [".remember", "residue.txt"], (why, kept))
+        win._windows_clear(str(workdir))
         # -- stopping
         class _Stuck:
             def poll(self):
@@ -3908,6 +3912,83 @@ def test_quota_snapshot_windows_refresh(tmp):
                 raise subprocess.TimeoutExpired("x", timeout)
         check("quota-snapshot windows refresh: a process that will not die is reported as not stopped",
               win._end_process(_Stuck()) is False)
+        class _Denied:
+            def __init__(self, ends):
+                self.ends = ends
+                self.polls = 0
+
+            def poll(self):
+                self.polls += 1
+                return 0 if self.ends and self.polls > 1 else None
+
+            def kill(self):
+                raise PermissionError("access denied")
+
+            def wait(self, timeout=None):
+                raise AssertionError("not reached")
+        check("quota-snapshot windows refresh: a refused kill is reported (or accepted when the process ended meanwhile), never raised",
+              win._end_process(_Denied(False)) is False and win._end_process(_Denied(True)) is True)
+        # -- links above the working directory (a junction behaves as a symlink here): nothing is deleted through them
+        for label, build in (("~/.cache", lambda h, e: (h / ".cache").symlink_to(e)),
+                             ("~/.cache/dev-lead", lambda h, e: ((h / ".cache").mkdir(), (h / ".cache" / "dev-lead").symlink_to(e))),
+                             ("a link as the lock file", None)):
+            outside = tmp / ("outside-" + label.replace("/", "_").replace("~", "").replace(" ", "_"))
+            (outside / "dev-lead" / "quota-tui").mkdir(parents=True)
+            (outside / "dev-lead" / "quota-tui" / "keep.txt").write_text("not mine")
+            (outside / "quota-tui").mkdir(exist_ok=True)
+            (outside / "quota-tui" / "keep.txt").write_text("not mine")
+            h = tmp / ("home-" + label.replace("/", "_").replace("~", "").replace(" ", "_"))
+            h.mkdir()
+            if build is not None:
+                build(h, outside if label == "~/.cache" else outside / "dev-lead")
+            else:
+                (h / ".cache" / "dev-lead").mkdir(parents=True)
+                (h / ".cache" / "dev-lead" / "quota-tui.lock").symlink_to(outside / "quota-tui" / "keep.txt")
+            os.environ["HOME"] = str(h)
+            log.unlink(missing_ok=True)
+            why = win.refresh_hidden(ctx(2), "agy_quota_cache", str(cache))
+            survivors = sorted(str(x.relative_to(outside)) for x in outside.rglob("keep.txt"))
+            expected = ("agy refresh skipped: its lock file is a link" if build is None
+                        else "agy refresh skipped: ~/.cache/dev-lead is not a plain directory")
+            direct = win._windows_workdir("agy", str(h / ".cache" / "dev-lead" / "quota-tui")) if build is not None else None
+            check("quota-snapshot windows refresh: %s as a link is refused (by the lock and by the directory check) and nothing outside is touched" % label,
+                  why == expected and not log.exists()
+                  and (build is None or direct == "agy refresh skipped: its working directory is not a plain directory")
+                  and survivors == ["dev-lead/quota-tui/keep.txt", "quota-tui/keep.txt"], (why, direct, survivors))
+        os.environ["HOME"] = str(home)
+        # -- cursor-agent: the hash is matched case-insensitively (PowerShell's -match is), and never from the current directory
+        local2 = tmp / "localapp2" / "cursor-agent" / "versions"
+        for name in ("2026.10.24-ABCDEF0", "2026.10.20-abcdef0"):
+            (local2 / name).mkdir(parents=True)
+            fake(local2 / name / "node.exe")
+            (local2 / name / "index.js").write_text("")
+        os.environ["LOCALAPPDATA"] = str(tmp / "localapp2")
+        newest = win._cursor_agent_command()[0]
+        saved_cwd = os.getcwd()
+        try:
+            os.chdir(local2 / "2026.10.24-ABCDEF0")
+            from_cwd = win._cursor_agent_command()[0]
+        finally:
+            os.chdir(saved_cwd)
+            os.environ["LOCALAPPDATA"] = str(tmp / "localapp")
+        check("quota-snapshot windows refresh: an upper-case hash is a version, and the current directory's version is skipped",
+              newest and "2026.10.24-ABCDEF0" in newest[0] and from_cwd and "2026.10.20-abcdef0" in from_cwd[0], (newest, from_cwd))
+        # -- something that will not be deleted is moved aside, and the leftovers are swept next time
+        stubborn_dir = home / ".cache" / "dev-lead" / "quota-tui"
+        stubborn_dir.mkdir(parents=True, exist_ok=True)
+        (stubborn_dir / "stuck.txt").write_text("will not go")
+        real_clear = win._windows_clear
+        win._windows_clear = lambda d: None
+        try:
+            problem = win._windows_workdir("agy", str(stubborn_dir))
+        finally:
+            win._windows_clear = real_clear
+        asides = sorted(c.name for c in stubborn_dir.parent.iterdir() if ".gone." in c.name)
+        problem_again = win._windows_workdir("agy", str(stubborn_dir))
+        left = sorted(c.name for c in stubborn_dir.parent.iterdir() if ".gone." in c.name)
+        check("quota-snapshot windows refresh: a directory that will not empty is set aside and swept on the next run",
+              problem is None and len(asides) == 1 and not list(stubborn_dir.iterdir()) and problem_again is None and left == [],
+              (problem, asides, problem_again, left))
         # -- the real launch call: no window, no redirected handles
         calls = []
         real_popen = win.subprocess.Popen
@@ -3917,7 +3998,7 @@ def test_quota_snapshot_windows_refresh(tmp):
         finally:
             win.subprocess.Popen = real_popen
         check("quota-snapshot windows refresh: the launch has no window, no redirected handles and is not inherited",
-              returned == "proc" and calls == [((["x.exe", "--trust"],), {"cwd": str(workdir), "creationflags": 0x08000000})],
+              returned == "proc" and calls == [((["x.exe", "--trust"],), {"cwd": str(workdir), "close_fds": True, "creationflags": 0x08000000})],
               calls)
         # -- spawn_hidden elsewhere, tmux_spawn on Windows, the dispatch and the staleness gate
         check("quota-snapshot windows refresh: spawn_hidden is refused off Windows, tmux_spawn on Windows names its replacement",
