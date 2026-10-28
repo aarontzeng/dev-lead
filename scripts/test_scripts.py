@@ -3431,6 +3431,64 @@ def test_quota_snapshot_windows(tmp):
         win._LEAKED.clear()
     check("quota-snapshot windows: the process leaves without finalizers only when a reader thread was left in a read",
           exits == [0], exits)
+    import io as _io
+    events = []
+
+    class _Out(_io.StringIO):
+        def flush(self):
+            events.append("flush")
+
+    class _BadOut(_io.StringIO):
+        def flush(self):
+            raise BrokenPipeError("closed")
+    real_exit, real_stdout = os._exit, sys.stdout
+    os._exit = lambda code: events.append("exit%d" % code)
+    win._LEAKED.append((None, None))
+    try:
+        sys.stdout = _Out()
+        win._finish()
+        sys.stdout = _BadOut()
+        win._finish()
+    finally:
+        sys.stdout = real_stdout
+        os._exit = real_exit
+        win._LEAKED.clear()
+    check("quota-snapshot windows: the output is flushed before the process leaves, and a failed flush exits 1",
+          events == ["flush", "exit0", "exit1"], events)
+    import contextlib as _cl
+    exits = []
+    os._exit = lambda code: exits.append(code)
+    win._LEAKED.append((None, None))
+    buf = _io.StringIO()
+    try:
+        with _cl.redirect_stdout(buf):
+            win.main(["--now", QS_NOW, "--source", "claude",
+                      "--config", str(_qs_config(tmp, "win-main", [_qs_source("claude_usage_cache", good)]))])
+    finally:
+        os._exit = real_exit
+        win._LEAKED.clear()
+    check("quota-snapshot windows: main prints the whole document, then leaves without finalizers when a reader was left",
+          exits == [0] and json.loads(buf.getvalue())["records"][0]["source"] == "claude", (exits, buf.getvalue()[:80]))
+    exits, raised = [], []
+    real_main = win.main
+    win.main = lambda: 1 // 0
+    os._exit = lambda code: exits.append(code)
+    try:
+        for leaked in (True, False):
+            win._LEAKED.clear()
+            if leaked:
+                win._LEAKED.append((None, None))
+            try:
+                with _cl.redirect_stderr(_io.StringIO()):
+                    win._entry()
+            except ZeroDivisionError:
+                raised.append(leaked)
+    finally:
+        win.main = real_main
+        os._exit = real_exit
+        win._LEAKED.clear()
+    check("quota-snapshot windows: an escape from main leaves without finalizers (exit 1) when a reader was left, else propagates",
+          exits == [1] and raised == [True, False], (exits, raised))
 
     # the process tree: Windows runs taskkill /T /F on the pid it started, then falls through to terminate()
     calls = []
@@ -3487,7 +3545,13 @@ def test_quota_snapshot_windows(tmp):
         os.environ["PATHEXT"] = ".EXE;.CMD"
         os.environ["PATH"] = os.pathsep.join(["", ".", "relative-bin", str(cwd_dir)])
         only_planted = win._windows_which("codex")
+        alias = tmp / "alias-of-cwd"
+        alias.symlink_to(cwd_dir)                                          # the cwd under another spelling
+        os.environ["PATH"] = os.pathsep.join([str(alias)])
+        via_alias = win._windows_which("codex")
+        os.environ["PATH"] = os.pathsep.join(["", ".", "relative-bin", str(cwd_dir)])
         (path_dir / "codex.CMD").write_text("genuine")
+        (path_dir / "codex.CMD.EXE").write_text("a different program")     # a name with an extension is looked for as it is
         os.environ["PATH"] = os.pathsep.join(["", ".", "relative-bin", str(cwd_dir), str(path_dir)])
         genuine = win._windows_which("codex")
         (path_dir / "codex.EXE").write_text("genuine exe")                 # PATHEXT order: .EXE before .CMD
@@ -3502,9 +3566,9 @@ def test_quota_snapshot_windows(tmp):
             else:
                 os.environ[k] = v
     check("quota-snapshot windows: codex is never found in the current directory, an empty or relative PATH entry; no bare name is returned",
-          only_planted is None and genuine == str(path_dir / "codex.CMD") and ordered == str(path_dir / "codex.EXE")
+          only_planted is None and via_alias is None and genuine == str(path_dir / "codex.CMD") and ordered == str(path_dir / "codex.EXE")
           and given == os.path.join(str(tmp), "my", "codex") and with_ext == str(path_dir / "codex.CMD"),
-          (only_planted, genuine, ordered, given, with_ext))
+          (only_planted, via_alias, genuine, ordered, given, with_ext))
 
     # the codex exchange through the thread reader
     def exchange(scenario, timeout=5, result=None):

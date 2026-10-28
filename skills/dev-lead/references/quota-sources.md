@@ -152,7 +152,8 @@ What each kind can produce, and when:
 - **Does not:** read any codex credential file (the codex binary does that for
   itself), start a turn, or wait without a bound. `--timeout` bounds the
   exchange, a server that writes half a line and stalls included; reaping the
-  process adds at most about 2 s (SIGTERM, a 2 s wait, then SIGKILL).
+  process adds at most about 2 s (SIGTERM, a 2 s wait, then SIGKILL; on Windows up to about 9 s:
+  taskkill 5, the reader thread's join 2, then the 2 s wait).
 
 ## `claude_usage_cache`
 

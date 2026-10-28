@@ -81,6 +81,7 @@ import subprocess
 import sys
 import threading
 import time
+import traceback
 from datetime import datetime, timedelta, timezone
 from pathlib import Path, PureWindowsPath
 
@@ -1158,13 +1159,19 @@ def _windows_which(name):
     and is used as given."""
     if os.path.dirname(name):
         return name
-    here = os.path.normcase(os.path.abspath(os.getcwd()))
+    here = os.getcwd()
     exts = [e for e in os.environ.get("PATHEXT", ".COM;.EXE;.BAT;.CMD").split(";") if e]
-    own = [name] if os.path.splitext(name)[1].upper() in [e.upper() for e in exts] else []
+    # a name that already carries a PATHEXT extension is looked for as it is, as shutil.which does
+    candidates = [name] if os.path.splitext(name)[1].upper() in [e.upper() for e in exts] else [name + e for e in exts]
     for entry in os.environ.get("PATH", "").split(os.pathsep):
-        if not _is_abs(entry) or os.path.normcase(os.path.abspath(entry)) == here:      # "" and "." are not absolute
+        if not _is_abs(entry):                   # "" and "." are not absolute
             continue
-        for candidate in [name + e for e in exts] + own:
+        try:
+            if os.path.samefile(entry, here):    # the same directory under another spelling (a junction, 8.3, \\?\)
+                continue
+        except OSError:
+            continue                             # an entry that cannot be opened has nothing to start
+        for candidate in candidates:
             full = os.path.join(entry, candidate)
             if os.path.isfile(full):
                 return full
@@ -1206,10 +1213,27 @@ _LEAKED = []        # (proc, reader) whose reader thread was still reading when 
 
 def _finish():
     """Leave without running finalizers when a reader thread is still blocked in a read: closing its pipe at
-    interpreter exit would block on Windows. Everything the collector prints has been written by then."""
+    interpreter exit would block on Windows. The output is flushed first; exit 1 when that fails."""
     if _LEAKED:
-        sys.stdout.flush()
-        os._exit(0)
+        try:
+            sys.stdout.flush()
+            code = 0
+        except (OSError, ValueError):
+            code = 1
+        os._exit(code)
+
+
+def _entry():
+    """main() with the same guarantee on a failed write, an interrupt or any other escape."""
+    try:
+        return main()
+    except BaseException:
+        if _LEAKED:
+            try:
+                traceback.print_exc()
+            finally:
+                os._exit(1)
+        raise
 
 
 def _kill_tree(proc):
@@ -1248,7 +1272,8 @@ def _rpc_problem(msg):
 def codex_exchange(ctx):
     """(result, status, problem): the rate-limits reply, or why there is none.
 
-    ctx.timeout bounds the exchange; reaping the process adds at most about 2 s.
+    ctx.timeout bounds the exchange; reaping the process adds at most about 2 s (on Windows up to
+    about 9: taskkill 5, the reader thread's join 2, then terminate's wait 2).
     """
     deadline = time.monotonic() + ctx.timeout
     codex_bin = ctx.codex_bin
@@ -1513,4 +1538,4 @@ def main(argv=None):
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(_entry())
