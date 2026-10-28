@@ -4030,6 +4030,38 @@ def test_quota_snapshot_windows_refresh(tmp):
             os.fstat = real_fstat
         check("quota-snapshot windows refresh: a lock file that is not the one opened is refused",
               replaced == "agy refresh skipped: its lock file was replaced", replaced)
+        # -- a concurrent first run that made a level meanwhile is not an error, and a poll that raises is "not proven stopped"
+        race_dir = tmp / "race-level"
+        real_mkdir = os.mkdir
+
+        def racing_mkdir(path, *a, **kw):
+            real_mkdir(path, *a, **kw)                            # the other process wins the creation...
+            raise FileExistsError(17, "exists", path)             # ...and this one is told so
+        os.mkdir = racing_mkdir
+        try:
+            raced_plain = win._windows_levels(str(race_dir))
+        finally:
+            os.mkdir = real_mkdir
+        racing_link = tmp / "race-link"
+        os.mkdir = lambda path, *a, **kw: (os.symlink(str(tmp), path), (_ for _ in ()).throw(FileExistsError(17, "exists", path)))[1]
+        try:
+            raced_link = win._windows_levels(str(racing_link))
+        finally:
+            os.mkdir = real_mkdir
+
+        class _PollRaises:
+            def poll(self):
+                raise OSError("invalid handle")
+
+            def kill(self):
+                raise PermissionError("denied")
+
+            def wait(self, timeout=None):
+                raise OSError("invalid handle")
+        check("quota-snapshot windows refresh: a level made by a concurrent run is accepted when plain, refused when a link",
+              raced_plain is True and raced_link is False, (raced_plain, raced_link))
+        check("quota-snapshot windows refresh: a poll that raises while ending a process is reported as not stopped",
+              win._end_process(_PollRaises()) is False)
         # -- cursor-agent: the hash is matched case-insensitively (PowerShell's -match is), and never from the current directory
         local2 = tmp / "localapp2" / "cursor-agent" / "versions"
         for name in ("2026.10.24-ABCDEF0", "2026.10.20-abcdef0"):

@@ -423,8 +423,19 @@ they have open.
   followed; a link AS the directory is refused); one refresh at a time by an exclusive byte-range lock
   (`msvcrt.locking`, released by the system when the process dies). No key is typed, no model is
   called. Known limits: a CLI's own detached helpers (cursor's statusline background worker) are not
-  reached by ending the CLI; a console host process may linger briefly; nothing here has run on
+  reached by ending the CLI, nor a child it left behind; a console host process may linger briefly; the
+  directory checks are by path (a same-user swap to a junction between check and use is followed, and
+  the working directory is also the CLI's cwd and trust root); a CLI that could not be stopped leaves a
+  `quota-tui.stuck` marker that blocks refreshes for 10 minutes, and if the marker cannot be written or
+  is a link planted meanwhile the guard fails open; nothing here has run on
   Windows in this repo's own tests, only the simulation `test_quota_snapshot_windows_refresh`.
+  Why cursor takes 20-32 s on Windows (a peer's trace, 2026-10-28): cursor-agent runs, synchronously,
+  a `cscript.exe` JScript that queries `Win32_Process` through WMI at +1.8 s (and `worker-server` once
+  more at ~21 s). A healthy host answers in well under a second; on a host whose WMI is stuck (the
+  WmiPrvSE processes at 0 CPU, `Get-CimInstance` hanging) it took 15 s each time, which shows up as a
+  late first cache write with near-zero CPU. Not the plugin fetch (the `github.com:22` stall is a
+  separate cause, fixed by an `insteadOf` https rewrite in the XDG git config). The 45 s minimum
+  covers it; a longer stall is a host problem (reboot), not something this script can fix.
   Without the mark, a cache past its TTL reads `stale`.
 - **Codex.** The pipe is read by a thread (a selector cannot wait on a Windows pipe) and the
   binary is looked up through `PATHEXT`. Ending a `codex.cmd` shim with `terminate()` may leave

@@ -1020,7 +1020,11 @@ def _windows_levels(*levels):
             if not _plain_dir(level):
                 return False
         else:
-            os.mkdir(level)
+            try:
+                os.mkdir(level)
+            except FileExistsError:               # a concurrent first run made it: it must be a plain one
+                if not _plain_dir(level):
+                    return False
     return True
 
 
@@ -1068,18 +1072,25 @@ def _windows_sweep(base):
 
 def _end_process(proc):
     """Terminate the process this script started, and only it. True when it is gone."""
-    if proc.poll() is None:
+    if not _exited(proc):
         try:
             proc.kill()
         except OSError:
-            return proc.poll() is not None        # access denied, or it ended between the poll and the kill
+            return _exited(proc)                  # access denied, or it ended between the poll and the kill
         try:
             proc.wait(timeout=5)
         except subprocess.TimeoutExpired:
             return False
         except OSError:
-            return proc.poll() is not None
+            return _exited(proc)
     return True
+
+
+def _exited(proc):
+    try:
+        return proc.poll() is not None
+    except OSError:
+        return False                              # cannot tell: not proven stopped
 
 
 def refresh_hidden(ctx, kind, path):
