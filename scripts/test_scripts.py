@@ -3671,7 +3671,7 @@ QS_FAKE_HIDDEN_CLI = r"""#!@PYTHON@
 import json, os, sys, time
 mode = os.environ["FAKE_MODE"]
 with open(os.environ["FAKE_LOG"], "a") as fh:
-    fh.write(json.dumps({"pid": os.getpid(), "cwd": os.getcwd(), "argv": sys.argv[1:]}) + "\n")
+    fh.write(json.dumps({"pid": os.getpid(), "cwd": os.getcwd(), "argv": sys.argv[1:], "prog": sys.argv[0]}) + "\n")
 if mode == "exit":
     sys.exit(3)
 if mode.startswith("write"):
@@ -3845,6 +3845,27 @@ def test_quota_snapshot_windows_refresh(tmp):
         (binary / "agy.CMD").rename(binary / "agy.EXE")
         check("quota-snapshot windows refresh: agy resolving to a .cmd shim is refused",
               shim == (None, "agy refresh skipped: agy is a shell shim, not an executable"), shim)
+        # -- opencode installed by npm: PATH holds only the shims, the real binary sits beside them in node_modules
+        prefix = tmp / "npm-prefix"
+        real_dir = prefix / "node_modules" / "@opencode" / "cli" / "bin"
+        real_dir.mkdir(parents=True)
+        (prefix / "opencode.CMD").write_text("@echo off")
+        (prefix / "opencode.ps1").write_text("")
+        os.environ["PATH"] = str(prefix)
+        without = win._windows_refresh_argv("opencode_go_cache")
+        fake(real_dir / "opencode.exe")
+        with_real = win._windows_refresh_argv("opencode_go_cache")
+        log.unlink(missing_ok=True)
+        cache.unlink(missing_ok=True)
+        env("write1")
+        os.environ["PATH"] = str(prefix)
+        ran = win.refresh_hidden(ctx(8), "opencode_go_cache", str(cache))
+        check("quota-snapshot windows refresh: opencode behind an npm shim is its real executable beside it, with --standalone",
+              without == (None, "opencode refresh skipped: opencode is a shell shim and its real executable was not found beside it")
+              and with_real == ([str(real_dir / "opencode.exe"), "--standalone"], None)
+              and ran is None and runs()[0]["argv"] == ["--standalone"]
+              and runs()[0]["prog"] == str(real_dir / "opencode.exe"), (without, with_real, ran, runs()))
+        env("write1")
         # -- the single-flight lock
         log.unlink(missing_ok=True)
         env("write1")

@@ -415,7 +415,9 @@ they have open.
   that one process (`TerminateProcess` on its pid, no tree, so opencode's background service is left
   alone). Measured on Windows 11 (2026-10-28, a peer): agy 9 s, `opencode --standalone` about 10 s,
   cursor-agent 27 s. Details that matter: only a real executable is started (a `.cmd` / `.ps1` shim is
-  refused: ending it would end the shell, not the CLI); cursor-agent is `node.exe index.js --trust`
+  never started: ending it would end the shell, not the CLI; opencode behind an npm shim is its
+  `node_modules\@opencode\cli\bin\opencode.exe` beside the shim, measured on opencode 2.x, and a
+  shim with no such file beside it is a named skip); cursor-agent is `node.exe index.js --trust`
   from the newest `%LOCALAPPDATA%\cursor-agent\versions\<date>-<hash>` directory that has both files,
   and its standard handles are NOT redirected (redirected, it falls into print mode and exits); the
   wait is at least 45 s for cursor whatever `--refresh-wait` says; the working directory is

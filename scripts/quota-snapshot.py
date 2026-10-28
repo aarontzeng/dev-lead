@@ -925,6 +925,9 @@ def _rewritten(path, before):
 # newest versions\ directory the way its own launcher picks it.
 _CURSOR_VERSION_DIR = re.compile(r"(\d{4})\.(\d{1,2})\.(\d{1,2})(?:-(\d{2})-(\d{2})-(\d{2}))?-[a-f0-9]+\Z", re.I)
 _WINDOWS_SHIMS = (".cmd", ".bat", ".ps1")
+# an npm install puts shims in the prefix and the real binary beside them (measured 2026-10-28, opencode 2.x,
+# package @opencode/cli, "bin": bin/opencode.exe): the shim's directory is searched for it
+_SHIM_TARGETS = {"opencode": ("node_modules", "@opencode", "cli", "bin", "opencode.exe")}
 _REPARSE_POINT = 0x400                            # FILE_ATTRIBUTE_REPARSE_POINT: a junction or a link
 
 
@@ -974,7 +977,13 @@ def _windows_refresh_argv(kind):
     if exe is None:
         return None, "%s refresh skipped: %s was not found on PATH" % (label, command[0])
     if os.path.splitext(exe)[1].lower() in _WINDOWS_SHIMS:
-        return None, "%s refresh skipped: %s is a shell shim, not an executable" % (label, command[0])
+        if command[0] not in _SHIM_TARGETS:
+            return None, "%s refresh skipped: %s is a shell shim, not an executable" % (label, command[0])
+        real = os.path.join(os.path.dirname(exe), *_SHIM_TARGETS[command[0]])
+        if not os.path.isfile(real):
+            return None, "%s refresh skipped: %s is a shell shim and its real executable was not found beside it" % (
+                label, command[0])
+        exe = real
     return [exe] + command[1:], None
 
 
