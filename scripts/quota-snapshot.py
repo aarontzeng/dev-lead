@@ -908,6 +908,8 @@ def _rewritten(path, before):
     if _mtime_or_none(path) == before:
         return False
     try:
+        if not stat.S_ISREG(os.lstat(path).st_mode):
+            return False                          # open() of a FIFO would wait for a writer, past the deadline
         with open(path, "rb") as fh:
             return isinstance(json.loads(_decode_cache(fh.read(MAX_CACHE_BYTES + 1))), dict)
     except (OSError, ValueError, RecursionError):
@@ -1009,17 +1011,32 @@ def _plain_dir(path):
         and not getattr(st, "st_file_attributes", 0) & _REPARSE_POINT
 
 
+def _windows_levels(*levels):
+    """Make each directory in `levels` (outermost first) when it is missing; False when one that exists
+    is a link or junction. A level is checked BEFORE the next one is created, so a refused layout is
+    never written to (os.makedirs would create the rest through a link)."""
+    for level in levels:
+        if os.path.lexists(level):
+            if not _plain_dir(level):
+                return False
+        else:
+            os.mkdir(level)
+    return True
+
+
 def _windows_workdir(label, workdir):
     """None when `workdir` is a plain, empty directory of dev-lead's own, else why not. The CLI is
     started trusting it (cursor-agent --trust) and it is emptied, so neither it nor the two directories
-    above it (~/.cache and ~/.cache/dev-lead) may be a link or junction to somewhere else."""
+    above it (~/.cache and ~/.cache/dev-lead) may be a link or junction to somewhere else.
+    Known limit: the checks are by path, so a directory swapped for a junction between the check and
+    the cleanup is followed (nothing here pins an opened directory as the POSIX path does); the swapper
+    would be a process of the same user, who could delete those files directly."""
+    base = os.path.dirname(workdir)
     try:
-        os.makedirs(workdir, exist_ok=True)
+        if not _windows_levels(os.path.dirname(base), base, workdir):
+            return "%s refresh skipped: its working directory is not a plain directory" % label
     except OSError as exc:
         return "%s refresh failed: cannot create its working directory (%s)" % (label, errno_name(exc))
-    base = os.path.dirname(workdir)
-    if not (_plain_dir(workdir) and _plain_dir(base) and _plain_dir(os.path.dirname(base))):
-        return "%s refresh skipped: its working directory is not a plain directory" % label
     _windows_sweep(base)
     _windows_clear(workdir)                       # what an earlier run or a hook left (cursor-agent runs session hooks)
     try:
@@ -1043,7 +1060,10 @@ def _windows_sweep(base):
     for name in names:
         entry = os.path.join(base, name)
         if _plain_dir(entry):
-            shutil.rmtree(entry, ignore_errors=True)
+            try:
+                shutil.rmtree(entry, ignore_errors=True)
+            except RecursionError:
+                pass                              # a tree too deep to delete in one go stays for a later run
 
 
 def _end_process(proc):
@@ -1057,6 +1077,8 @@ def _end_process(proc):
             proc.wait(timeout=5)
         except subprocess.TimeoutExpired:
             return False
+        except OSError:
+            return proc.poll() is not None
     return True
 
 
@@ -1071,8 +1093,7 @@ def refresh_hidden(ctx, kind, path):
     base = os.path.join(os.path.expanduser("~"), ".cache", "dev-lead")
     lock_path = os.path.join(base, "quota-tui.lock")
     try:
-        os.makedirs(base, exist_ok=True)
-        if not (_plain_dir(base) and _plain_dir(os.path.dirname(base))):
+        if not _windows_levels(os.path.dirname(base), base):
             return "%s refresh skipped: ~/.cache/dev-lead is not a plain directory" % label
         if os.path.lexists(lock_path) and (os.path.islink(lock_path) or getattr(os.lstat(lock_path), "st_file_attributes", 0) & _REPARSE_POINT):
             return "%s refresh skipped: its lock file is a link" % label
@@ -1082,15 +1103,31 @@ def refresh_hidden(ctx, kind, path):
     try:
         try:
             msvcrt.locking(lock, msvcrt.LK_NBLCK, 1)
+            on_disk, held = os.lstat(lock_path), os.fstat(lock)
         except OSError:
             return "%s refresh skipped: another refresh is running" % label
+        if (on_disk.st_dev, on_disk.st_ino) != (held.st_dev, held.st_ino):
+            return "%s refresh skipped: its lock file was replaced" % label    # a lock on a file nobody else sees
         return _hidden_locked(ctx, kind, path, base)
     finally:
         os.close(lock)                            # closing releases the lock
 
 
+STUCK_MARKER = "quota-tui.stuck"
+STUCK_SECONDS = 600       # a CLI that could not be stopped is assumed still running for this long
+
+
 def _hidden_locked(ctx, kind, path, base):
     label = REFRESH_COMMANDS[kind][0]
+    marker = os.path.join(base, STUCK_MARKER)
+    stuck = _mtime_or_none(marker)
+    if stuck is not None:
+        if time.time() - stuck / 1e9 < STUCK_SECONDS:
+            return "%s refresh skipped: an earlier refresh could not stop its CLI, which may still be using the directory" % label
+        try:
+            os.unlink(marker)
+        except OSError:
+            pass
     argv, why = _windows_refresh_argv(kind)
     if why:
         return why
@@ -1117,6 +1154,11 @@ def _hidden_locked(ctx, kind, path, base):
         if stopped:
             _windows_clear(workdir)               # not under a CLI that may still be writing there
     if not stopped:
+        try:                                      # the next refresh, of any source, neither clears nor starts beside it
+            with open(marker, "w") as fh:
+                fh.write(str(proc.pid))
+        except OSError:
+            pass
         return "%s refresh failed: %s could not be stopped" % (label, os.path.basename(argv[0]))
     if _rewritten(path, before):                  # judged after the stop: a write that lands as it ends counts
         return None

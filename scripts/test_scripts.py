@@ -3759,6 +3759,8 @@ def test_quota_snapshot_windows_refresh(tmp):
             return True
         except OSError:
             return False
+        if not Path("/proc/self").exists():
+            return False                                          # alive, and no /proc to tell a zombie from a process
         for _ in range(40):
             if not Path("/proc/%d" % pid).exists():
                 return True
@@ -3899,7 +3901,18 @@ def test_quota_snapshot_windows_refresh(tmp):
         kept = sorted(c.name for c in workdir.iterdir())
         check("quota-snapshot windows refresh: a refresh whose process cannot be stopped says so and leaves its directory alone",
               why == "agy refresh failed: agy.EXE could not be stopped" and kept == [".remember", "residue.txt"], (why, kept))
-        win._windows_clear(str(workdir))
+        marker = home / ".cache" / "dev-lead" / "quota-tui.stuck"
+        log.unlink(missing_ok=True)
+        again = win.refresh_hidden(ctx(8), "opencode_go_cache", str(tmp / "other-cache.json"))
+        check("quota-snapshot windows refresh: after a CLI could not be stopped no refresh clears or starts beside it",
+              marker.exists() and again == "opencode refresh skipped: an earlier refresh could not stop its CLI, which may still be using the directory"
+              and not log.exists() and sorted(c.name for c in workdir.iterdir()) == [".remember", "residue.txt"], (again, log.exists()))
+        old = time.time() - 700
+        os.utime(marker, (old, old))
+        cache.unlink(missing_ok=True)
+        after = win.refresh_hidden(ctx(8), "agy_quota_cache", str(cache))
+        check("quota-snapshot windows refresh: the marker lapses after ten minutes and the directory is cleared again",
+              after is None and not marker.exists() and not list(workdir.iterdir()), (after, marker.exists()))
         # -- stopping
         class _Stuck:
             def poll(self):
@@ -3928,6 +3941,22 @@ def test_quota_snapshot_windows_refresh(tmp):
                 raise AssertionError("not reached")
         check("quota-snapshot windows refresh: a refused kill is reported (or accepted when the process ended meanwhile), never raised",
               win._end_process(_Denied(False)) is False and win._end_process(_Denied(True)) is True)
+
+        class _WaitFails:
+            def __init__(self, ends):
+                self.ends, self.polls = ends, 0
+
+            def poll(self):
+                self.polls += 1
+                return 0 if self.ends and self.polls > 1 else None
+
+            def kill(self):
+                pass
+
+            def wait(self, timeout=None):
+                raise OSError("wait failed")
+        check("quota-snapshot windows refresh: a wait that fails is reported as not stopped unless the process is gone, never raised",
+              win._end_process(_WaitFails(False)) is False and win._end_process(_WaitFails(True)) is True)
         # -- links above the working directory (a junction behaves as a symlink here): nothing is deleted through them
         for label, build in (("~/.cache", lambda h, e: (h / ".cache").symlink_to(e)),
                              ("~/.cache/dev-lead", lambda h, e: ((h / ".cache").mkdir(), (h / ".cache" / "dev-lead").symlink_to(e))),
@@ -3956,6 +3985,51 @@ def test_quota_snapshot_windows_refresh(tmp):
                   and (build is None or direct == "agy refresh skipped: its working directory is not a plain directory")
                   and survivors == ["dev-lead/quota-tui/keep.txt", "quota-tui/keep.txt"], (why, direct, survivors))
         os.environ["HOME"] = str(home)
+        empty_outside = tmp / "empty-outside"
+        empty_outside.mkdir()
+        h_empty = tmp / "home-empty-link"
+        h_empty.mkdir()
+        (h_empty / ".cache").symlink_to(empty_outside)
+        os.environ["HOME"] = str(h_empty)
+        refused_lock = win.refresh_hidden(ctx(2), "agy_quota_cache", str(cache))
+        refused_dir = win._windows_workdir("agy", str(h_empty / ".cache" / "dev-lead" / "quota-tui"))
+        os.environ["HOME"] = str(home)
+        check("quota-snapshot windows refresh: a refused layout is never written to (nothing is created through a linked ~/.cache)",
+              refused_lock == "agy refresh skipped: ~/.cache/dev-lead is not a plain directory"
+              and refused_dir == "agy refresh skipped: its working directory is not a plain directory"
+              and list(empty_outside.iterdir()) == [], (refused_lock, refused_dir, list(empty_outside.iterdir())))
+        # -- a cache path that became a FIFO does not block the wait loop; a sweep too deep to delete does not raise
+        fifo = tmp / "fifo-cache"
+        os.mkfifo(fifo)
+        started = time.monotonic()
+        check("quota-snapshot windows refresh: a cache that is not a regular file is never opened by the wait loop",
+              win._rewritten(str(fifo), None) is False and posix._rewritten(str(fifo), None) is False
+              and time.monotonic() - started < 2)
+        sweep_base = tmp / "sweep-base"
+        (sweep_base / "quota-tui.gone.1.ab").mkdir(parents=True)
+        real_rmtree = win.shutil.rmtree
+
+        def too_deep(*a, **kw):
+            raise RecursionError("too deep")
+        win.shutil.rmtree = too_deep
+        try:
+            win._windows_sweep(str(sweep_base))
+            swept_ok = True
+        except RecursionError:
+            swept_ok = False
+        finally:
+            win.shutil.rmtree = real_rmtree
+        check("quota-snapshot windows refresh: a leftover too deep to delete stays for a later run instead of raising",
+              swept_ok and (sweep_base / "quota-tui.gone.1.ab").exists())
+        # -- the lock file is the one that was opened
+        real_fstat = os.fstat
+        os.fstat = lambda fd: _types.SimpleNamespace(st_dev=1, st_ino=2)
+        try:
+            replaced = win.refresh_hidden(ctx(2), "agy_quota_cache", str(cache))
+        finally:
+            os.fstat = real_fstat
+        check("quota-snapshot windows refresh: a lock file that is not the one opened is refused",
+              replaced == "agy refresh skipped: its lock file was replaced", replaced)
         # -- cursor-agent: the hash is matched case-insensitively (PowerShell's -match is), and never from the current directory
         local2 = tmp / "localapp2" / "cursor-agent" / "versions"
         for name in ("2026.10.24-ABCDEF0", "2026.10.20-abcdef0"):
