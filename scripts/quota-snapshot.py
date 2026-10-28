@@ -1135,6 +1135,7 @@ def refresh_hidden(ctx, kind, path):
 
 STUCK_MARKER = "quota-tui.stuck"
 STUCK_SECONDS = 600       # a CLI that could not be stopped is assumed still running for this long
+BACKOFF_SECONDS = 600     # a source whose refresh just failed to produce a cache is not started again for this long
 
 
 def _hidden_locked(ctx, kind, path, base):
@@ -1148,6 +1149,15 @@ def _hidden_locked(ctx, kind, path, base):
             os.unlink(marker)
         except OSError:
             pass
+    backoff = os.path.join(base, "quota-tui.%s.backoff" % label)
+    failed = _mtime_or_none(backoff)
+    if failed is not None:
+        ago = time.time() - failed / 1e9
+        if 0 <= ago < BACKOFF_SECONDS:
+            # a CLI that cannot get through (a proxy, no network) would otherwise spend its whole wait on every poll
+            # and hold the lock, so the other sources never get it
+            return "%s refresh skipped: an earlier refresh wrote no cache %d s ago; the next try is in %d s" % (
+                label, ago, BACKOFF_SECONDS - ago)
     argv, why = _windows_refresh_argv(kind)
     if why:
         return why
@@ -1181,7 +1191,16 @@ def _hidden_locked(ctx, kind, path, base):
             pass
         return "%s refresh failed: %s could not be stopped" % (label, os.path.basename(argv[0]))
     if _rewritten(path, before):                  # judged after the stop: a write that lands as it ends counts
+        try:
+            os.unlink(backoff)
+        except OSError:
+            pass
         return None
+    try:                                          # it ran and wrote nothing: do not start it again at once
+        with open(backoff, "w") as fh:
+            fh.write(str(time.time()))
+    except OSError:
+        pass
     if exited_early:
         return ("%s refresh failed: %s exited before it wrote its cache; run it once in a terminal to see why"
                 % (label, os.path.basename(argv[0])))

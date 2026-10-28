@@ -438,6 +438,13 @@ they have open.
   late first cache write with near-zero CPU. Not the plugin fetch (the `github.com:22` stall is a
   separate cause, fixed by an `insteadOf` https rewrite in the XDG git config). The 45 s minimum
   covers it; a longer stall is a host problem (reboot), not something this script can fix.
+  A source whose refresh ran and wrote no cache (or exited first) is not started again for 10 minutes
+  (`quota-tui.<cli>.backoff` under `~/.cache/dev-lead`; a refresh that works clears it, and the problem
+  line says how long is left): on a network where a CLI cannot get through (cursor-agent behind a proxy
+  it cannot use) it would otherwise spend its whole wait on every poll and hold the lock, so agy and
+  opencode-go never got it. On Windows opencode 2.2.0 the background service also drops the go-usage
+  plugin about an hour after its last TUI attach (the project instance is disposed, measured by a peer),
+  so opencode-go stays fresh only through this refresh there; not seen on Linux.
   Without the mark, a cache past its TTL reads `stale`.
 - **Codex.** The pipe is read by a thread (a selector cannot wait on a Windows pipe) and the
   binary is looked up through `PATHEXT`. Ending a `codex.cmd` shim with `terminate()` may leave

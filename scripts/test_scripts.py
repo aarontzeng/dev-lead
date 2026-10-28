@@ -3745,6 +3745,8 @@ def test_quota_snapshot_windows_refresh(tmp):
     def env(mode):
         os.environ.update(HOME=str(home), PATH=str(binary), PATHEXT=".EXE;.CMD", LOCALAPPDATA=str(tmp / "localapp"),
                           FAKE_MODE=mode, FAKE_LOG=str(log), FAKE_CACHE=str(cache))
+        for old_marker in (home / ".cache" / "dev-lead").glob("quota-tui.*.backoff"):     # each scenario starts with no backoff
+            old_marker.unlink()
 
     def ctx(wait):
         return win.Context(None, "codex", 5, "0.0.0", refresh=True, refresh_wait=wait)
@@ -3794,8 +3796,44 @@ def test_quota_snapshot_windows_refresh(tmp):
         check("quota-snapshot windows refresh: a CLI that never writes is ended at the wait and named",
               why == "agy refresh failed: agy.EXE did not rewrite its cache within 1 s" and time.monotonic() - started < 10
               and got and gone(got[0]["pid"]), (why, got))
+        # -- a source whose refresh wrote nothing is not started again at once, and the others still get the lock
+        backoff_marker = home / ".cache" / "dev-lead" / "quota-tui.agy.backoff"
+        log.unlink(missing_ok=True)
+        env("sleep")
+        first = win.refresh_hidden(ctx(1), "agy_quota_cache", str(cache))
+        marked = backoff_marker.exists()
+        starts_after_first = len(runs())
+        second = win.refresh_hidden(ctx(1), "agy_quota_cache", str(cache))
+        starts_after_second = len(runs())
+        os.utime(backoff_marker, (time.time() - 300, time.time() - 300))
+        halfway = win.refresh_hidden(ctx(1), "agy_quota_cache", str(cache))           # five minutes in: still backed off
+        other = win.refresh_hidden(ctx(1), "opencode_go_cache", str(tmp / "other-cache2.json"))
+        starts_after_other = len(runs())
+        old = time.time() - 700
+        os.utime(backoff_marker, (old, old))
+        env("sleep")
+        backoff_marker.write_text("x")
+        os.utime(backoff_marker, (old, old))
+        third = win.refresh_hidden(ctx(1), "agy_quota_cache", str(cache))
+        starts_after_third = len(runs())
+        check("quota-snapshot windows refresh: a refresh that wrote nothing backs that source off, not the others, and lapses",
+              "within 1 s" in first and marked and starts_after_first == 1
+              and second.startswith("agy refresh skipped: an earlier refresh wrote no cache ") and starts_after_second == 1
+              and halfway.startswith("agy refresh skipped: an earlier refresh wrote no cache ")
+              and 295 <= int(halfway.split("cache ")[1].split(" s")[0]) <= 310          # five minutes in, not "3x" or "30x"
+              and 290 <= int(halfway.rsplit("in ", 1)[1].split(" s")[0]) <= 305          # and about five minutes left
+              and "within 1 s" in other and starts_after_other == 2
+              and "within 1 s" in third and starts_after_third == 3,
+              (first, second, other, third, starts_after_first, starts_after_second, starts_after_other, starts_after_third))
+        env("write1")
+        backoff_marker.write_text("x")
+        os.utime(backoff_marker, (old, old))
+        cache.unlink(missing_ok=True)
+        ok_run = win.refresh_hidden(ctx(8), "agy_quota_cache", str(cache))
+        check("quota-snapshot windows refresh: a refresh that works clears the source's backoff",
+              ok_run is None and not backoff_marker.exists(), (ok_run, backoff_marker.exists()))
         # -- exits early
-        log.unlink()
+        log.unlink(missing_ok=True)
         env("exit")
         why = win.refresh_hidden(ctx(8), "agy_quota_cache", str(cache))
         check("quota-snapshot windows refresh: a CLI that exits before writing is reported at once",
