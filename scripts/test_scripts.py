@@ -3289,9 +3289,11 @@ def test_quota_snapshot_windows(tmp):
               posix.expand_path("${TEMP}/claude/x.json") == "${TEMP}/claude/x.json")
         os.environ["TEMP"] = "relative"
         os.environ.pop("LOCALAPPDATA")
-        check("quota-snapshot windows: a relative or missing variable falls back to a fixed directory",
-              win.expand_path("${TEMP}/c").startswith(win.tempfile.gettempdir())
-              and win.expand_path("${LOCALAPPDATA}/c").startswith(os.path.join(os.path.expanduser("~"), "AppData", "Local")))
+        home_local = os.path.join(os.path.expanduser("~"), "AppData", "Local")
+        check("quota-snapshot windows: a relative or missing variable falls back to a fixed directory, never tempfile's",
+              win.expand_path("${TEMP}/c") == os.path.join(home_local, "Temp") + "/c"
+              and win.expand_path("${LOCALAPPDATA}/c") == home_local + "/c"
+              and not hasattr(win, "tempfile"))
         check("quota-snapshot windows: a leading ~\\ means the home directory",
               win.expand_path("~\\x") == os.path.expanduser("~") + "\\x")
     finally:
@@ -3316,6 +3318,134 @@ def test_quota_snapshot_windows(tmp):
             os.environ.pop("HOME", None)
         else:
             os.environ["HOME"] = saved_home
+
+    # Windows path rules: only a drive or UNC path is fully qualified (os.path.isabs says yes to \\quota before 3.13)
+    class _NtOs:
+        name = "nt"
+        environ = os.environ
+
+        def __getattr__(self, attr):
+            return getattr(os, attr)
+    real_os = win.os
+    win.os = _NtOs()
+    saved_env = {k: os.environ.get(k) for k in ("TEMP", "LOCALAPPDATA")}
+    try:
+        got = {}
+        for value in ("\\quota", "C:quota", "relative", "C:\\quota", "\\\\server\\share\\q"):
+            os.environ["TEMP"] = value
+            got[value] = win._windows_dir("TEMP")
+        os.environ["TEMP"] = ""
+        got["empty"] = win._windows_dir("TEMP")
+    finally:
+        win.os = real_os
+        for k, v in saved_env.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+    check("quota-snapshot windows: only a drive or UNC path is accepted from TEMP / LOCALAPPDATA",
+          got == {"\\quota": None, "C:quota": None, "relative": None, "C:\\quota": "C:\\quota",
+                  "\\\\server\\share\\q": "\\\\server\\share\\q", "empty": None}, got)
+
+    # the reader thread, on a plain pipe
+    def pipe_reader():
+        rfd, wfd = os.pipe()
+        return win._ThreadLineReader(rfd), rfd, wfd
+    rd, rfd, wfd = pipe_reader()
+    os.write(wfd, b'{"id":1,"result":{}}')                        # a reply with no newline, then EOF
+    os.close(wfd)
+    first = rd.response(1, time.monotonic() + 5)
+    started = time.monotonic()
+    second = rd.response(2, time.monotonic() + 5)
+    check("quota-snapshot windows: EOF is remembered: a second wait sees it at once, as a selector would",
+          first == ({"id": 1, "result": {}}, None) and second == (None, "codex closed the stream")
+          and time.monotonic() - started < 1, (first, second))
+    check("quota-snapshot windows: the reader thread is gone after EOF", rd.close() is True)
+    os.close(rfd)
+    rd, rfd, wfd = pipe_reader()
+    def flood():
+        try:
+            os.write(wfd, b"x" * 65536 * 200)                      # 12.5 MiB with no newline: more than the cap
+        except OSError:
+            pass
+        finally:
+            os.close(wfd)
+    import threading as _th
+    writer = _th.Thread(target=flood, daemon=True)
+    writer.start()
+    verdict = rd.response(1, time.monotonic() + 10)
+    check("quota-snapshot windows: the thread stops reading at the cap instead of draining the pipe",
+          verdict == (None, "codex wrote too much before replying")
+          and rd.read <= win.MAX_CODEX_BYTES + 65536 and rd.close() is True, (verdict, rd.read))
+    os.close(rfd)                                                  # the writer, blocked on the full pipe, gets EPIPE and ends
+    writer.join(5)
+
+    class _Pipe:
+        def __init__(self):
+            self.closed = False
+
+        def close(self):
+            self.closed = True
+
+    class _Proc:
+        def __init__(self):
+            self.stdin, self.stdout = _Pipe(), _Pipe()
+
+        def poll(self):
+            return 0
+    rd, rfd, wfd = pipe_reader()                                   # the writer is still open: the thread is blocked in read
+    proc = _Proc()
+    win._reap(proc, rd)
+    held = not proc.stdout.closed and proc.stdin.closed
+    os.close(wfd)
+    check("quota-snapshot windows: the pipe is not closed while the reader thread is still in a read",
+          held and rd.close() is True)
+    os.close(rfd)
+
+    # the process tree: Windows runs taskkill /T /F on the pid it started, then falls through to terminate()
+    calls = []
+    real_run = win.subprocess.run
+    win.subprocess.run = lambda argv, **kw: calls.append(argv) or subprocess.CompletedProcess(argv, 0)
+    sleeper = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    try:
+        win._stop(sleeper)
+        posix._stop(subprocess.Popen([sys.executable, "-c", "pass"]))        # an exited-soon child: no taskkill on POSIX
+    finally:
+        win.subprocess.run = real_run
+        sleeper.kill()
+        sleeper.wait()
+    check("quota-snapshot windows: the child's whole tree is ended with taskkill /T /F, and only on Windows",
+          calls == [["taskkill", "/PID", str(sleeper.pid), "/T", "/F"]], calls)
+    real_run = win.subprocess.run
+
+    def no_taskkill(argv, **kw):
+        raise FileNotFoundError("taskkill")
+    win.subprocess.run = no_taskkill
+    sleeper = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    try:
+        win._stop(sleeper)
+        ended = sleeper.poll() is not None
+    finally:
+        win.subprocess.run = real_run
+        sleeper.kill()
+        sleeper.wait()
+    check("quota-snapshot windows: without taskkill terminate() still ends the child", ended)
+
+    # shutil.which finds the current directory first on Windows: a binary planted there is not used
+    real_which, here = win.shutil.which, os.getcwd()
+    try:
+        win.shutil.which = lambda name: os.path.join(here, "codex.cmd")
+        planted = win._windows_which("codex")
+        win.shutil.which = lambda name: os.path.join(str(tmp), "bin", "codex.cmd")
+        found = win._windows_which("codex")
+        given = win._windows_which(os.path.join(str(tmp), "my", "codex"))
+        win.shutil.which = lambda name: None
+        none = win._windows_which("codex")
+    finally:
+        win.shutil.which = real_which
+    check("quota-snapshot windows: codex is never resolved to the current directory, a path is used as given",
+          planted == "codex" and found == os.path.join(str(tmp), "bin", "codex.cmd")
+          and given == os.path.join(str(tmp), "my", "codex") and none == "codex", (planted, found, given, none))
 
     # the codex exchange through the thread reader
     def exchange(scenario, timeout=5, result=None):
@@ -3343,7 +3473,7 @@ def test_quota_snapshot_windows(tmp):
 
     class _SpyReader(real_reader):
         def __init__(self, fd):
-            used.append(fd)
+            used.append(self)
             super().__init__(fd)
     win._ThreadLineReader = _SpyReader
     try:
@@ -3351,7 +3481,8 @@ def test_quota_snapshot_windows(tmp):
     finally:
         win._ThreadLineReader = real_reader
     check("quota-snapshot windows: the thread reader gets the rate-limits reply past the noise",
-          out == ({"rateLimits": {"limitId": "codex"}}, None, None) and len(used) == 1, (out, used))
+          out == ({"rateLimits": {"limitId": "codex"}}, None, None) and len(used) == 1
+          and used[0].thread.is_alive() is False, (out, used))
     check("quota-snapshot windows: the codex process is gone afterwards", _qs_pid_gone(pidfile))
     out, took, pidfile = exchange("rpc_error")
     check("quota-snapshot windows: a JSON-RPC error is reported as an error",

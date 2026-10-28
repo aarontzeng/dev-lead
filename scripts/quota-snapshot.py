@@ -22,10 +22,15 @@ was not. Nothing consumes the output yet.
 Native Windows (added 0.6.89; the POSIX behaviour above is unchanged): the shipped sources
 are data/quota-sources.windows.json (codex and claude only; ${TEMP} and ${LOCALAPPDATA}
 expand in a path), --refresh is refused per source (no tmux, no fcntl), codex's pipe is
-read by a thread instead of a selector, and `codex` is looked up through PATHEXT. Known
-limits there: the cache file's owner is not checked (no uid on NTFS) and the cache is
-still refused when it is a symlink, not regular or over 1 MiB; a codex.cmd shim is ended
-by terminate(), which may leave the node process under it running.
+read by a thread instead of a selector, and `codex` is looked up through PATHEXT (never in
+the current directory). Known limits there: the cache file's owner is not checked (no uid
+on NTFS); it is still refused when it is a symlink, not regular or over 1 MiB, but there is
+no O_NOFOLLOW, so a symlink swapped in between the lstat and the open is caught only by
+the device/inode comparison; the codex process tree is ended with `taskkill /T /F` (terminate()
+is the fallback), and the reader thread's pipe is left open, not closed under it, when the
+thread has not ended 2 s after the process did; the pipe's binary mode is the one io.FileIO
+sets on the descriptor Popen hands it (not asserted here); none of this has run on Windows
+in this repo's own tests, only the simulation in test_quota_snapshot_windows.
 
 Contract:
   * Exit 0 whenever the object was printed, even if every source failed (the
@@ -73,11 +78,10 @@ import shutil
 import stat
 import subprocess
 import sys
-import tempfile
 import threading
 import time
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 from _common import ROOT, declared_version
 
@@ -223,22 +227,32 @@ def _not_ours(st):
     return hasattr(os, "geteuid") and st.st_uid != os.geteuid()
 
 
+def _windows_dir(name):
+    """The environment variable `name` when it is a fully qualified path, else None. On Windows
+    Python before 3.13 os.path.isabs() is also true for \\quota, which depends on the current
+    drive; a drive or a UNC share is required here."""
+    value = os.environ.get(name, "")
+    if not value:
+        return None
+    ok = PureWindowsPath(value).is_absolute() if os.name == "nt" else os.path.isabs(value)
+    return value if ok else None
+
+
 # ----------------------------------------------------------------- records ----
 def expand_path(raw):
     """A leading ~ and ${XDG_CACHE_HOME}; the latter only when set, non-empty and absolute.
 
-    On Windows also ${TEMP} and ${LOCALAPPDATA} (the environment variable when it is an absolute
-    path, else the temp directory / ~\\AppData\\Local) and a leading ~\\."""
+    On Windows also ${TEMP} and ${LOCALAPPDATA} (the environment variable when it is a fully
+    qualified path, else ~\\AppData\\Local\\Temp / ~\\AppData\\Local: a fixed place, nothing is
+    probed or written) and a leading ~\\."""
     home = os.path.expanduser("~")
     xdg = os.environ.get("XDG_CACHE_HOME", "")
     cache = xdg if xdg and os.path.isabs(xdg) else os.path.join(home, ".cache")
     path = raw.replace("${XDG_CACHE_HOME}", cache)
     if IS_WINDOWS:
-        temp = os.environ.get("TEMP", "")
-        local = os.environ.get("LOCALAPPDATA", "")
-        path = path.replace("${TEMP}", temp if temp and os.path.isabs(temp) else tempfile.gettempdir())
-        path = path.replace("${LOCALAPPDATA}", local if local and os.path.isabs(local)
-                            else os.path.join(home, "AppData", "Local"))
+        fallback = os.path.join(home, "AppData", "Local")
+        path = path.replace("${TEMP}", _windows_dir("TEMP") or os.path.join(fallback, "Temp"))
+        path = path.replace("${LOCALAPPDATA}", _windows_dir("LOCALAPPDATA") or fallback)
         if path.startswith("~\\"):
             path = home + path[1:]
     if path == "~" or path.startswith("~/"):
@@ -1062,28 +1076,44 @@ class _ThreadLineReader:
     """_LineReader's interface for Windows, where selectors cannot wait on a pipe.
 
     A daemon thread blocks in os.read and queues what it gets; response() waits on the queue
-    against the same deadline. The thread ends when the process does (EOF or an error on the
-    pipe), so _reap ends the process before it closes the pipe."""
+    against the same deadline. The thread counts what it read and stops at MAX_CODEX_BYTES, so
+    the queue holds at most that much; it also ends on EOF or an error, and the end is
+    remembered, so every later response() sees it again (as _LineReader's read does).
+    _reap ends the process, then close() waits for the thread, and the pipe is only closed
+    once the thread is gone: a descriptor number is never read after it was reused."""
 
     def __init__(self, fd):
         self.fd = fd
         self.buf = b""
-        self.total = 0
+        self.ended = None                        # b"" (EOF), OSError (a failed read) or _TOO_MUCH
+        self.read = 0                            # bytes the thread has read
         self.chunks = queue.Queue()
-        threading.Thread(target=self._pump, daemon=True).start()
+        self.thread = threading.Thread(target=self._pump, daemon=True)
+        self.thread.start()
+
+    _TOO_MUCH = object()
 
     def _pump(self):
+        total = 0
         while True:
             try:
                 chunk = os.read(self.fd, 65536)
             except OSError:
-                chunk = None                     # None: the read failed; b"": EOF
-            self.chunks.put(chunk if chunk is not None else OSError)
+                self.chunks.put(OSError)
+                return
+            total += len(chunk)
+            self.read = total
+            if total > MAX_CODEX_BYTES:
+                self.chunks.put(self._TOO_MUCH)
+                return
+            self.chunks.put(chunk)
             if not chunk:
                 return
 
-    def close(self):
-        pass
+    def close(self, wait=2.0):
+        """True when the thread is gone (it ends once the process has)."""
+        self.thread.join(wait)
+        return not self.thread.is_alive()
 
     _response = staticmethod(_LineReader._response)
 
@@ -1095,6 +1125,14 @@ class _ThreadLineReader:
                 msg = self._response(line, awaited)
                 if msg is not None:
                     return msg, None
+            if self.ended is not None:
+                if self.ended is OSError:
+                    return None, "read from codex failed"
+                if self.ended is self._TOO_MUCH:
+                    return None, "codex wrote too much before replying"
+                msg = self._response(self.buf, awaited) if self.buf else None
+                self.buf = b""
+                return (msg, None) if msg is not None else (None, "codex closed the stream")
             left = deadline - time.monotonic()
             if left <= 0:
                 return None, "no reply within the timeout"
@@ -1102,16 +1140,23 @@ class _ThreadLineReader:
                 chunk = self.chunks.get(timeout=left)
             except queue.Empty:
                 continue
-            if chunk is OSError:
-                return None, "read from codex failed"
-            if not chunk:
-                msg = self._response(self.buf, awaited) if self.buf else None
-                self.buf = b""
-                return (msg, None) if msg is not None else (None, "codex closed the stream")
-            self.total += len(chunk)
-            if self.total > MAX_CODEX_BYTES:
-                return None, "codex wrote too much before replying"
-            self.buf += chunk
+            if chunk is OSError or chunk is self._TOO_MUCH or not chunk:
+                self.ended = chunk
+            else:
+                self.buf += chunk
+
+
+def _windows_which(name):
+    """`name` resolved through PATH and PATHEXT (codex is a codex.cmd shim there and Popen does not search
+    PATHEXT), but never to a file in the current directory, which shutil.which searches first on Windows:
+    a codex.exe planted next to wherever the collector runs would otherwise be started. A name with a
+    directory part is the caller's own choice and is used as given."""
+    if os.path.dirname(name):
+        return name
+    found = shutil.which(name)
+    if found and os.path.normcase(os.path.dirname(os.path.abspath(found))) == os.path.normcase(os.getcwd()):
+        return name
+    return found or name
 
 
 def _send(proc, message):
@@ -1127,11 +1172,15 @@ def _reap(proc, reader):
     SIGTERM, up to 2 s of waiting, then SIGKILL: this is the time reaping adds
     after the exchange's own deadline.
     """
-    if reader is not None:
-        reader.close()
+    gone = True
     if IS_WINDOWS:
         _stop(proc)                              # a thread may be blocked reading the pipe: the process ends first
+        gone = reader.close() if reader is not None else True
+    elif reader is not None:
+        reader.close()
     for pipe in (proc.stdin, proc.stdout):
+        if pipe is proc.stdout and not gone:
+            continue                             # the reader thread still holds it: closing could hand its number to another file
         try:
             pipe.close()
         except OSError:
@@ -1139,8 +1188,21 @@ def _reap(proc, reader):
     _stop(proc)
 
 
+def _kill_tree(proc):
+    """Windows: end the child AND what it started. codex is a codex.cmd shim there; terminate() ends the
+    cmd.exe, and the node process under it would keep running (and keep the pipe open). The pid is the one
+    Popen returned for the process this script started."""
+    try:
+        subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"], stdin=subprocess.DEVNULL,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5, check=False)
+    except (OSError, subprocess.SubprocessError):
+        pass                                     # terminate() below is the fallback
+
+
 def _stop(proc):
     if proc.poll() is None:
+        if IS_WINDOWS:
+            _kill_tree(proc)
         proc.terminate()
         try:
             proc.wait(timeout=2)
@@ -1165,7 +1227,7 @@ def codex_exchange(ctx):
     deadline = time.monotonic() + ctx.timeout
     codex_bin = ctx.codex_bin
     if IS_WINDOWS:
-        codex_bin = shutil.which(codex_bin) or codex_bin     # codex is a codex.cmd shim there; Popen does not search PATHEXT
+        codex_bin = _windows_which(codex_bin)
     argv = [codex_bin, "app-server", "--listen", "stdio://"]
     try:
         proc = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
