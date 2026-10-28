@@ -3338,9 +3338,20 @@ def test_quota_snapshot_windows(tmp):
                     os.environ[k] = v
         return out, time.monotonic() - started, pidfile
 
-    out, took, pidfile = exchange("normal", result={"rateLimits": {"limitId": "codex"}})
+    used = []
+    real_reader = win._ThreadLineReader
+
+    class _SpyReader(real_reader):
+        def __init__(self, fd):
+            used.append(fd)
+            super().__init__(fd)
+    win._ThreadLineReader = _SpyReader
+    try:
+        out, took, pidfile = exchange("normal", result={"rateLimits": {"limitId": "codex"}})
+    finally:
+        win._ThreadLineReader = real_reader
     check("quota-snapshot windows: the thread reader gets the rate-limits reply past the noise",
-          out == ({"rateLimits": {"limitId": "codex"}}, None, None), out)
+          out == ({"rateLimits": {"limitId": "codex"}}, None, None) and len(used) == 1, (out, used))
     check("quota-snapshot windows: the codex process is gone afterwards", _qs_pid_gone(pidfile))
     out, took, pidfile = exchange("rpc_error")
     check("quota-snapshot windows: a JSON-RPC error is reported as an error",
