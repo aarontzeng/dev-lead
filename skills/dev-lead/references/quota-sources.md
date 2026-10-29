@@ -277,7 +277,10 @@ they have open.
   then nothing is moved or started, and the problem line names the socket
   (`its working directory is not empty and a private tmux server of an earlier run
   may still be running (dev-lead-quota-<pid>-<cli>)`) so the operator can stop it
-  (`tmux -L <name> kill-server`) and remove the socket file. A socket directory
+  (`tmux -L <name> kill-server`) and remove the socket file. Each such socket is asked first
+  (`tmux -L <name> list-sessions`): when tmux itself says no server is behind it (a collector that was
+  killed leaves a dead socket; 0.6.94, before which one blocked every later run for good), the file is
+  unlinked and does not count; a timeout, a refused connection or tmux missing rules nothing out. A socket directory
   that exists but cannot be read refuses the same way (`... and tmux's socket
   directory cannot be read (EACCES)`); only one that is not there, or that can be
   read and holds no entry of that naming, allows the clean-up. The scan reads the directory this process would use (`TMUX_TMPDIR`, else
@@ -327,8 +330,13 @@ they have open.
   server running; the socket is named by pid, so a later run with that pid
   kills it if it gets as far as starting tmux (it does not with a crowded working
   directory), and otherwise it is stopped by hand (`tmux -L <name> kill-server`).
-  A socket file left after a reboot (a persistent `TMUX_TMPDIR`) or by an
-  `_remove_socket` that could not unlink it refuses the same way and is removed by hand. A residue tree deeper than Python's recursion limit cannot be
+  A socket file left after a reboot (a persistent `TMUX_TMPDIR`) or by a killed collector is
+  probed (0.6.94) and unlinked when tmux says no server is behind it (a proven-dead entry that
+  cannot be unlinked is harmless and does not refuse); one tmux cannot answer for (a timeout,
+  Permission denied, an answer of more than one line) refuses the same way and is dealt with by
+  hand. The scan stops at the first such socket. Measured (tmux 3.2a, 2026-10-29): a socket file that was bound and then
+  abandoned answers `list-sessions` with the single line `no server running on <path>`, in any `LC_MESSAGES`. A `TMUX_TMPDIR` whose path itself holds a line break makes even that answer more than one line, so
+  such a host keeps the old behaviour (refused, by hand): an answer is never read across lines. A residue tree deeper than Python's recursion limit cannot be
   deleted by `shutil.rmtree`: it stays under its `quota-tui.gone.<pid>.<random>`
   name, every later run tries again and fails the same way, and it blocks
   nothing (delete it by hand). A rejected directory (one swapped in during the

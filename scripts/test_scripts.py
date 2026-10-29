@@ -2943,6 +2943,15 @@ if state.get("server_gone") and ("kill-server" in args or "list-sessions" in arg
     # the CLI ended by itself and took its one-session server along
     sys.stderr.write("no server running on /tmp/tmux-1000/%s\n" % args[1])
     sys.exit(1)
+if state.get("denied_newline_path") and "list-sessions" in args:
+    # Permission denied on a socket whose directory name holds a newline: the first line alone is a complete
+    # "No such file or directory" diagnostic, the real answer is on the second
+    sys.stderr.write("error connecting to /tmp/x (No such file or directory)\n/z/%s (Permission denied)\n" % args[1])
+    sys.exit(1)
+if "list-sessions" in args and (args[1] == state.get("dead_name") or args[1] in state.get("dead_names", [])):
+    # a socket file with no server behind it (a collector that was killed): only that one name
+    sys.stderr.write("no server running on /tmp/tmux-1000/%s\n" % args[1])
+    sys.exit(1)
 if state.get("gone_enoent") and "kill-server" in args:
     sys.exit(1)
 if state.get("gone_enoent") and "list-sessions" in args:
@@ -2955,6 +2964,10 @@ if state.get("gone_enoent") and "list-sessions" in args:
                and not os.environ.get("LANGUAGE"))
     reason = "No such file or directory" if english else "Datei oder Verzeichnis nicht gefunden"
     sys.stderr.write("error connecting to /tmp/tmux-1000/%s (%s)\n" % (args[1], reason))
+    sys.exit(1)
+if state.get("denied_phrase_path") and "list-sessions" in args:
+    # Permission denied on a socket whose directory name contains tmux's "no server running" words
+    sys.stderr.write("error connecting to /tmp/no server running/%s (Permission denied)\n" % args[1])
     sys.exit(1)
 if state.get("probe_denied") and "kill-server" in args:
     sys.exit(1)
@@ -4262,6 +4275,12 @@ def test_quota_snapshot_tui_refresh(tmp):
     def verbs(calls):
         return [next((a for a in c if a in ("new-session", "kill-server")), "?") for c in calls]
 
+    def probed(calls, *names):
+        # the only tmux calls a refused clean-up makes: asking each of these collector sockets, once, whether a
+        # server answers (an empty list is NOT a match: no probe at all would be a different behaviour)
+        return (len(calls) == len(names) and all("list-sessions" in c for c in calls)
+                and [c[1] for c in calls] == list(names))
+
     def private(calls):
         return bool(calls) and all(c[:1] == ["-L"] and c[1].startswith("dev-lead-quota-") for c in calls) \
             and len({c[1] for c in calls}) == 1
@@ -4530,11 +4549,11 @@ def test_quota_snapshot_tui_refresh(tmp):
     r, recs, calls = scenario("after a failed kill", env_extra={"TMUX_TMPDIR": str(chain_tmp)})
     check("tui refresh: ...and the next refresh does not move or delete that directory, starts no second CLI, "
           "and names the first run's socket",
-          r.returncode == 0 and len(recs) == 2 and calls == []
+          r.returncode == 0 and len(recs) == 2 and probed(calls, first_socket)
           and (workdir / ".remember" / ".install-marker").exists() and workdir.stat().st_ino == chain_ino
           and (workdir / ".remember" / "logs" / "hook.log").exists() and (chain_dir / first_socket).exists()
           and not [p.name for p in workdir.parent.iterdir() if p.name.startswith(("quota-tui.gone.", "quota-tui.foreign."))]
-          and all(any(first_socket in p and "may still be running" in p for p in x["problems"]) for x in recs),
+          and recs and all(any(first_socket in p and "may still be running" in p for p in x["problems"]) for x in recs),
           (r.returncode, calls, first_socket, recs))
     (chain_dir / first_socket).unlink()
     for entry in workdir.iterdir():
@@ -4629,18 +4648,106 @@ def test_quota_snapshot_tui_refresh(tmp):
     check("tui refresh: a crowded working directory is NOT set aside while an earlier run's private server may "
           "still be running (its socket is there): nothing is started, nothing is moved or deleted, and the "
           "problem names the socket",
-          r.returncode == 0 and len(recs) == 2 and calls == [] and (workdir / "late.txt").exists()
+          r.returncode == 0 and len(recs) == 2 and probed(calls, "dev-lead-quota-424242-cursor") and (workdir / "late.txt").exists()
           and workdir.stat().st_ino == stray_ino and not [p.name for p in workdir.parent.iterdir() if p.name.startswith(("quota-tui.gone.", "quota-tui.foreign."))]
-          and all(any("may still be running (dev-lead-quota-424242-cursor)" in p and "not empty" in p
+          and recs and all(any("may still be running (dev-lead-quota-424242-cursor)" in p and "not empty" in p
                       for p in x["problems"]) for x in recs), (r.returncode, calls, recs))
     (stray_dir / "dev-lead-quota-424242-cursor").unlink()
     (stray_dir / "dev-lead-quota-424242-opencode").write_text("")
     r, recs, calls = scenario("stray opencode server", env_extra={"TMUX_TMPDIR": str(tmp / "tmuxtmp-stray")})
     check("tui refresh: ...an opencode refresh's leftover private server stops a crowded clean-up the same way",
-          calls == [] and (workdir / "late.txt").exists()
-          and all(any("may still be running (dev-lead-quota-424242-opencode)" in p for p in x["problems"])
+          probed(calls, "dev-lead-quota-424242-opencode") and (workdir / "late.txt").exists()
+          and recs and all(any("may still be running (dev-lead-quota-424242-opencode)" in p for p in x["problems"])
                   for x in recs), (calls, recs))
     (stray_dir / "dev-lead-quota-424242-opencode").unlink()
+    # a socket nothing listens on (the collector that made it was killed) is not a server: it is probed,
+    # unlinked, and the clean-up goes on (measured 2026-10-27: it blocked a host's refresh for two days)
+    import socket as _sock
+    dead = "dev-lead-quota-424242-cursor"
+    dead_path = stray_dir / dead
+    _srv = _sock.socket(_sock.AF_UNIX)
+    _srv.bind(str(dead_path))
+    _srv.close()                                  # the file stays, nothing listens
+    (workdir / "late.txt").write_text("x")
+    r, recs, calls = scenario("dead stray socket", env_extra={"TMUX_TMPDIR": str(tmp / "tmuxtmp-stray")},
+                              extra_state={"dead_name": dead})
+    check("tui refresh: ...a socket that tmux says has no server behind it is unlinked and does not stop the "
+          "clean-up: the directory is set aside and the CLI starts in an empty one",
+          r.returncode == 0 and not dead_path.exists() and not (workdir / "late.txt").exists()
+          and any("list-sessions" in c and c[1] == dead for c in calls)
+          and [v for v in verbs(calls) if v != "?"] == ["new-session", "kill-server"]
+          and recs and all(not any("may still be running" in p for p in x["problems"]) for x in recs),
+          (r.returncode, dead_path.exists(), calls, recs))
+    # the same socket where tmux cannot say (Permission denied): a server may be alive behind it
+    _srv = _sock.socket(_sock.AF_UNIX)
+    _srv.bind(str(dead_path))
+    _srv.close()
+    (workdir / "late.txt").write_text("x")
+    r, recs, calls = scenario("unreachable stray socket", env_extra={"TMUX_TMPDIR": str(tmp / "tmuxtmp-stray")},
+                              extra_state={"probe_denied": True})
+    check("tui refresh: ...a socket tmux cannot answer for (Permission denied) stays: it is not unlinked and "
+          "the crowded directory is left alone",
+          dead_path.exists() and (workdir / "late.txt").exists() and probed(calls, dead)
+          and recs and all(any("may still be running (%s)" % dead in p for p in x["problems"]) for x in recs),
+          (dead_path.exists(), calls, recs))
+    dead_path.unlink()
+    # the proof is tmux's own diagnostic: a Permission denied for a path that CONTAINS the words "no server
+    # running" is not proof, and the live server's socket is not unlinked
+    _srv = _sock.socket(_sock.AF_UNIX)
+    _srv.bind(str(dead_path))
+    _srv.close()
+    (workdir / "late.txt").write_text("x")
+    r, recs, calls = scenario("denied with the words in the path", env_extra={"TMUX_TMPDIR": str(tmp / "tmuxtmp-stray")},
+                              extra_state={"denied_phrase_path": True})
+    check("tui refresh: ...a refusal whose socket path contains tmux's 'no server running' words is not proof that "
+          "the server is gone: the socket stays and the directory is left alone",
+          dead_path.exists() and (workdir / "late.txt").exists() and probed(calls, dead), (dead_path.exists(), calls))
+    dead_path.unlink()
+    # ...and a path with a newline in it can put a proof line of its own into the answer: more than one line is no proof
+    _srv = _sock.socket(_sock.AF_UNIX)
+    _srv.bind(str(dead_path))
+    _srv.close()
+    (workdir / "late.txt").write_text("x")
+    r, recs, calls = scenario("denied with a forged line", env_extra={"TMUX_TMPDIR": str(tmp / "tmuxtmp-stray")},
+                              extra_state={"denied_newline_path": True})
+    check("tui refresh: ...an answer of several lines, one of them tmux's 'no server running' diagnostic, is not "
+          "proof: the socket stays and the directory is left alone",
+          dead_path.exists() and (workdir / "late.txt").exists() and probed(calls, dead), (dead_path.exists(), calls))
+    dead_path.unlink()
+    # several sockets: every one before the first unresolved one is probed and a dead one removed; that one
+    # is named and nothing after it is probed (the lock is held, a timeout each would add up)
+    first_dead, then_live, never_probed = ("dev-lead-quota-424242-agy", "dev-lead-quota-424242-cursor",
+                                           "dev-lead-quota-424242-opencode")
+    for name_ in (first_dead, then_live, never_probed):
+        _srv = _sock.socket(_sock.AF_UNIX)
+        _srv.bind(str(stray_dir / name_))
+        _srv.close()
+    (workdir / "late.txt").write_text("x")
+    r, recs, calls = scenario("dead then live then more", env_extra={"TMUX_TMPDIR": str(tmp / "tmuxtmp-stray")},
+                              extra_state={"dead_name": first_dead})
+    check("tui refresh: ...among several sockets the dead one is removed, the first one tmux does not call dead "
+          "is named, and the sockets after it are neither probed nor removed",
+          not (stray_dir / first_dead).exists() and (stray_dir / then_live).exists()
+          and (stray_dir / never_probed).exists() and probed(calls, first_dead, then_live)
+          and (workdir / "late.txt").exists()
+          and recs and all(any("may still be running (%s)" % then_live in p for p in x["problems"]) for x in recs),
+          (sorted(p.name for p in stray_dir.iterdir()), calls))
+    for name_ in (then_live, never_probed):
+        (stray_dir / name_).unlink()
+    # two dead sockets in a row are both removed (not just the first)
+    for name_ in (first_dead, then_live, never_probed):
+        _srv = _sock.socket(_sock.AF_UNIX)
+        _srv.bind(str(stray_dir / name_))
+        _srv.close()
+    (workdir / "late.txt").write_text("x")
+    r, recs, calls = scenario("two dead then live", env_extra={"TMUX_TMPDIR": str(tmp / "tmuxtmp-stray")},
+                              extra_state={"dead_names": [first_dead, then_live]})
+    check("tui refresh: ...two dead sockets in a row are both removed, and the first live one after them is named",
+          not (stray_dir / first_dead).exists() and not (stray_dir / then_live).exists()
+          and (stray_dir / never_probed).exists() and probed(calls, first_dead, then_live, never_probed)
+          and recs and all(any("may still be running (%s)" % never_probed in p for p in x["problems"]) for x in recs),
+          (sorted(p.name for p in stray_dir.iterdir()), calls))
+    (stray_dir / never_probed).unlink()
     for odd in ("dev-lead-quota-x-agy", "dev-lead-quota-1-other", "default", "dev-lead-quota-1-agy.bak",
                 "dev-lead-quota-12345678901-agy", "xdev-lead-quota-1-agy"):
         (stray_dir / odd).write_text("")
@@ -5007,13 +5114,15 @@ def test_quota_snapshot_tui_refresh(tmp):
             raise PermissionError(13, "denied")
         return real_listdir(path)
     try:
-        missing = qs._stray_server()
+        probe_ctx = qs.Context(qs.parse_ts(QS_NOW), "codex", 20.0, "0.0.0", refresh=True,
+                               tmux_bin=str(tmp / "no-such-tmux"), refresh_wait=1.0)   # tmux missing: no proof
+        missing = qs._stray_server(probe_ctx)
         probe_dir.mkdir()
-        empty = qs._stray_server()
+        empty = qs._stray_server(probe_ctx)
         (probe_dir / "dev-lead-quota-77-cursor").write_text("")
-        named = qs._stray_server()
+        named = qs._stray_server(probe_ctx)
         os.listdir = listdir_denied
-        denied = qs._stray_server()
+        denied = qs._stray_server(probe_ctx)
         denied_base = tmp / "denied-base"
         (denied_base / "quota-tui").mkdir(parents=True)
         (denied_base / "quota-tui" / "planted.txt").write_text("x")

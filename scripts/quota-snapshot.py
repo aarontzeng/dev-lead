@@ -596,8 +596,12 @@ def _server_gone(ctx, socket):
     except (OSError, subprocess.SubprocessError):
         return False
     err = done.stderr or ""
-    return done.returncode != 0 and ("no server running" in err
-                                     or ("error connecting to" in err and "No such file or directory" in err))
+    # the socket path is in the message, so a TMUX_TMPDIR holding these words (or a newline followed by
+    # them) must not turn "(Permission denied)" on a live server into proof that it is gone: the answer
+    # counts only as ONE line that is, from end to end, one of the two diagnostics
+    lines = [ln for ln in err.splitlines() if ln.strip()]
+    return done.returncode != 0 and len(lines) == 1 and bool(re.fullmatch(
+        r"no server running on .*|error connecting to .* \(No such file or directory\)", lines[0]))
 
 
 def _mtime_or_none(path):
@@ -690,7 +694,7 @@ def _refresh_locked(ctx, kind, path, base):
         # someone else. --trust would trust it, so it is set aside exactly as after a run and
         # the CLI starts in a fresh empty directory; if that does not leave an empty one, the
         # run is refused. Not while an earlier run's private server may still be running
-        stray = _stray_server()
+        stray = _stray_server(ctx)
         if stray:
             # a run that could not stop its server keeps the directory (the CLI may still be
             # writing there) and the socket: do not move the directory under it, or start a second CLI
@@ -876,20 +880,31 @@ def _tmux_socket_dir():
 _PRIVATE_SOCKET = re.compile(r"dev-lead-quota-[0-9]{1,10}-(?:agy|cursor|opencode)\Z")
 
 
-def _stray_server():
+def _stray_server(ctx):
     """Why an earlier run's private server cannot be ruled out, or None when it can.
 
     A socket of this collector's naming in tmux's socket directory: the run that could not
-    stop its server keeps it, and so does a collector that died during the wait. A directory
-    that cannot be read is not an answer either; only one that is not there is (no tmux
-    server was ever started under that user and TMUX_TMPDIR)."""
+    stop its server keeps it, and so does a collector that died during the wait. A socket
+    nothing listens on is not a server, though: tmux itself says so (_server_gone), and then
+    it is unlinked and does not count, or one dead socket would block every later run
+    for good (measured 2026-10-27: a socket left by a killed collector stopped the refresh of
+    agy and cursor on a host for two days). Any other answer from tmux (a timeout, a socket it
+    cannot reach, tmux missing) rules nothing out. A directory that cannot be read is not an
+    answer either; only one that is not there is (no tmux server was ever started under that
+    user and TMUX_TMPDIR)."""
     try:
         names = sorted(n for n in os.listdir(_tmux_socket_dir()) if _PRIVATE_SOCKET.match(n))
     except (FileNotFoundError, NotADirectoryError):
         return None
     except OSError as exc:
         return "tmux's socket directory cannot be read (%s)" % errno_name(exc)
-    return ("a private tmux server of an earlier run may still be running (%s)" % names[0]) if names else None
+    for name in names:
+        if not _server_gone(ctx, name):
+            # refused already: no more probes, so a run of sockets tmux does not answer for costs one
+            # timeout, not one each, while the refresh lock is held; the dead ones after it wait for a later run
+            return "a private tmux server of an earlier run may still be running (%s)" % name
+        _remove_socket(name)
+    return None
 
 
 def _remove_socket(name):
