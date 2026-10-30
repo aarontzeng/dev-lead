@@ -8,8 +8,16 @@
 # branch name, a "frozen" directory something else is still writing to).
 # Both measured bugs in this repo's own shell fragments were in this class.
 #
-# Usage:  freeze-target.sh <repo-dir> <committish> <dest-dir> [--clone]
+# Usage:  freeze-target.sh <repo-dir> <committish> <dest-dir> [--clone] [--opencode-lockdown]
 # Prints: the resolved 40-char SHA on stdout (capture it as REVIEW_HEAD)
+#
+# --opencode-lockdown: also write the opencode review leg's read-only
+# opencode.json (the shape check-opencode-lockdown.py accepts, from the
+# opencode-adversarial-review skill) at the target root and make it read-only,
+# so the lead stops copying it in by hand every round (a peer, 2026-10-30).
+# It is untracked scaffolding: declare it to verify-target.sh. A commit that
+# tracks opencode.json, opencode.jsonc or .opencode is refused -- writing over a
+# tracked file mutates the reviewed tree (use the skill's bracket recipe).
 #
 # --clone: for a reader that can see only the frozen directory. A worktree's
 # .git is a one-line pointer file into the main repo's .git/worktrees/, outside
@@ -27,15 +35,19 @@ here=$(cd -- "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}" 2>/dev/null || 
 # resolved up front, before anything is created, so it cannot fail past cleanup
 [ -x "$here/renorm-only.sh" ] || die "cannot find renorm-only.sh next to ${BASH_SOURCE[0]}"
 
-usage="usage: freeze-target.sh <repo-dir> <committish> <dest-dir> [--clone]"
+usage="usage: freeze-target.sh <repo-dir> <committish> <dest-dir> [--clone] [--opencode-lockdown]"
 mode=worktree
-case $# in
-  3) ;;
-  4) [ "$4" = "--clone" ] || die "unknown option '$4'; $usage"
-     mode=clone ;;
-  *) die "$usage" ;;
-esac
+lockdown=0
+[ $# -ge 3 ] || die "$usage"
 repo=$1; committish=$2; dest=$3
+shift 3
+for opt in "$@"; do
+  case "$opt" in
+    --clone) [ "$mode" = worktree ] || die "--clone given twice; $usage"; mode=clone ;;
+    --opencode-lockdown) [ "$lockdown" = 0 ] || die "--opencode-lockdown given twice; $usage"; lockdown=1 ;;
+    *) die "unknown option '$opt'; $usage" ;;
+  esac
+done
 
 require_git_repo "$repo" "repo dir"
 
@@ -103,6 +115,8 @@ else
   # --detach: no branch, so nothing can advance this worktree under the reviewer.
   git -C "$repo" worktree add --detach "$dest" "$sha" >/dev/null \
     || die "git worktree add failed (nothing was removed: the path may belong to someone else)"
+  # Ours from here: an interruption (mid lock-down write, say) removes it, as in clone mode.
+  trap 'refuse "interrupted by a signal"' INT TERM HUP
 fi
 
 # Verify what we created rather than assuming it: cheap, and the whole point.
@@ -122,6 +136,33 @@ dirty=$(printf '%s\n' "$status" | "$here/renorm-only.sh" --filter "$dest") \
 [ -z "$dirty" ] \
   || refuse "freshly created $mode is not clean -- refusing to call it frozen:
 $dirty"
+if [ "$lockdown" = 1 ]; then
+  tracked=$(git -C "$dest" ls-files -- opencode.json opencode.jsonc .opencode 2>/dev/null) \
+    || refuse "cannot list tracked files in the new $mode"
+  [ -z "$tracked" ] \
+    || refuse "--opencode-lockdown: the commit tracks $(echo $tracked); writing the lock-down over it would change the reviewed tree -- freeze without the flag and follow the opencode-adversarial-review bracket recipe"
+  cat > "$dest/opencode.json" <<'JSON' || refuse "cannot write opencode.json"
+{
+  "$schema": "https://opencode.ai/config.json",
+  "permission": {
+    "bash": {
+      "*": "deny",
+      "git status*": "allow",
+      "git log*": "allow",
+      "git diff*": "allow",
+      "git show*": "allow",
+      "git rev-parse*": "allow"
+    },
+    "edit": "deny",
+    "external_directory": "deny"
+  }
+}
+JSON
+  # a-w: an allow-listed `git diff --output=opencode.json` cannot rewrite it mid-run.
+  chmod a-w "$dest/opencode.json" || refuse "cannot make opencode.json read-only"
+  python3 "$here/check-opencode-lockdown.py" "$dest" >/dev/null \
+    || refuse "the written opencode.json does not pass check-opencode-lockdown.py"
+fi
 trap - INT TERM HUP
 # From here on only output remains. SIGPIPE ignored so a closed stdout or
 # stderr is an EPIPE error the lines below handle, not a silent kill that
@@ -133,6 +174,11 @@ trap '' PIPE
 if [ -n "$status" ]; then
   { echo "freeze-target: NOTE -- files shown as modified only by line-ending renormalization (bytes identical to the commit); verify-target.sh excuses exactly these:"
     "$here/renorm-only.sh" "$dest" | sed 's/^/  /'
+  } >&2 || true
+fi
+
+if [ "$lockdown" = 1 ]; then
+  { echo "freeze-target: wrote the read-only opencode.json lock-down; declare it: verify-target.sh $dest $sha opencode.json"
   } >&2 || true
 fi
 

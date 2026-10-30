@@ -2,7 +2,8 @@
 """Build a review leg's prompt from that adapter's adversarial framing.
 
 Usage: review-prompt.py --adapter <name> --base <rev> --target <frozen worktree>
-                        [--evidence <new dir>] [--lens-file <path>] < lens > prompt
+                        [--evidence <new dir>] [--lens-file <path>]
+                        [--rebutted <file>] < lens > prompt
 
 The lead's brief is the LENS; this wraps it in
 skills/<adapter>-adversarial-review/references/adversarial-framing.md. One pass
@@ -20,6 +21,13 @@ from another run is exactly the stale input this refuses to hand over. A
 submodule (gitlink) has no file content to copy: BLOBS.txt carries its commit
 id on each side, and base/ has no entry for it.
 
+--rebutted names a file of points settled in earlier rounds (findings the lead
+rebutted or recorded as known limits). When the file exists and is not blank,
+it is appended to the lens under a fixed instruction not to re-raise those
+points without something new; a missing file is no rebuttal. leg-cmd.sh passes
+"$RUN_DIR/rebutted.md", so writing that file beside prompt.md is all a fix round
+needs (a peer pasted the same block into every brief by hand, 2026-10-30).
+
 BASE is resolved to a commit once, and that hash is what the prompt and every
 piece of evidence use: a branch name that moves mid-run would otherwise make the
 diff, the commit list and base/ describe different ranges.
@@ -35,6 +43,20 @@ from pathlib import Path
 from _common import run_git
 
 SKILLS = Path(__file__).resolve().parent.parent / "skills"
+
+
+REBUTTED_HEADER = (
+    "## Settled in earlier rounds\n\n"
+    "The points below were raised before and answered: rebutted with the reason, "
+    "or recorded as known limits. Do not raise them again unless you show a concrete "
+    "sequence, input or code path the answer does not cover, and say what is new.\n\n")
+
+
+def with_rebutted(lens, rebutted):
+    """The lens, followed by the settled points when there are any."""
+    if not rebutted or not rebutted.strip():
+        return lens
+    return lens + "\n\n" + REBUTTED_HEADER + rebutted.strip()
 
 
 def framing_path(adapter):
@@ -160,6 +182,7 @@ def main(argv=None, prog="review-prompt"):
     ap.add_argument("--target", required=True, help="the frozen worktree; HEAD is read from it")
     ap.add_argument("--evidence", help="new directory to materialize evidence into (no-command legs)")
     ap.add_argument("--lens-file", help="read the lens from this file instead of stdin")
+    ap.add_argument("--rebutted", help="file of points settled in earlier rounds; ignored when absent")
     args = ap.parse_args(argv)
     if args.lens_file:
         try:
@@ -191,6 +214,16 @@ def main(argv=None, prog="review-prompt"):
             sys.exit("%s: empty lens from --lens-file %s -- refusing to build a prompt with no brief"
                      % (prog, args.lens_file))
         sys.exit("%s: empty lens on stdin -- refusing to build a prompt with no brief" % prog)
+    rebutted = ""
+    if args.rebutted:
+        # Only a file that is not there counts as "no rebuttal"; a permission or
+        # decoding error is reported, never read as an empty list.
+        try:
+            rebutted = Path(args.rebutted).read_text(encoding="utf-8")
+        except FileNotFoundError:
+            rebutted = ""
+        except (OSError, UnicodeDecodeError) as exc:
+            sys.exit("%s: cannot read --rebutted %s: %s" % (prog, args.rebutted, exc))
     head = run_git(args.target, "rev-parse", "--verify", "HEAD", text=True)
     if head.returncode:
         sys.exit("%s: cannot read HEAD of %s: %s" % (prog, args.target, head.stderr.strip()))
@@ -203,7 +236,7 @@ def main(argv=None, prog="review-prompt"):
     made = []
     try:
         text = build(framing_path(args.adapter).read_text(encoding="utf-8"),
-                     base, head, lens.strip(), evidence)
+                     base, head, with_rebutted(lens.strip(), rebutted), evidence)
         if evidence is not None:
             materialize(args.target, base, head, evidence, made)
     except (OSError, UnicodeDecodeError, ValueError, RuntimeError) as exc:

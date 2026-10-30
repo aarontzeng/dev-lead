@@ -461,6 +461,14 @@ the lead happens to feel finished, which is not a criterion. Measured
 2026-09-01: a standalone two-leg review of a ~130-line lead-written script ran
 two rounds and would have run a third on no principle at all.
 
+**A fix round's re-review gets the settled points in a file.** Write the
+findings already rebutted or recorded as known limits, each with its answer,
+to `$RUN_DIR/rebutted.md` beside the brief. The legs that `leg-cmd.sh` frames
+(through `review-prompt.py`) receive that file under an instruction not to
+raise those points again without something new. Without it, later rounds
+re-raised answered points with nothing new, and the lead pasted the same block
+into every brief by hand (a peer, 2026-10-30).
+
 1. **Implement/fix** in the worktree (same worktree across rounds, new
    commits on top). R2+ task prompts quote each verified finding **verbatim,
    with why it is real and what fix is required** — this shape fixed

@@ -40,6 +40,16 @@ def run(*args, **kw):
     return subprocess.run([str(a) for a in args], capture_output=True, text=True, **kw)
 
 
+# What leg-cmd.sh prints for a refused launch since 0.6.95: a command that fails
+# when run, so `eval "$(...)"` and `bash cmd.sh` both see the refusal. "No launch
+# command" means empty output or exactly this.
+LEG_CMD_REFUSED = ("{ echo 'leg-cmd: the launch was refused (see the message above); no leg ran' >&2; false; }")
+
+
+def no_launch(out):
+    return out.strip() in ("", LEG_CMD_REFUSED)
+
+
 def git(repo, *args):
     return run("git", "-C", str(repo), *args, check=True)
 
@@ -2939,6 +2949,19 @@ if state.get("fail"):
     sys.exit(1)
 if "kill-server" in args and state.get("fail_kill"):
     sys.exit(1)
+if "list-sessions" in args and "-F" in args and state.get("server_pid") \
+        and not (os.path.exists(state["log"] + ".killed") and args[1] in open(state["log"] + ".killed").read().split()):
+    print(state["server_pid"])                    # the pid tmux reports for its server
+    sys.exit(0)
+if state.get("reapable") and "kill-server" in args:
+    # an orphaned private server: kill-server stops it, and tmux says so afterwards
+    with open(state["log"] + ".killed", "a") as fh:
+        fh.write(args[1] + "\n")
+    sys.exit(0)
+if "list-sessions" in args and os.path.exists(state["log"] + ".killed") \
+        and args[1] in open(state["log"] + ".killed").read().split():
+    sys.stderr.write("no server running on /tmp/tmux-1000/%s\n" % args[1])
+    sys.exit(1)
 if state.get("server_gone") and ("kill-server" in args or "list-sessions" in args):
     # the CLI ended by itself and took its one-session server along
     sys.stderr.write("no server running on /tmp/tmux-1000/%s\n" % args[1])
@@ -4549,7 +4572,11 @@ def test_quota_snapshot_tui_refresh(tmp):
     r, recs, calls = scenario("after a failed kill", env_extra={"TMUX_TMPDIR": str(chain_tmp)})
     check("tui refresh: ...and the next refresh does not move or delete that directory, starts no second CLI, "
           "and names the first run's socket",
-          r.returncode == 0 and len(recs) == 2 and probed(calls, first_socket)
+          # its collector has exited, so since 0.6.95 tmux is asked for the server's pid; this fake gives
+          # none, so nothing is killed, the server stays and the refusal stands
+          r.returncode == 0 and len(recs) == 2
+          and [c[4] for c in calls] == ["list-sessions", "list-sessions"] and "-F" in calls[1]
+          and all(c[1] == first_socket for c in calls)
           and (workdir / ".remember" / ".install-marker").exists() and workdir.stat().st_ino == chain_ino
           and (workdir / ".remember" / "logs" / "hook.log").exists() and (chain_dir / first_socket).exists()
           and not [p.name for p in workdir.parent.iterdir() if p.name.startswith(("quota-tui.gone.", "quota-tui.foreign."))]
@@ -4638,32 +4665,34 @@ def test_quota_snapshot_tui_refresh(tmp):
           and all(not any("not empty" in p for p in x["problems"]) for x in recs), (calls, started_in, recs))
     _rm_locked(*[p for p in workdir.parent.iterdir() if p.name.startswith("quota-tui.gone.")])
 
-    # a private server an earlier run could not stop may still be writing there: nothing is moved or started
+    # a private server an earlier run could not stop may still be writing there: nothing is moved or started.
+    # Named with a LIVE pid (this test's own): since 0.6.95 a server whose collector pid is gone is reaped.
+    LIVE_Q = "dev-lead-quota-%d" % os.getpid()
     stray_dir = tmp / "tmuxtmp-stray" / ("tmux-%d" % os.geteuid())
     stray_dir.mkdir(parents=True)
-    (stray_dir / "dev-lead-quota-424242-cursor").write_text("")
+    (stray_dir / (LIVE_Q + "-cursor")).write_text("")
     (workdir / "late.txt").write_text("x")
     stray_ino = workdir.stat().st_ino
     r, recs, calls = scenario("stray server", env_extra={"TMUX_TMPDIR": str(tmp / "tmuxtmp-stray")})
     check("tui refresh: a crowded working directory is NOT set aside while an earlier run's private server may "
           "still be running (its socket is there): nothing is started, nothing is moved or deleted, and the "
           "problem names the socket",
-          r.returncode == 0 and len(recs) == 2 and probed(calls, "dev-lead-quota-424242-cursor") and (workdir / "late.txt").exists()
+          r.returncode == 0 and len(recs) == 2 and probed(calls, LIVE_Q + "-cursor") and (workdir / "late.txt").exists()
           and workdir.stat().st_ino == stray_ino and not [p.name for p in workdir.parent.iterdir() if p.name.startswith(("quota-tui.gone.", "quota-tui.foreign."))]
-          and recs and all(any("may still be running (dev-lead-quota-424242-cursor)" in p and "not empty" in p
+          and recs and all(any("may still be running (%s-cursor)" % LIVE_Q in p and "not empty" in p
                       for p in x["problems"]) for x in recs), (r.returncode, calls, recs))
-    (stray_dir / "dev-lead-quota-424242-cursor").unlink()
-    (stray_dir / "dev-lead-quota-424242-opencode").write_text("")
+    (stray_dir / (LIVE_Q + "-cursor")).unlink()
+    (stray_dir / (LIVE_Q + "-opencode")).write_text("")
     r, recs, calls = scenario("stray opencode server", env_extra={"TMUX_TMPDIR": str(tmp / "tmuxtmp-stray")})
     check("tui refresh: ...an opencode refresh's leftover private server stops a crowded clean-up the same way",
-          probed(calls, "dev-lead-quota-424242-opencode") and (workdir / "late.txt").exists()
-          and recs and all(any("may still be running (dev-lead-quota-424242-opencode)" in p for p in x["problems"])
+          probed(calls, LIVE_Q + "-opencode") and (workdir / "late.txt").exists()
+          and recs and all(any("may still be running (%s-opencode)" % LIVE_Q in p for p in x["problems"])
                   for x in recs), (calls, recs))
-    (stray_dir / "dev-lead-quota-424242-opencode").unlink()
+    (stray_dir / (LIVE_Q + "-opencode")).unlink()
     # a socket nothing listens on (the collector that made it was killed) is not a server: it is probed,
     # unlinked, and the clean-up goes on (measured 2026-10-27: it blocked a host's refresh for two days)
     import socket as _sock
-    dead = "dev-lead-quota-424242-cursor"
+    dead = LIVE_Q + "-cursor"
     dead_path = stray_dir / dead
     _srv = _sock.socket(_sock.AF_UNIX)
     _srv.bind(str(dead_path))
@@ -4678,6 +4707,103 @@ def test_quota_snapshot_tui_refresh(tmp):
           and [v for v in verbs(calls) if v != "?"] == ["new-session", "kill-server"]
           and recs and all(not any("may still be running" in p for p in x["problems"]) for x in recs),
           (r.returncode, dead_path.exists(), calls, recs))
+    # a LIVE private server whose collector has exited (killed by a pane's timeout mid-refresh) is
+    # reaped: kill-server, tmux confirms it is gone, socket unlinked, clean-up goes on (0.6.95;
+    # measured 2026-10-30: cursor TUIs orphaned for 5 and 7.5 hours on two hosts)
+    _gone = subprocess.Popen(["true"])
+    _gone.wait()
+    orphan = "dev-lead-quota-%d-cursor" % _gone.pid
+    orphan_path = stray_dir / orphan
+    (workdir / "late.txt").write_text("x")
+    # a stand-in server here: it LISTENS on the socket and its arguments name it, as a real tmux server's do
+    _fake_server = subprocess.Popen([sys.executable, "-c",
+                                     "import socket, sys, time\n"
+                                     "s = socket.socket(socket.AF_UNIX); s.bind(sys.argv[1]); s.listen()\n"
+                                     "time.sleep(60)", str(orphan_path), "tmux", "-L", orphan, "-f", "/dev/null"])
+    for _ in range(100):
+        if orphan_path.exists():
+            break
+        time.sleep(0.05)
+    r, recs, calls = scenario("orphaned stray server", env_extra={"TMUX_TMPDIR": str(tmp / "tmuxtmp-stray")},
+                              extra_state={"reapable": True, "server_pid": _fake_server.pid})
+    check("tui refresh: ...a live private server whose collector pid is gone is killed, confirmed gone, "
+          "its socket unlinked, and the clean-up goes on",
+          r.returncode == 0 and not orphan_path.exists() and not (workdir / "late.txt").exists()
+          and any("kill-server" in c and c[1] == orphan for c in calls)
+          and recs and all(not any("may still be running" in p for p in x["problems"]) for x in recs),
+          (r.returncode, orphan_path.exists(), calls, recs))
+    _srv = _sock.socket(_sock.AF_UNIX)
+    _srv.bind(str(orphan_path))
+    _srv.close()
+    (workdir / "late.txt").write_text("x")
+    r, recs, calls = scenario("orphan that will not die", env_extra={"TMUX_TMPDIR": str(tmp / "tmuxtmp-stray")},
+                              extra_state={"server_pid": _fake_server.pid})
+    check("tui refresh: ...one tmux still reports alive after kill-server stays, and stops the clean-up",
+          orphan_path.exists() and (workdir / "late.txt").exists()
+          and recs and all(any("may still be running (%s)" % orphan in p for p in x["problems"]) for x in recs),
+          (calls, recs))
+    # a collector in another PID namespace looks gone from here; its server's pid is not visible either,
+    # so nothing is killed
+    _srv = _sock.socket(_sock.AF_UNIX)
+    _srv.bind(str(orphan_path)) if not orphan_path.exists() else None
+    _srv.close()
+    _gone2 = subprocess.Popen(["true"])
+    _gone2.wait()
+    r, recs, calls = scenario("orphan in another pid namespace", env_extra={"TMUX_TMPDIR": str(tmp / "tmuxtmp-stray")},
+                              extra_state={"reapable": True, "server_pid": _gone2.pid})
+    check("tui refresh: ...a server whose own pid is not visible from here (another PID namespace) is never "
+          "killed, even when the collector pid looks gone",
+          orphan_path.exists() and not any("kill-server" in c and c[1] == orphan for c in calls)
+          and recs and all(any("may still be running (%s)" % orphan in p for p in x["problems"]) for x in recs),
+          (calls, recs))
+    # ...and one whose reported pid is held here by an UNRELATED process (this test runner) is not killed either
+    r, recs, calls = scenario("orphan pid held by another process", env_extra={"TMUX_TMPDIR": str(tmp / "tmuxtmp-stray")},
+                              extra_state={"reapable": True, "server_pid": os.getpid()})
+    check("tui refresh: ...nor one whose reported pid belongs to an unrelated process here (no -L <socket> in "
+          "its arguments)",
+          orphan_path.exists() and not any("kill-server" in c and c[1] == orphan for c in calls), calls)
+    # ...nor a CLIENT of that socket: connected to a LIVE listener at the current path, its arguments
+    # name the socket too, but it does not hold the listener. The listener's holder, at the same path,
+    # is accepted: the check is about which process holds it, not whether one exists.
+    if os.path.exists("/proc/net/unix"):
+        orphan_path.unlink()
+        _listener = subprocess.Popen([sys.executable, "-c",
+                                      "import socket, sys, time\n"
+                                      "s = socket.socket(socket.AF_UNIX); s.bind(sys.argv[1]); s.listen()\n"
+                                      "c, _ = s.accept(); time.sleep(60)", str(orphan_path), "tmux", "-L", orphan])
+        for _ in range(100):
+            if orphan_path.exists():
+                break
+            time.sleep(0.05)
+        _client = subprocess.Popen([sys.executable, "-c",
+                                    "import socket, sys, time\n"
+                                    "c = socket.socket(socket.AF_UNIX); c.connect(sys.argv[1]); time.sleep(60)",
+                                    str(orphan_path), "tmux", "-L", orphan, "attach"])
+        time.sleep(0.5)
+        r, recs, calls = scenario("orphan pid held by a client", env_extra={"TMUX_TMPDIR": str(tmp / "tmuxtmp-stray")},
+                                  extra_state={"reapable": True, "server_pid": _client.pid})
+        check("tui refresh: ...nor one whose reported pid is a connected client of the socket (-L <socket> in "
+              "its arguments, not the listener's holder)",
+              orphan_path.exists() and not any("kill-server" in c and c[1] == orphan for c in calls), calls)
+        r, recs, calls = scenario("orphan pid holds the listener", env_extra={"TMUX_TMPDIR": str(tmp / "tmuxtmp-stray")},
+                                  extra_state={"reapable": True, "server_pid": _listener.pid})
+        check("tui refresh: ...while the listener's holder at that same path is accepted and reaped",
+              any("kill-server" in c and c[1] == orphan for c in calls), calls)
+        for _p in (_client, _listener):
+            _p.kill()
+            _p.wait()
+        orphan_path.touch()                       # the reaper unlinked the socket; the cleanup below expects a file
+    _fake_server.kill()
+    _fake_server.wait()
+    orphan_path.unlink()
+    live = LIVE_Q + "-agy"
+    (stray_dir / live).write_text("")
+    r, recs, calls = scenario("live collector's server", env_extra={"TMUX_TMPDIR": str(tmp / "tmuxtmp-stray")},
+                              extra_state={"reapable": True})
+    check("tui refresh: ...a server whose collector pid is alive is never killed",
+          not any("kill-server" in c and c[1] == live for c in calls) and (stray_dir / live).exists(),
+          calls)
+    (stray_dir / live).unlink()
     # the same socket where tmux cannot say (Permission denied): a server may be alive behind it
     _srv = _sock.socket(_sock.AF_UNIX)
     _srv.bind(str(dead_path))
@@ -4716,8 +4842,8 @@ def test_quota_snapshot_tui_refresh(tmp):
     dead_path.unlink()
     # several sockets: every one before the first unresolved one is probed and a dead one removed; that one
     # is named and nothing after it is probed (the lock is held, a timeout each would add up)
-    first_dead, then_live, never_probed = ("dev-lead-quota-424242-agy", "dev-lead-quota-424242-cursor",
-                                           "dev-lead-quota-424242-opencode")
+    first_dead, then_live, never_probed = (LIVE_Q + "-agy", LIVE_Q + "-cursor",
+                                           LIVE_Q + "-opencode")
     for name_ in (first_dead, then_live, never_probed):
         _srv = _sock.socket(_sock.AF_UNIX)
         _srv.bind(str(stray_dir / name_))
@@ -5153,6 +5279,22 @@ def test_quota_snapshot_tui_refresh(tmp):
             os.environ.pop("TMUX_TMPDIR", None)
         else:
             os.environ["TMUX_TMPDIR"] = saved_tmpdir3
+    import builtins
+    _real_open, _real_platform = builtins.open, sys.platform
+    def _no_proc_unix(path, *a, **k):
+        if path == "/proc/net/unix":
+            raise FileNotFoundError(path)
+        return _real_open(path, *a, **k)
+    builtins.open = _no_proc_unix
+    try:
+        sys.platform = "linux"
+        on_linux = qs._holds_listener(os.getpid(), "/tmp/x")
+        sys.platform = "darwin"
+        on_macos = qs._holds_listener(os.getpid(), "/tmp/x")
+    finally:
+        builtins.open, sys.platform = _real_open, _real_platform
+    check("tui refresh: without /proc/net/unix, Linux gives no proof (False) and only macOS falls back (None)",
+          on_linux is False and on_macos is None, (on_linux, on_macos))
     check("tui refresh: tmux's socket directory missing -> no server (None); empty -> None; a collector socket in "
           "it -> named", missing is None and empty is None and named and "dev-lead-quota-77-cursor" in named,
           (missing, empty, named))
@@ -6259,7 +6401,7 @@ def test_opencode_lockdown(tmp):
         (rdir / "prompt.md").write_text("THE LENS\n")
         fake = Path(td) / "bin"
         fake.mkdir()
-        (fake / "opencode").write_text('#!/bin/sh\necho LEG-RAN\n')
+        (fake / "opencode").write_text('#!/bin/sh\ncat\necho LEG-RAN\n')
         (fake / "opencode").chmod(0o755)
         emitted = subprocess.run([str(script), "opencode", "review", "--model", "opencode/x", "--effort", "high",
                                   "--base", shas[0], "--target", str(tgt), "--run-dir", str(rdir),
@@ -6273,8 +6415,12 @@ def test_opencode_lockdown(tmp):
         check("lockdown: without the config the paid run never starts",
               "LEG-RAN" not in out.stdout and "build agent" in out.stderr, out.stdout + out.stderr)
         (tgt / "opencode.json").write_text(LOCKDOWN_JSON)
+        (rdir / "rebutted.md").write_text("F7 settled: the cd runs in a subshell.\n")
         out = subprocess.run(["bash", "-c", 'eval "$(cat)"'], input=emitted, capture_output=True, text=True, env=env)
         check("lockdown: with the config the leg runs", "LEG-RAN" in out.stdout, out.stdout + out.stderr)
+        check("rebutted: an opencode leg (subshell cd) reads $RUN_DIR/rebutted.md in its framed prompt",
+              "Settled in earlier rounds" in out.stdout and "F7 settled" in out.stdout, out.stdout[-600:] + out.stderr)
+        (rdir / "rebutted.md").unlink()
         # the guard follows the file, not a fixed result: break it again after a pass
         (tgt / "opencode.json").write_text(json.dumps({"permission": {"edit": "allow"}}))
         out = subprocess.run(["bash", "-c", 'eval "$(cat)"'], input=emitted, capture_output=True, text=True, env=env)
@@ -6300,7 +6446,7 @@ def test_opencode_lockdown(tmp):
                             "--run-dir", str(rdir)], capture_output=True, text=True,
                            env=dict(os.environ, DEV_LEAD_LAUNCH=str(alt)))
         check("lockdown: requires_lockdown on a role without prompt_frame is refused, not run unchecked",
-              r.returncode != 0 and "requires_lockdown" in r.stderr and not r.stdout, r.stdout + r.stderr)
+              r.returncode != 0 and "requires_lockdown" in r.stderr and no_launch(r.stdout), r.stdout + r.stderr)
         for adapter, model, extra in (("agy", "gemini-3.8-flash-high", []), ("codex", "gpt-6.1-sol", [])):
             e = subprocess.run([str(script), adapter, "review", "--model", model, "--base", shas[0],
                                 "--target", str(tgt), "--run-dir", str(rdir), "--no-triage", "test fixture",
@@ -6402,6 +6548,33 @@ def test_common(tmp):
         body = (SCRIPTS / name).read_text()
         check("lib.sh: %s sources it instead of defining die()" % name,
               '. "$here/lib.sh"' in body and "\ndie() {" not in body)
+
+
+def test_leg_cmd_refusal_fails_when_run():
+    """A refused launch prints a command that FAILS (0.6.95). An empty stdout ran as a
+    success under both documented callers -- `eval "$(leg-cmd.sh ...)"` and `> cmd.sh;
+    bash cmd.sh` -- so a peer's leg that never started recorded rc=0 (2026-10-30)."""
+    script = SCRIPTS / "leg-cmd.sh"
+    gen = run(script, "codex", "review", "--model", "m", "--effort", "high", "--target", "/nonexistent-dev-lead",
+              "--base", "HEAD", "--run-dir", "/tmp/dev-lead-refusal-run")
+    check("leg-cmd refusal: exits non-zero", gen.returncode != 0, gen.stderr)
+    ran = subprocess.run(["bash", "-c", gen.stdout], capture_output=True, text=True)
+    check("leg-cmd refusal: the printed command fails when run, and says no leg ran",
+          gen.stdout.strip() != "" and ran.returncode != 0 and "no leg ran" in ran.stderr,
+          repr(gen.stdout) + ran.stderr)
+    ev = subprocess.run(["bash", "-c", 'eval "$("$0" codex review --model m 2>/dev/null)"; echo "rc=$?"; echo alive',
+                         str(script)], capture_output=True, text=True)
+    check("leg-cmd refusal: under eval the status is non-zero and the caller's shell lives on",
+          "rc=1" in ev.stdout and "alive" in ev.stdout, ev.stdout + ev.stderr)
+    env = dict(os.environ, DEV_LEAD_LAUNCH="/nonexistent-dev-lead/launch.json")
+    gen = subprocess.run([str(script), "codex", "review", "--model", "m"], capture_output=True, text=True, env=env)
+    ran = subprocess.run(["bash", "-c", gen.stdout], capture_output=True, text=True)
+    check("leg-cmd refusal: missing launch data (before argument parsing) still prints the failing command",
+          gen.returncode != 0 and gen.stdout.strip() == LEG_CMD_REFUSED and ran.returncode != 0,
+          repr(gen.stdout) + gen.stderr)
+    ok = run(script, "--help")
+    check("leg-cmd --help: still exits 0 and prints no failing command", ok.returncode == 0
+          and "no leg ran" not in ok.stdout, ok.stdout[-200:])
 
 
 def test_leg_cmd():
@@ -6514,6 +6687,8 @@ def test_leg_cmd():
           "--model gemini-3.8-flash-medium" in r.stdout, r.stdout)
     check("leg-cmd: does not emit a flag the adapter rejects",
           "--effort" not in r.stdout, r.stdout)
+    check("leg-cmd: the agy framing builder is handed $RUN_DIR/rebutted.md too",
+          '--rebutted "$RUN_DIR/rebutted.md"' in r.stdout[:r.stdout.index("agy -p")], r.stdout)
 
     # The output is documented for `eval "$(leg-cmd.sh ...)"`, so a caller
     # value carrying shell metacharacters must come back quoted. Measured
@@ -6557,6 +6732,8 @@ def test_leg_cmd():
           out.rstrip().endswith('-- - < "$RUN_DIR/framed-prompt.md"'), out)
     check("leg-cmd: codex review's -o file expands $RUN_DIR",
           '-o "$RUN_DIR/review.md"' in out, out)
+    check("leg-cmd: the framing builder is handed $RUN_DIR/rebutted.md",
+          '--rebutted "$RUN_DIR/rebutted.md"' in out[:out.index("codex exec")], out)
     with tempfile.TemporaryDirectory() as td:
         inside = Path(td) / "run"
         r = subprocess.run([str(script), "codex", "review", "--model", "gpt-6-luna", "--effort", "high",
@@ -6564,7 +6741,7 @@ def test_leg_cmd():
                             "--no-triage", "test fixture", "--head", "HEAD"],
                            capture_output=True, text=True)
     check("leg-cmd: a run directory inside the frozen target is refused",
-          r.returncode != 0 and "inside --target" in r.stderr and not r.stdout, r.stderr)
+          r.returncode != 0 and "inside --target" in r.stderr and no_launch(r.stdout), r.stderr)
     r = subprocess.run([str(script), "codex", "implement", "--model", "x", "--effort", "high"],
                        capture_output=True, text=True, env=dict(os.environ, DEV_LEAD_LAUNCH=str(SCRIPTS.parent / "data" / "launch.json")))
     check("leg-cmd: a DEV_LEAD_LAUNCH override is announced, never silent",
@@ -6597,11 +6774,11 @@ def test_leg_cmd():
         empty = subprocess.run([sys.executable, str(builder), "--base", "b", "--target", td],
                                input="  \n", capture_output=True, text=True)
         check("framing builder: an empty lens is refused before anything runs",
-              empty.returncode != 0 and "empty lens" in empty.stderr and not empty.stdout, empty.stderr)
+              empty.returncode != 0 and "empty lens" in empty.stderr and no_launch(empty.stdout), empty.stderr)
         nohead = subprocess.run([sys.executable, str(builder), "--base", "b", "--target", td],
                                 input="lens", capture_output=True, text=True)
         check("framing builder: a target that is not a repository is refused",
-              nohead.returncode != 0 and "cannot read HEAD" in nohead.stderr and not nohead.stdout,
+              nohead.returncode != 0 and "cannot read HEAD" in nohead.stderr and no_launch(nohead.stdout),
               nohead.stderr)
     # BASE must be a commit (0.6.30 resolves it once); HEAD exists even in a depth-1 clone.
     real = subprocess.run([sys.executable, str(builder), "--base", "HEAD", "--target", str(SCRIPTS.parent)],
@@ -6642,7 +6819,7 @@ def test_leg_cmd():
         got = subprocess.run([sys.executable, str(gen), "--adapter", bad, "--base", "HEAD",
                               "--target", str(SCRIPTS.parent)], input="lens", capture_output=True, text=True)
         check("review-prompt: adapter %r without a shipped frame is refused" % bad,
-              got.returncode != 0 and not got.stdout, got.stderr)
+              got.returncode != 0 and no_launch(got.stdout), got.stderr)
     try:
         crp.build("x {{LENS}}", "b", "h", "l", evidence="/e")
         refused = False
@@ -6671,7 +6848,7 @@ def test_leg_cmd():
         nov = subprocess.run([sys.executable, str(gen), "--adapter", "agy", "--base", base, "--target", str(repo)],
                              input="lens", capture_output=True, text=True)
         check("review-prompt: the agy frame without --evidence is refused",
-              nov.returncode != 0 and "--evidence" in nov.stderr and not nov.stdout, nov.stderr)
+              nov.returncode != 0 and "--evidence" in nov.stderr and no_launch(nov.stdout), nov.stderr)
         got = subprocess.run([sys.executable, str(gen), "--adapter", "agy", "--base", base, "--target", str(repo),
                               "--evidence", str(ev)], input="the lens", capture_output=True, text=True)
         check("review-prompt: the agy frame builds and names the evidence directory",
@@ -6717,7 +6894,7 @@ def test_leg_cmd():
                                    "--target", str(repo), "--evidence", str(broken)],
                                   input="lens", capture_output=True, text=True)
         check("review-prompt: a failed materialization leaves no half-written evidence behind",
-              bad_base.returncode != 0 and not bad_base.stdout and not broken.exists(), bad_base.stderr)
+              bad_base.returncode != 0 and no_launch(bad_base.stdout) and not broken.exists(), bad_base.stderr)
         for root, dirs, files in os.walk(ev):
             os.chmod(root, 0o755)
 
@@ -6753,7 +6930,7 @@ def test_leg_cmd():
         bad = subprocess.run([sys.executable, str(gen), "--adapter", "codex", "--base", "no-such-rev",
                               "--target", str(repo)], input="lens", capture_output=True, text=True)
         check("review-prompt: a BASE that is not a commit is refused before anything is built",
-              bad.returncode != 0 and "not a commit" in bad.stderr and not bad.stdout, bad.stderr)
+              bad.returncode != 0 and "not a commit" in bad.stderr and no_launch(bad.stdout), bad.stderr)
 
         # A failure AFTER writing began: a git that refuses `cat-file` fails the
         # base/ copy once DIFF.patch and COMMITS.txt already exist.
@@ -6769,7 +6946,7 @@ def test_leg_cmd():
                                  "--target", str(repo), "--evidence", str(fresh)],
                                 input="lens", capture_output=True, text=True, env=fenv)
         check("review-prompt: a failure after writing began removes the directory it made",
-              failed.returncode != 0 and not failed.stdout and not fresh.exists(), failed.stderr)
+              failed.returncode != 0 and no_launch(failed.stdout) and not fresh.exists(), failed.stderr)
         handed = run_dir / "handed"
         handed.mkdir()
         failed = subprocess.run([sys.executable, str(gen), "--adapter", "agy", "--base", base,
@@ -6876,7 +7053,7 @@ def test_leg_cmd():
     r = subprocess.run([str(script), "opencode", "review", "--model", "opencode/x", "--effort", "high",
                         "--target", "/tmp/x", "--no-triage", "test fixture", "--head", "HEAD"], capture_output=True, text=True)
     check("leg-cmd: opencode review without --base is refused",
-          r.returncode != 0 and "--base" in r.stderr and not r.stdout, r.stderr)
+          r.returncode != 0 and "--base" in r.stderr and no_launch(r.stdout), r.stderr)
     with tempfile.TemporaryDirectory() as td:
         r = subprocess.run([str(script), "opencode", "review", "--model", "opencode/x", "--effort", "high",
                             "--base", "abc", "--target", gate_target, "--run-dir", "rel-run",
@@ -6974,7 +7151,7 @@ def test_leg_cmd():
     for role in ("review", "implement"):
         r = subprocess.run([str(script), "claude", role, "--model", "opus"], capture_output=True, text=True)
         check("leg-cmd: claude %s without --effort is refused" % role,
-              r.returncode != 0 and "needs --effort" in r.stderr and not r.stdout, r.stderr)
+              r.returncode != 0 and "needs --effort" in r.stderr and no_launch(r.stdout), r.stderr)
         # Three words, so an emitted constant (a hard-coded xhigh) cannot meet all.
         for word in ("low", "xhigh", "max"):
             r = subprocess.run([str(script), "claude", role, "--model", "opus", "--effort", word],
@@ -6988,7 +7165,7 @@ def test_leg_cmd():
             r = subprocess.run([str(script), "claude", role, "--model", "opus", "--effort", bad],
                                capture_output=True, text=True)
             check("leg-cmd: claude %s refuses the effort %r (closed vocabulary)" % (role, bad),
-                  r.returncode != 0 and not r.stdout
+                  r.returncode != 0 and no_launch(r.stdout)
                   and "only as one of: low, medium, high, xhigh, max -- not %r" % bad in r.stderr, r.stderr)
     # ...and only claude's vocabulary is closed: the others pass a word on.
     r = subprocess.run([str(script), "grok", "implement", "--model", "grok-4.6", "--effort", "turbo",
@@ -7056,7 +7233,7 @@ def test_leg_cmd():
     for argv in no_bash:
         r = subprocess.run([str(script), *argv, "--allow-bash", "pytest"], capture_output=True, text=True)
         check("leg-cmd: %s %s refuses --allow-bash instead of dropping it" % (argv[0], argv[1]),
-              r.returncode != 0 and not r.stdout and "--allow-bash was given" in r.stderr
+              r.returncode != 0 and no_launch(r.stdout) and "--allow-bash was given" in r.stderr
               and "silently dropped" in r.stderr, r.stdout + r.stderr)
     for bad, needle in (("", "non-empty"), ("   ", "non-empty"), ("pytest\nrm -rf /", "newline"),
                         ("*", "contain '*'"), ("git *", "contain '*'"),
@@ -7064,7 +7241,7 @@ def test_leg_cmd():
         r = subprocess.run([str(script), "claude", "implement", "--model", "opus", "--effort", "high",
                             "--allow-bash", bad], capture_output=True, text=True)
         check("leg-cmd: --allow-bash refuses the prefix %r" % bad,
-              r.returncode != 0 and not r.stdout and needle in r.stderr, r.stdout + r.stderr)
+              r.returncode != 0 and no_launch(r.stdout) and needle in r.stderr, r.stdout + r.stderr)
     # Quoting, executed: the output is meant for eval, so a hostile prefix must
     # reach the CLI as one literal argument and run nothing. (`$(...)` is
     # refused before this point for its parentheses, so backticks and a pipe
@@ -7329,14 +7506,14 @@ def test_triage_launch_gate(tmp):
     launch = [script, "agy", "review", "--model", "gemini-3.8-flash-medium", "--base", base, "--target", repo]
     got = run(*launch, env=missing_env)
     check("leg-cmd triage: missing rules name init and the committed-range command",
-          got.returncode != 0 and not got.stdout.strip() and "triage.py init" in got.stderr
+          got.returncode != 0 and no_launch(got.stdout) and "triage.py init" in got.stderr
           and "triage.py scope" in got.stderr, got.stderr)
 
     _write_doc(rules_file, rules)
     env = _roster_env(home, DEV_LEAD_ROSTER=roster_file, DEV_LEAD_TRIAGE=rules_file)
     got = run(*launch, env=env)
     check("leg-cmd triage: a missing record names the SHA and scope command",
-          got.returncode != 0 and not got.stdout.strip() and head in got.stderr
+          got.returncode != 0 and no_launch(got.stdout) and head in got.stderr
           and "triage.py scope" in got.stderr, got.stderr)
     record = home / "triage-records" / (head + ".json")
     record.parent.mkdir()
@@ -7350,7 +7527,7 @@ def test_triage_launch_gate(tmp):
           got.stdout + got.stderr)
     got = run(*launch, "--head", base, env=env)
     check("leg-cmd triage: an asserted full SHA that differs from --target HEAD is refused",
-          got.returncode != 0 and not got.stdout.strip() and base in got.stderr and head in got.stderr
+          got.returncode != 0 and no_launch(got.stdout) and base in got.stderr and head in got.stderr
           and str(repo) in got.stderr, got.stdout + got.stderr)
     got = run(*launch, "--head", "asserted", env=env, cwd=caller)
     check("leg-cmd triage: a symbolic --head is resolved in --target, not the caller cwd",
@@ -7358,7 +7535,7 @@ def test_triage_launch_gate(tmp):
     got = run(script, "agy", "review", "--model", "gemini-3.8-flash-medium", "--base", head,
               "--target", repo, env=env)
     check("leg-cmd triage: a record for another base is refused before launch",
-          got.returncode != 0 and not got.stdout.strip() and base in got.stderr and head in got.stderr
+          got.returncode != 0 and no_launch(got.stdout) and base in got.stderr and head in got.stderr
           and "triage.py scope --base" in got.stderr, got.stdout + got.stderr)
     record_doc = json.loads(record.read_text())
     record_doc["lenses"] = None
@@ -7372,7 +7549,7 @@ def test_triage_launch_gate(tmp):
     no_repo.mkdir()
     got = run(script, "cursor", "review", "--model", "cursor-grok-4.6-medium", env=env, cwd=no_repo)
     check("leg-cmd triage: a caller-cwd adapter refuses a non-repository cwd",
-          got.returncode != 0 and not got.stdout.strip() and "cd into the frozen worktree" in got.stderr,
+          got.returncode != 0 and no_launch(got.stdout) and "cd into the frozen worktree" in got.stderr,
           got.stdout + got.stderr)
     got = run(script, "cursor", "review", "--model", "cursor-grok-4.6-medium", env=env, cwd=repo)
     check("leg-cmd triage: a caller-cwd adapter launched inside the recorded worktree is accepted",
@@ -7392,7 +7569,7 @@ def test_triage_launch_gate(tmp):
     _write_doc(record, dict(record_doc, base=""))
     got = run(*launch, env=env)
     check("leg-cmd triage: a record with a malformed base is refused",
-          got.returncode != 0 and not got.stdout.strip() and "malformed base" in got.stderr, got.stdout + got.stderr)
+          got.returncode != 0 and no_launch(got.stdout) and "malformed base" in got.stderr, got.stdout + got.stderr)
     for bad_rules in (None, "not-an-object"):
         _write_doc(record, dict(record_doc, rules=bad_rules))
         got = run(*launch, env=env)
@@ -7407,10 +7584,10 @@ def test_triage_launch_gate(tmp):
           and "# triage SKIPPED" in got.stderr, got.stdout + got.stderr)
     got = run(*launch, "--no-triage", "", env=env)
     check("leg-cmd triage: an empty skip reason is refused",
-          got.returncode != 0 and not got.stdout.strip() and "non-empty" in got.stderr, got.stderr)
+          got.returncode != 0 and no_launch(got.stdout) and "non-empty" in got.stderr, got.stderr)
     got = run(*launch, "--no-triage", " ", env=env)
     check("leg-cmd triage: a whitespace-only skip reason is refused",
-          got.returncode != 0 and not got.stdout.strip() and "non-empty" in got.stderr, got.stderr)
+          got.returncode != 0 and no_launch(got.stdout) and "non-empty" in got.stderr, got.stderr)
     skips_file = home / "triage-records" / "skips.jsonl"
     kept = skips_file.with_suffix(".kept")
     skips_file.rename(kept)
@@ -7419,15 +7596,15 @@ def test_triage_launch_gate(tmp):
     skips_file.rmdir()
     kept.rename(skips_file)
     check("leg-cmd triage: a skip that cannot be recorded is refused, not launched",
-          got.returncode != 0 and "cannot record --no-triage" in got.stderr and not got.stdout.strip(),
+          got.returncode != 0 and "cannot record --no-triage" in got.stderr and no_launch(got.stdout),
           got.stdout + got.stderr)
     implement = [script, "agy", "implement", "--model", "gemini-3.8-flash-medium", "--target", repo]
     got = run(*implement, "--head", head, env=env)
     check("leg-cmd triage: --head is refused for implement",
-          got.returncode != 0 and not got.stdout.strip() and "only valid for the review role" in got.stderr, got.stderr)
+          got.returncode != 0 and no_launch(got.stdout) and "only valid for the review role" in got.stderr, got.stderr)
     got = run(*implement, "--no-triage", "owner", env=env)
     check("leg-cmd triage: --no-triage is refused for implement",
-          got.returncode != 0 and not got.stdout.strip() and "only valid for the review role" in got.stderr, got.stderr)
+          got.returncode != 0 and no_launch(got.stdout) and "only valid for the review role" in got.stderr, got.stderr)
     rules["risk_default"] = "MEDIUM"
     _write_doc(rules_file, rules)
     got = run(*launch, env=env)
@@ -7435,11 +7612,11 @@ def test_triage_launch_gate(tmp):
           got.returncode == 0 and "WARNING: rules changed" in got.stderr, got.stderr)
     got = run(script, "cursor", "review", "--model", "cursor-grok-4.6-medium", "--prompt-file", "/tmp/brief", env=env)
     check("leg-cmd triage: a dropped prompt-file says where the adapter reads its brief",
-          got.returncode != 0 and not got.stdout.strip() and "$RUN_DIR/prompt.md" in got.stderr
+          got.returncode != 0 and no_launch(got.stdout) and "$RUN_DIR/prompt.md" in got.stderr
           and "--run-dir" in got.stderr, got.stderr)
     got = run(*launch, "--effort", "medium", "--no-triage", "", env=env)
     check("leg-cmd triage: existing validation still refuses before the gate",
-          got.returncode != 0 and not got.stdout.strip() and "MODEL NAME" in got.stderr
+          got.returncode != 0 and no_launch(got.stdout) and "MODEL NAME" in got.stderr
           and "non-empty reason" not in got.stderr, got.stderr)
 
 
@@ -7461,6 +7638,36 @@ def test_review_prompt_input(tmp):
                          capture_output=True, text=True)
     check("review-prompt input: an empty --lens-file names that file, not stdin",
           got.returncode != 0 and str(lens_file) in got.stderr and "stdin" not in got.stderr, got.stderr)
+    # --rebutted (0.6.95): points settled in earlier rounds ride along under a fixed
+    # instruction; a missing or blank file adds nothing (a peer pasted this by hand, 2026-10-30).
+    lens_file.write_text("THE LENS\n")
+    reb = tmp / "rebutted.md"
+    reb.write_text("F1 rebutted: the offset is right per the header.\n")
+    base_cmd = [sys.executable, str(review_prompt), "--adapter", "codex", "--base", "HEAD",
+                "--target", str(repo), "--lens-file", str(lens_file)]
+    got = subprocess.run(base_cmd + ["--rebutted", str(reb)], capture_output=True, text=True)
+    out = got.stdout
+    check("review-prompt --rebutted: the settled points follow the lens under the do-not-re-raise header",
+          got.returncode == 0 and "## Settled in earlier rounds" in out and "Do not raise them again" in out
+          and out.index("THE LENS") < out.index("## Settled") < out.index("F1 rebutted"), got.stderr + out[-400:])
+    got = subprocess.run(base_cmd + ["--rebutted", str(tmp / "absent.md")], capture_output=True, text=True)
+    check("review-prompt --rebutted: a missing file adds nothing",
+          got.returncode == 0 and "Settled in earlier rounds" not in got.stdout, got.stderr)
+    locked = tmp / "locked"
+    locked.mkdir()
+    (locked / "rebutted.md").write_text("F9 settled\n")
+    locked.chmod(0)
+    try:
+        got = subprocess.run(base_cmd + ["--rebutted", str(locked / "rebutted.md")], capture_output=True, text=True)
+    finally:
+        locked.chmod(0o755)
+    if os.geteuid() != 0:
+        check("review-prompt --rebutted: an unreadable file is an error, not an empty rebuttal",
+              got.returncode != 0 and "cannot read --rebutted" in got.stderr, got.stdout[-200:] + got.stderr)
+    reb.write_text("  \n")
+    got = subprocess.run(base_cmd + ["--rebutted", str(reb)], capture_output=True, text=True)
+    check("review-prompt --rebutted: a blank file adds nothing",
+          got.returncode == 0 and "Settled in earlier rounds" not in got.stdout, got.stderr)
     try:
         import pty
     except ImportError as exc:
@@ -9608,7 +9815,7 @@ def test_triage(tmp):
           got.returncode == 0 and got.stdout.strip(), got.stdout + got.stderr)
     got = run(*agy_review, "--base", ps1, env=env)
     check("leg-cmd triage: a --base that differs from the change record's base is refused",
-          got.returncode != 0 and not got.stdout.strip() and "does not match launch base" in got.stderr
+          got.returncode != 0 and no_launch(got.stdout) and "does not match launch base" in got.stderr
           and base in got.stderr, got.stdout + got.stderr)
     result = changed(103, [current_vote], wip=True)
     check("triage change: WIP skips without opt-in", result.get("skip", "").startswith("WIP"), result)
@@ -9654,7 +9861,7 @@ def test_triage(tmp):
           result.get("base") == ps1 and carry_doc.get("base") == ps1, (result.get("base"), carry_doc.get("base"), ps1))
     got = run(*agy_review, "--base", base, env=env)
     check("leg-cmd triage: a carry-over record refuses a --base other than its parent",
-          got.returncode != 0 and not got.stdout.strip() and "does not match launch base" in got.stderr
+          got.returncode != 0 and no_launch(got.stdout) and "does not match launch base" in got.stderr
           and ps1 in got.stderr, got.stdout + got.stderr)
     got = run(*agy_review, "--base", ps1, env=env)
     check("leg-cmd triage: ...and launches with its parent", got.returncode == 0 and got.stdout.strip(),
@@ -9783,7 +9990,7 @@ def test_triage(tmp):
           (result.get("base"), move_doc.get("base"), move_old))
     got = run(*agy_review, "--base", base, env=env)
     check("leg-cmd triage: a move-only record refuses a --base other than its parent",
-          got.returncode != 0 and not got.stdout.strip() and "does not match launch base" in got.stderr
+          got.returncode != 0 and no_launch(got.stdout) and "does not match launch base" in got.stderr
           and move_old in got.stderr, got.stdout + got.stderr)
     # Gerrit patch sets amend each other on the same base: the move is "add A"
     # in PS1's own diff and "add B" in PS2's, never a rename in either. Only a
@@ -11096,7 +11303,7 @@ def test_triage(tmp):
     got = run(triage, "change", "167", "--query-json", broken_query, env=env)
     check("triage git failure: exits 2 and names the missing parent and ref",
           got.returncode == 2 and "missing-parent" in got.stderr
-          and "refs/changes/67/167/1" in got.stderr and not got.stdout, got.stdout + got.stderr)
+          and "refs/changes/67/167/1" in got.stderr and no_launch(got.stdout), got.stdout + got.stderr)
     got = run(triage, "change", "--help", env=env)
     check("triage as-of help: says my replayed actions are excluded on purpose",
           got.returncode == 0 and "excluded on purpose" in got.stdout, got.stdout + got.stderr)
@@ -12463,6 +12670,52 @@ def test_freeze_refusal_cleans_up(tmp):
     check("freeze: ...and leaves the other registration alone", str(other) in listed, listed)
 
 
+def test_freeze_opencode_lockdown(tmp):
+    """freeze-target.sh --opencode-lockdown (0.6.95): the lead copied the review leg's
+    opencode.json into every frozen target by hand, every round (a peer, 2026-10-30)."""
+    freeze, verify = SCRIPTS / "freeze-target.sh", SCRIPTS / "verify-target.sh"
+    chk = SCRIPTS / "check-opencode-lockdown.py"
+    repo = tmp / "lock-src"
+    make_repo(repo, commits=2)
+    sha = git(repo, "rev-parse", "HEAD").stdout.strip()
+    for opts in (["--clone", "--opencode-lockdown"], ["--opencode-lockdown"]):
+        dest = tmp / ("lock-frozen-%d" % len(opts))
+        r = run(freeze, repo, "HEAD", dest, *opts)
+        cfg = dest / "opencode.json"
+        check("freeze %s: succeeds, stdout is only the SHA" % " ".join(opts),
+              r.returncode == 0 and r.stdout.strip() == sha, r.stdout + r.stderr)
+        check("freeze %s: the lock-down passes check-opencode-lockdown.py" % " ".join(opts),
+              subprocess.run([sys.executable, str(chk), str(dest)], capture_output=True).returncode == 0)
+        check("freeze %s: opencode.json is read-only" % " ".join(opts),
+              cfg.is_file() and not cfg.stat().st_mode & 0o222, oct(cfg.stat().st_mode) if cfg.exists() else "absent")
+        v = run(verify, dest, sha, "opencode.json")
+        check("freeze %s: verify-target certifies it as declared scaffolding" % " ".join(opts),
+              v.returncode == 0, v.stdout + v.stderr)
+        v = run(verify, dest, sha)
+        check("freeze %s: ...and refuses it undeclared" % " ".join(opts), v.returncode != 0, v.stdout + v.stderr)
+    tracked = tmp / "lock-tracked"
+    make_repo(tracked, commits=1)
+    (tracked / "opencode.json").write_text("{}\n")
+    git(tracked, "add", "-f", "opencode.json")
+    git(tracked, "commit", "-q", "-m", "track opencode.json")
+    dest = tmp / "lock-tracked-frozen"
+    r = run(freeze, tracked, "HEAD", dest, "--clone", "--opencode-lockdown")
+    check("freeze --opencode-lockdown: a commit tracking opencode.json is refused and cleaned up",
+          r.returncode == 1 and "tracks opencode.json" in r.stderr and not dest.exists(), r.stderr)
+    for name in ("opencode.jsonc", ".opencode"):
+        other = tmp / ("lock-tracked-%s" % name.strip("."))
+        make_repo(other, commits=1)
+        (other / name).write_text("{}\n")
+        git(other, "add", "-f", name)
+        git(other, "commit", "-q", "-m", "track " + name)
+        dest = tmp / ("lock-tracked-%s-frozen" % name.strip("."))
+        r = run(freeze, other, "HEAD", dest, "--clone", "--opencode-lockdown")
+        check("freeze --opencode-lockdown: a commit tracking %s is refused and cleaned up" % name,
+              r.returncode == 1 and ("tracks " + name) in r.stderr and not dest.exists(), r.stderr)
+    r = run(freeze, repo, "HEAD", tmp / "lock-twice", "--clone", "--clone")
+    check("freeze: an option given twice is refused", r.returncode == 1 and "twice" in r.stderr, r.stderr)
+
+
 def test_freeze_clone(tmp):
     """freeze-target.sh --clone (agy 1.4.2, measured 2026-10-18): agy runs git sandboxed
     inside --add-dir, and a worktree's .git is a pointer file OUTSIDE it, so every git call
@@ -12641,7 +12894,7 @@ def test_agy_review_refuses_worktree_target(tmp):
 
     got = leg("agy", "gemini-3.8-flash-medium", wt)
     check("agy guard: a worktree target is refused before launch",
-          got.returncode != 0 and not got.stdout.strip() and "git worktree" in got.stderr, got.stdout + got.stderr)
+          got.returncode != 0 and no_launch(got.stdout) and "git worktree" in got.stderr, got.stdout + got.stderr)
     check("agy guard: ...and the message names the fix", "--clone" in got.stderr, got.stderr)
     check("agy guard: ...as a path that runs from any cwd (the suite's own freeze-target.sh)",
           str(SCRIPTS / "freeze-target.sh") in got.stderr, got.stderr)
@@ -12942,6 +13195,7 @@ def main():
         test_clear_host_residue(tmp)
         test_freeze_refusal_cleans_up(tmp)
         test_freeze_clone(tmp)
+        test_freeze_opencode_lockdown(tmp)
         test_agy_review_refuses_worktree_target(tmp)
         print("leg-log-check.sh")
         test_leg_log_check(tmp)
@@ -12978,6 +13232,7 @@ def main():
     with tempfile.TemporaryDirectory() as td:
         test_common(Path(td))
     test_leg_cmd()
+    test_leg_cmd_refusal_fails_when_run()
     print("check-opencode-lockdown.py and leg-cmd.sh --help")
     with tempfile.TemporaryDirectory() as td:
         test_opencode_lockdown(Path(td))

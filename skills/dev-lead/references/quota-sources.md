@@ -280,7 +280,12 @@ they have open.
   (`tmux -L <name> kill-server`) and remove the socket file. Each such socket is asked first
   (`tmux -L <name> list-sessions`): when tmux itself says no server is behind it (a collector that was
   killed leaves a dead socket; 0.6.94, before which one blocked every later run for good), the file is
-  unlinked and does not count; a timeout, a refused connection or tmux missing rules nothing out. A socket directory
+  unlinked and does not count; a timeout, a refused connection or tmux missing rules nothing out. A server
+  tmux still answers for is reaped when the collector that named it is gone (0.6.95): the pid in its name
+  belongs to no process, so it is stopped (`kill-server`), and once tmux says no server is behind it the
+  socket is unlinked and the clean-up goes on. A collector killed mid-refresh (by a pane's process timeout,
+  say) had left its CLI running for hours (measured 2026-10-30: cursor TUIs orphaned 5 to 10 hours on four
+  hosts). A pid that is alive, reused by another process or another user's, is never touched. A socket directory
   that exists but cannot be read refuses the same way (`... and tmux's socket
   directory cannot be read (EACCES)`); only one that is not there, or that can be
   read and holds no entry of that naming, allows the clean-up. The scan reads the directory this process would use (`TMUX_TMPDIR`, else

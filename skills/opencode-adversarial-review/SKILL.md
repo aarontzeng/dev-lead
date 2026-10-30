@@ -130,7 +130,9 @@ of the same repo, so a project that tracks its own `opencode.json` has one
 there too. The backup is what stops teardown deleting it.)
 
 Then write this as `opencode.json` in the target (wildcard FIRST — last
-match wins; see runtime):
+match wins; see runtime). `freeze-target.sh … --opencode-lockdown` writes exactly
+this file, read-only, at freeze time (and refuses a commit that tracks its own
+`opencode.json`); declare it to `verify-target.sh` as below:
 
 ```json
 {

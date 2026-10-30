@@ -31,6 +31,14 @@
 # stays usable while the warnings still reach a human.
 set -euo pipefail
 
+# A refused launch still prints a command, one that fails. Callers run the
+# output (`eval "$(leg-cmd.sh ...)"`, or `> cmd.sh` then `bash cmd.sh`), and an
+# empty output ran as a success: a peer's launcher recorded rc=0 and an empty
+# review.log for a leg that never started (2026-10-30). `false` rather than
+# `exit`, for the same reason as the brief guard below: an `exit` inside eval
+# would kill an interactive caller's shell. Installed first, so a failure
+# before parsing (no lib.sh, no launch data) is covered too; --help exits 0.
+trap 'rc=$?; [ "$rc" -eq 0 ] || echo "{ echo '\''leg-cmd: the launch was refused (see the message above); no leg ran'\'' >&2; false; }"' EXIT
 here=$(cd -- "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}" 2>/dev/null || echo "${BASH_SOURCE[0]}")")" && pwd)
 . "$here/lib.sh"
 HERE=$here
@@ -63,7 +71,8 @@ for a, spec in d.items():
                  else "runs in the CALLER's cwd: cd into the target first")
         print("%-9s %-10s %-8s %-6s %-14s %-9s %s; %s" % (a, role, tgt, base, pf, add, brief, where))
 print("\nAn option marked '-' is REFUSED for that adapter, never dropped. agy review refuses a git worktree target: freeze with freeze-target.sh --clone.")
-print("opencode has no add-dir: copy context files INTO the frozen target. opencode review also needs the lock-down opencode.json in --target (checked when the command runs).")
+print("opencode has no add-dir: copy context files INTO the frozen target. opencode review also needs the lock-down opencode.json in --target (checked when the command runs): freeze with freeze-target.sh --opencode-lockdown to have it written.")
+print("Fix rounds: put points already rebutted or recorded as known limits in $RUN_DIR/rebutted.md beside the brief; framed legs get them under a do-not-re-raise instruction.")
 PY
     exit 0 ;;
 esac
@@ -349,7 +358,9 @@ if frame:
     # the leg the FRAMED prompt, the same way it would have read the brief. The
     # builder refuses an empty lens, an unknown placeholder or an unreadable
     # HEAD, and the && stops the paid run.
-    builder = "python3 %s --adapter %s --base %s --target %s" % (
+    # Points settled in earlier rounds ride along when the lead wrote them
+    # (review-prompt.py ignores a missing file).
+    builder = "python3 %s --adapter %s --base %s --target %s --rebutted \"$RUN_DIR/rebutted.md\"" % (
         shlex.quote(os.path.join(os.environ["HERE"], frame)), shlex.quote(a),
         shlex.quote(os.environ.get("BASE", "")), shlex.quote(os.environ.get("TARGET", "")))
     if r.get("prompt_evidence"):

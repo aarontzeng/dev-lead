@@ -899,12 +899,135 @@ def _stray_server(ctx):
     except OSError as exc:
         return "tmux's socket directory cannot be read (%s)" % errno_name(exc)
     for name in names:
-        if not _server_gone(ctx, name):
+        started = time.monotonic()
+        if not _server_gone(ctx, name) and (
+                # a probe that took half the timeout or more was not an answer: no reaping on top of it,
+                # so a socket tmux does not answer for still costs one timeout
+                time.monotonic() - started >= _tmux_timeout() / 2 or not _reap_orphan(ctx, name)):
             # refused already: no more probes, so a run of sockets tmux does not answer for costs one
             # timeout, not one each, while the refresh lock is held; the dead ones after it wait for a later run
             return "a private tmux server of an earlier run may still be running (%s)" % name
         _remove_socket(name)
     return None
+
+
+def _collector_gone(pid):
+    """True only when no process has this pid. A live pid -- even a reused one, even another
+    user's (EPERM) -- is not proof the collector that named the server is gone."""
+    if pid <= 1 or pid == os.getpid():
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return True
+    except OSError:
+        return False
+    return False
+
+
+def _reap_orphan(ctx, name):
+    """Stop a live private server whose collector has exited, and say whether it is gone now.
+
+    The collector stops its own server before it exits; one killed first (a pane's process
+    timeout during a refresh, say) leaves the server and the CLI in it running for good, and
+    every later refresh refused (measured 2026-10-30 on two hosts: a cursor TUI orphaned for
+    5 and 7.5 hours). The collector's pid is in the server's name; only when no process has
+    that pid is the server killed, and only tmux's own "no server" answer afterwards counts."""
+    try:
+        pid = int(name.split("-")[3])
+    except (IndexError, ValueError):
+        return False
+    if not _collector_gone(pid):
+        return False
+    # The collector's pid is only proof when this process sees the same pids as that collector did:
+    # a collector in another PID namespace sharing this socket directory looks gone from here. The
+    # server's own pid, which tmux reports, must be visible from here too, or nothing is killed.
+    server = _server_pid(ctx, name)
+    if server is None or server <= 1 or _collector_gone(server) or not _runs_socket(server, name):
+        return False
+    # Arguments alone do not make a server: a client attached to the socket names it too. Where the
+    # kernel lists unix sockets (Linux), the process must hold the LISTENING socket of this path.
+    if _holds_listener(server, os.path.join(_tmux_socket_dir(), name)) is False:
+        return False
+    _tmux(ctx, "-L", name, "-f", os.devnull, "kill-server")
+    return _server_gone(ctx, name)
+
+
+def _holds_listener(pid, path):
+    """Whether this pid holds the listening unix socket bound at `path`, in this process's mount
+    namespace; None only where the kernel does not say (no /proc/net/unix: macOS), so the caller
+    falls back to the argument check alone. Present but unreadable is False, never a pass.
+    A forked child that kept the listener would pass; tmux opens it close-on-exec (known limit)."""
+    try:
+        with open("/proc/net/unix") as fh:
+            rows = fh.read().splitlines()[1:]
+    except FileNotFoundError:
+        # only a platform without it falls back; a Linux without /proc/net/unix gives no proof
+        return False if sys.platform.startswith("linux") else None
+    except OSError:
+        return False                     # there but unreadable: no proof, so no kill
+    # The same path in another mount namespace is another socket, and a pid from another PID namespace
+    # says nothing about the collector pid in the socket's name: the holder must share both with us.
+    try:
+        for ns in ("mnt", "pid"):
+            if os.readlink("/proc/%d/ns/%s" % (pid, ns)) != os.readlink("/proc/self/ns/%s" % ns):
+                return False
+    except OSError:
+        return False
+    listening = set()
+    for row in rows:
+        f = row.split(None, 7)
+        try:
+            if len(f) == 8 and f[7] == path and int(f[3], 16) & 0x10000:      # __SO_ACCEPTCON
+                listening.add(f[6])
+        except ValueError:
+            continue
+    if not listening:
+        return False
+    try:
+        fds = os.listdir("/proc/%d/fd" % pid)
+    except OSError:
+        return False
+    for fd in fds:
+        try:
+            link = os.readlink("/proc/%d/fd/%s" % (pid, fd))
+        except OSError:
+            continue
+        if link.startswith("socket:[") and link[8:-1] in listening:
+            return True
+    return False
+
+
+def _runs_socket(pid, name):
+    """The process with this pid here was started for this socket (`-L <name>` in its arguments).
+
+    A bare pid is not identity: from another PID namespace, tmux reports a number that an unrelated
+    process here may hold (review 2026-10-31). The server keeps the arguments of the command that
+    started it, which name the socket; a process that does not is never taken for it."""
+    try:
+        done = subprocess.run(["ps", "-o", "args=", "-p", str(pid)], capture_output=True, text=True,
+                              timeout=_tmux_timeout(), stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return done.returncode == 0 and ("-L %s " % name) in (" ".join(done.stdout.split()) + " ")
+
+
+def _server_pid(ctx, name):
+    """The pid tmux reports for the server behind `name`, or None when it gives no clear answer."""
+    env = {k: v for k, v in os.environ.items() if k not in ("TMUX", "TMUX_PANE")}
+    try:
+        done = subprocess.run([ctx.tmux_bin, "-L", name, "-f", os.devnull, "list-sessions", "-F", "#{pid}"],
+                              capture_output=True, text=True, timeout=_tmux_timeout(),
+                              stdin=subprocess.DEVNULL, env=env)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    pids = set((done.stdout or "").split())
+    if done.returncode != 0 or len(pids) != 1:
+        return None
+    try:
+        return int(pids.pop())
+    except ValueError:
+        return None
 
 
 def _remove_socket(name):
