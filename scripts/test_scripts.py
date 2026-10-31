@@ -6550,6 +6550,76 @@ def test_common(tmp):
               '. "$here/lib.sh"' in body and "\ndie() {" not in body)
 
 
+def test_triage_bash_on_windows():
+    """triage.py on Windows (0.6.97): "bash" is System32\\bash.exe, the WSL launcher, which cannot read
+    a Windows checkout (a peer, 2026-10-31); only Git Bash is used, else a clear refusal."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("triage_bash_probe", SCRIPTS / "triage.py")
+    triage = importlib.util.module_from_spec(spec)
+    sys.path.insert(0, str(SCRIPTS))
+    try:
+        spec.loader.exec_module(triage)
+    finally:
+        sys.path.remove(str(SCRIPTS))
+    real_platform = sys.platform
+    sys.platform = "linux"
+    try:
+        off = triage._bash_argv("/x/renorm-only.sh")
+    finally:
+        sys.platform = real_platform
+    check("triage bash: off Windows the helper runs as `bash <script>`", off == ["bash", "/x/renorm-only.sh"], off)
+    with tempfile.TemporaryDirectory() as td:
+        (Path(td) / "bash.exe").write_text("")
+        other = Path(td) / "other"                        # a bash.exe with no git.exe beside it: not Git Bash
+        other.mkdir()
+        (other / "bash.exe").write_text("")
+        real = sys.platform, os.environ.get("EXEPATH"), triage.subprocess.run, triage.os.path.isfile
+        _real_join, _real_dirname = triage.os.path.join, triage.os.path.dirname
+        sys.platform, os.environ["EXEPATH"] = "win32", td
+        triage.subprocess.run = lambda *a, **k: subprocess.CompletedProcess(a, 0, "", "")
+        # only files under the temp dir exist: the real default install on this machine is not consulted
+        triage.os.path.isfile = lambda p, _f=real[3]: str(p).startswith(td) and _f(p)
+        try:
+            os.environ["EXEPATH"] = str(other)
+            try:
+                triage._bash_argv("C:\\x\\renorm-only.sh")
+                refused_other = ""
+            except triage.InputError as exc:
+                refused_other = str(exc)
+            (Path(td) / "git.exe").write_text("")
+            os.environ["EXEPATH"] = td
+            got = triage._bash_argv("C:\\x\\renorm-only.sh")
+            os.environ["EXEPATH"] = str(Path(td) / "nowhere")
+            try:
+                triage._bash_argv("C:\\x\\renorm-only.sh")
+                refused = ""
+            except triage.InputError as exc:
+                refused = str(exc)
+            x86 = r"C:\Program Files (x86)\Git\bin"
+            triage.os.path.isfile = lambda p: str(p) in (x86 + "\\bash.exe", x86 + "\\git.exe")
+            triage.os.path.join = lambda *a: "\\".join(a)       # Windows separators on this POSIX host
+            triage.os.path.dirname = lambda p: p.rsplit("\\", 1)[0]
+            try:
+                only_x86 = triage._bash_argv("C:\\x\\renorm-only.sh")
+            except triage.InputError as exc:                # reported as a failed check, not a crash
+                only_x86 = str(exc)
+        finally:
+            sys.platform, triage.subprocess.run, triage.os.path.isfile = real[0], real[2], real[3]
+            triage.os.path.join, triage.os.path.dirname = _real_join, _real_dirname
+            if real[1] is None:
+                os.environ.pop("EXEPATH", None)
+            else:
+                os.environ["EXEPATH"] = real[1]
+    check("triage bash: on Windows Git Bash beside $EXEPATH runs it, the script path in forward slashes",
+          got == [os.path.join(td, "bash.exe"), "C:/x/renorm-only.sh"], got)
+    check("triage bash: ...the 32-bit default install is found when it is the only Git Bash",
+          only_x86 == [r"C:\Program Files (x86)\Git\bin\bash.exe", "C:/x/renorm-only.sh"], only_x86)
+    check("triage bash: ...a bash.exe without git.exe beside it is not taken for Git Bash",
+          "no Git Bash found" in refused_other, refused_other)
+    check("triage bash: ...and with no Git Bash it is refused, naming WSL's bash as the reason",
+          "no Git Bash found" in refused and "WSL" in refused, refused)
+
+
 def test_leg_cmd_windows_cmd_shim():
     """Windows (0.6.96): an argv-delivered prompt through a .cmd shim is cut at its first newline by
     cmd.exe, and the cursor run still bills (a peer, 2026-10-31). The .ps1 beside it, run by pwsh, keeps
@@ -13304,6 +13374,7 @@ def main():
     test_leg_cmd()
     test_leg_cmd_refusal_fails_when_run()
     test_leg_cmd_windows_cmd_shim()
+    test_triage_bash_on_windows()
     print("check-opencode-lockdown.py and leg-cmd.sh --help")
     with tempfile.TemporaryDirectory() as td:
         test_opencode_lockdown(Path(td))

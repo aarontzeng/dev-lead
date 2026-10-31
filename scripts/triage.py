@@ -2319,6 +2319,35 @@ def fix_sizing(config, target, base, head, fix_of, *, evidence=None, blocker=Non
     }, minimum
 
 
+def _bash_argv(script):
+    """argv that runs one of this suite's .sh helpers through bash.
+
+    A Windows Python cannot exec a .sh (WinError 193), and the bare name "bash" there is
+    System32\\bash.exe -- the WSL launcher, which sees a different filesystem and mangles a
+    Windows path (a peer on Windows 11, 2026-10-31). So on Windows only Git Bash is used: next
+    to $EXEPATH (set by Git Bash), beside git itself (`git --exec-path`/../../../bin), or the
+    default install; with none found the helper is refused with a clear message."""
+    if sys.platform != "win32":
+        return ["bash", str(script)]
+    candidates = []
+    if os.environ.get("EXEPATH"):
+        candidates.append(os.path.join(os.environ["EXEPATH"], "bash.exe"))
+    try:
+        exec_path = subprocess.run(["git", "--exec-path"], capture_output=True, text=True).stdout.strip()
+    except OSError:
+        exec_path = ""
+    if exec_path:
+        candidates.append(os.path.normpath(os.path.join(exec_path, "..", "..", "..", "bin", "bash.exe")))
+    candidates += [r"C:\Program Files\Git\bin\bash.exe", r"C:\Program Files (x86)\Git\bin\bash.exe"]
+    for bash in candidates:
+        # Git for Windows keeps git.exe beside bin\\bash.exe: that pairing, not the name, makes it Git Bash
+        if (os.path.isfile(bash) and "system32" not in bash.lower()
+                and os.path.isfile(os.path.join(os.path.dirname(bash), "git.exe"))):
+            return [bash, str(script).replace("\\", "/")]
+    raise InputError("triage: no Git Bash found to run %s (System32\\bash.exe is WSL and cannot read this "
+                     "checkout); install Git for Windows or run from Git Bash" % os.path.basename(str(script)))
+
+
 def _scope_range(base_ref, target):
     target = Path(target)
     status = _git(target, "-c", "core.quotePath=false", "status", "--porcelain=v1", "--untracked-files=no")
@@ -2326,7 +2355,7 @@ def _scope_range(base_ref, target):
     try:
         # through bash, not as a program: a Windows Python cannot exec a shell script
         # ("[WinError 193] %1 is not a valid Win32 application", a peer on Windows 11, 2026-10-31)
-        filtered = subprocess.run(["bash", str(renorm), "--filter", str(target)], input=status,
+        filtered = subprocess.run([*_bash_argv(renorm), "--filter", str(target)], input=status,
                                   capture_output=True, text=True)
     except OSError as exc:
         raise InputError("triage scope: cannot check line-ending renormalization: %s" % exc)
@@ -2407,7 +2436,7 @@ def round_check(head_ref, legs, target=None, expect=None):
         if declared is not None and declared not in (adapters.get(adapter) or {}).get("serves", []):
             raise InputError("triage round-check: %s does not serve family %r (data/families.json)" % (adapter, declared))
     for adapter, declared, log in legs:
-        command = ["bash", str(checker), adapter, log]   # via bash: a Windows Python cannot exec a .sh
+        command = [*_bash_argv(checker), adapter, log]
         if expect is not None:
             command += ["--expect", expect]
         try:
