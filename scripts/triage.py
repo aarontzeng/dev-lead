@@ -2324,7 +2324,9 @@ def _scope_range(base_ref, target):
     status = _git(target, "-c", "core.quotePath=false", "status", "--porcelain=v1", "--untracked-files=no")
     renorm = Path(__file__).resolve().parent / "renorm-only.sh"
     try:
-        filtered = subprocess.run([str(renorm), "--filter", str(target)], input=status,
+        # through bash, not as a program: a Windows Python cannot exec a shell script
+        # ("[WinError 193] %1 is not a valid Win32 application", a peer on Windows 11, 2026-10-31)
+        filtered = subprocess.run(["bash", str(renorm), "--filter", str(target)], input=status,
                                   capture_output=True, text=True)
     except OSError as exc:
         raise InputError("triage scope: cannot check line-ending renormalization: %s" % exc)
@@ -2405,10 +2407,13 @@ def round_check(head_ref, legs, target=None, expect=None):
         if declared is not None and declared not in (adapters.get(adapter) or {}).get("serves", []):
             raise InputError("triage round-check: %s does not serve family %r (data/families.json)" % (adapter, declared))
     for adapter, declared, log in legs:
-        command = [str(checker), adapter, log]
+        command = ["bash", str(checker), adapter, log]   # via bash: a Windows Python cannot exec a .sh
         if expect is not None:
             command += ["--expect", expect]
-        result = subprocess.run(command, capture_output=True, text=True)
+        try:
+            result = subprocess.run(command, capture_output=True, text=True)
+        except OSError as exc:
+            raise InputError("triage round-check: cannot run leg-log-check.sh through bash: %s" % exc)
         if result.returncode == 0:
             # Families are declared, never guessed from a model name (the
             # roster's rule): a declared family must be one this adapter

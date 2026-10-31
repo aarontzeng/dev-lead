@@ -52,7 +52,7 @@ case "${1:-}" in
     # launcher really accepts: each option below is refused where the adapter lacks it.
     DATA="$DATA" python3 - <<'PY'
 import json, os
-d = json.load(open(os.environ["DATA"]))
+d = json.load(open(os.environ["DATA"], encoding="utf-8"))   # launch.json is UTF-8; Windows defaults to the code page (cp950)
 print("leg-cmd.sh <adapter> <role> --model <model> [--effort <e>] [options]   (header of this script has the full usage)\n")
 print("%-9s %-10s %-8s %-6s %-14s %-9s %s" % ("adapter", "role", "--target", "--base", "--prompt-file", "--add-dir", "brief / working directory"))
 for a, spec in d.items():
@@ -126,7 +126,7 @@ import json, os, re, shlex, sys
 # could land in a tree other than the one the triage record was checked for.
 if os.environ.get("TARGET"):
     os.environ["TARGET"] = os.path.abspath(os.environ["TARGET"])
-d = json.load(open(os.environ["DATA"]))
+d = json.load(open(os.environ["DATA"], encoding="utf-8"))   # launch.json is UTF-8; Windows defaults to the code page (cp950)
 a, role = os.environ["ADAPTER"], os.environ["ROLE"]
 if a not in d or a.startswith("_"):
     sys.exit("leg-cmd: unknown adapter %r (have: %s)"
@@ -348,7 +348,40 @@ def _emit(t):
     if t.startswith("$RUN_DIR/") and "'" not in t and '"' not in t:
         return '"%s"' % t
     return shlex.quote(t)
-cmd = r.get("cli", spec["cli"]) + " " + " ".join(_emit(t) for t in argv)
+cli = r.get("cli", spec["cli"])
+cmd = cli + " " + " ".join(_emit(t) for t in argv)
+# Windows: a CLI installed as a .cmd/.bat shim runs through cmd.exe, which ends an argument at its
+# first newline -- an argv-delivered prompt reached cursor as one line and the run billed like a full
+# leg (a peer, 2026-10-31: 33k in / 4k out for a non-review). The .ps1 shim beside it, run by pwsh,
+# keeps the prompt whole, so that is what is emitted; with no .ps1 or no pwsh the launch is refused.
+# Windows only (a Windows or MSYS/Git-Bash Python): elsewhere a stray .cmd on PATH is never what
+# the shell runs. DEV_LEAD_LEG_WINDOWS=1 is a test seam, like DEV_LEAD_LAUNCH.
+_seam = os.environ.get("DEV_LEAD_LEG_WINDOWS")
+windows = (_seam == "1" if _seam in ("0", "1")
+           else sys.platform in ("win32", "cygwin", "msys") or bool(os.environ.get("MSYSTEM")))
+if windows and r["prompt_delivery"] == "argv" and re.fullmatch(r"[A-Za-z0-9._-]+", cli):
+    import shutil
+    found = shutil.which(cli) or shutil.which(cli + ".cmd") or shutil.which(cli + ".bat")
+    shim = None
+    if found:
+        low = found.lower()
+        if low.endswith((".cmd", ".bat")):
+            shim = found
+        elif not os.path.splitext(found)[1]:
+            # an extensionless sh wrapper beside a .cmd (an npm-style install) may hand the prompt to that
+            # .cmd; a real .exe the shell runs directly is left alone
+            shim = next((found + e for e in (".cmd", ".bat") if os.path.isfile(found + e)), None)
+    if shim:
+        found = shim
+        ps1 = os.path.splitext(found)[0] + ".ps1"
+        pwsh = shutil.which("pwsh")
+        if not (os.path.isfile(ps1) and pwsh):
+            sys.exit("leg-cmd: %s resolves to %s, and cmd.exe cuts an argument at its first newline, so the "
+                     "multi-line prompt would arrive as one line (and still be billed); install PowerShell 7 "
+                     "(pwsh) and keep the %s shim beside it, which this launcher then uses instead"
+                     % (cli, found, os.path.basename(ps1)))
+        cmd = "pwsh -NoProfile -NonInteractive -File %s %s" % (
+            shlex.quote(ps1), " ".join(_emit(t) for t in argv))
 frame = r.get("prompt_frame")
 if r.get("requires_lockdown") and not frame:
     sys.exit("leg-cmd: %s/%s sets requires_lockdown without prompt_frame; the check rides on the framed command, "

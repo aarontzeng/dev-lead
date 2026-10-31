@@ -6550,6 +6550,76 @@ def test_common(tmp):
               '. "$here/lib.sh"' in body and "\ndie() {" not in body)
 
 
+def test_leg_cmd_windows_cmd_shim():
+    """Windows (0.6.96): an argv-delivered prompt through a .cmd shim is cut at its first newline by
+    cmd.exe, and the cursor run still bills (a peer, 2026-10-31). The .ps1 beside it, run by pwsh, keeps
+    it whole: emitted instead; without a .ps1 or pwsh the launch is refused."""
+    script = SCRIPTS / "leg-cmd.sh"
+    with tempfile.TemporaryDirectory() as td:
+        td = Path(td)
+        make_repo(td / "repo")
+        fake = td / "bin"
+        fake.mkdir()
+        shim = fake / "cursor-agent.cmd"
+        shim.write_text("@echo off\r\n")
+        shim.chmod(0o755)
+        # a temp HOME: the --no-triage skips land there, never in the developer's plugin data
+        env = _roster_env(td / "home", PATH="%s:/usr/bin:/bin" % fake, DEV_LEAD_LEG_WINDOWS="1")
+        argv = [str(script), "cursor", "review", "--model", "composer-2.5", "--run-dir", str(td / "run"),
+                "--no-triage", "test fixture"]
+        r = subprocess.run(argv, capture_output=True, text=True, env=env, cwd=str(td / "repo"))
+        check("leg-cmd windows: a cursor .cmd shim with no .ps1/pwsh is refused, naming the newline cut",
+              r.returncode != 0 and "first newline" in r.stderr and no_launch(r.stdout), r.stderr)
+        (fake / "cursor-agent.ps1").write_text("# shim\n")
+        pwsh = fake / "pwsh"
+        # a recorder: what the launched .ps1 would receive, one argument per NUL-terminated record
+        pwsh.write_text('#!/bin/sh\nfor a in "$@"; do printf "%s\\0" "$a"; done > "$PWSH_ARGS"\n')
+        pwsh.chmod(0o755)
+        r = subprocess.run(argv, capture_output=True, text=True, env=env, cwd=str(td / "repo"))
+        check("leg-cmd windows: ...with cursor-agent.ps1 beside it and pwsh on PATH, the leg runs the .ps1 via pwsh "
+              "and still reads the brief as one argument",
+              r.returncode == 0 and "pwsh -NoProfile -NonInteractive -File " in r.stdout
+              and "cursor-agent.ps1" in r.stdout and "cursor-agent.cmd" not in r.stdout
+              and r.stdout.rstrip().endswith('"$(cat "$RUN_DIR/prompt.md")"'), r.stdout + r.stderr)
+        # run it: the multi-line brief must reach pwsh as ONE argument, every line intact
+        (td / "run").mkdir(exist_ok=True)
+        brief = "line one\nline two --model gpt-secret\nSHIM_LAST_LINE_OK\n"
+        (td / "run" / "prompt.md").write_text(brief)
+        rec = td / "pwsh-args"
+        ran = subprocess.run(["bash", "-c", r.stdout], capture_output=True, text=True,
+                             env=dict(env, PWSH_ARGS=str(rec)), cwd=str(td / "repo"))
+        got = rec.read_bytes().split(b"\0")[:-1] if rec.exists() else []
+        check("leg-cmd windows: ...and run, the multi-line brief reaches pwsh as one argument, every line intact",
+              ran.returncode == 0 and got and got[-1].decode() == brief.rstrip("\n")
+              and got[:3] == [b"-NoProfile", b"-NonInteractive", b"-File"], (ran.stderr, got))
+        for name in ("codex.cmd", "codex.ps1"):
+            (fake / name).write_text("x\n")
+            (fake / name).chmod(0o755)
+        r = subprocess.run([str(script), "codex", "review", "--model", "m", "--effort", "high", "--target",
+                            str(td / "repo"), "--base", "HEAD", "--run-dir", str(td / "run2"),
+                            "--no-triage", "test fixture"], capture_output=True, text=True, env=env)
+        check("leg-cmd windows: a stdin-delivered adapter is untouched by the shim rule, even with its own "
+              ".cmd, .ps1 and pwsh present",
+              r.returncode == 0 and "pwsh" not in r.stdout and "codex exec" in r.stdout, r.stdout + r.stderr)
+        # an extensionless wrapper (what Git Bash runs) beside the .cmd is treated as the shim too
+        wrapper = fake / "cursor-agent"
+        wrapper.write_text("#!/bin/sh\nexec cursor-agent.cmd \"$@\"\n")
+        wrapper.chmod(0o755)
+        r = subprocess.run(argv, capture_output=True, text=True, env=env, cwd=str(td / "repo"))
+        check("leg-cmd windows: ...an extensionless wrapper beside the .cmd still routes through the .ps1",
+              r.returncode == 0 and "cursor-agent.ps1" in r.stdout, r.stdout + r.stderr)
+        off = dict(env, DEV_LEAD_LEG_WINDOWS="0", MSYSTEM="MINGW64")   # the seam wins over a Git-Bash marker
+        r = subprocess.run(argv, capture_output=True, text=True, env=off, cwd=str(td / "repo"))
+        check("leg-cmd windows: ...and off Windows a .cmd on PATH is ignored (the plain CLI is emitted)",
+              r.returncode == 0 and "pwsh" not in r.stdout and "\ncursor-agent -p" in r.stdout, r.stdout + r.stderr)
+        # launch.json is UTF-8 (an em dash at least); a Windows Python reads files in the code page
+        # (cp950 there: UnicodeDecodeError before anything was emitted). A C locale stands in for it here.
+        c_env = dict(os.environ, LC_ALL="C", LANG="C", PYTHONUTF8="0", PYTHONCOERCECLOCALE="0")
+        hr = subprocess.run([str(script), "--help"], capture_output=True, text=True, env=c_env)
+        check("leg-cmd: launch.json is read as UTF-8 whatever the locale's encoding",
+              hr.returncode == 0 and "UnicodeDecodeError" not in hr.stderr, hr.stderr[-300:])
+
+
 def test_leg_cmd_refusal_fails_when_run():
     """A refused launch prints a command that FAILS (0.6.95). An empty stdout ran as a
     success under both documented callers -- `eval "$(leg-cmd.sh ...)"` and `> cmd.sh;
@@ -13233,6 +13303,7 @@ def main():
         test_common(Path(td))
     test_leg_cmd()
     test_leg_cmd_refusal_fails_when_run()
+    test_leg_cmd_windows_cmd_shim()
     print("check-opencode-lockdown.py and leg-cmd.sh --help")
     with tempfile.TemporaryDirectory() as td:
         test_opencode_lockdown(Path(td))
