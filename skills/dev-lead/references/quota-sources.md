@@ -12,10 +12,12 @@ the code cannot say about itself: who writes each source, what was checked,
 and what is still a guess.
 
 **Nothing consumes the output yet.** The collector changes no dispatch
-behaviour. It is read-only except for one opt-in action: `--refresh` on a host
-that asks for it starts `agy`, `cursor-agent --trust` or `opencode --standalone` in a tmux server of
+behaviour. It is read-only except for one opt-in action, `--refresh` on a host
+that asks for it: it starts `agy`, `cursor-agent --trust` or `opencode --standalone` in a tmux server of
 its own so that a cache that is missing, stale, or without a usable time is
-rewritten (*Refreshing a TUI cache* below).
+rewritten (*Refreshing a TUI cache* below), and it runs the person's own
+`~/.claude/statusline.sh` once so that the Claude usage cache is refetched (by
+that script, with its own token: *`claude_usage_cache`* below).
 
 ## The output
 
@@ -175,6 +177,46 @@ What each kind can produce, and when:
   accept such a response, or the cache stops being rewritten and reads
   `stale` (it did, from 2026-10-31 14:32, until aadev's statusline took a
   response with either window).
+- **Refreshing it (opt-in, twice; added 0.6.99):** the cache is written only by
+  the statusline script, when Claude Code redraws its status line and the cache
+  is older than five minutes, so an idle session lets it go `stale`. With
+  `--refresh` AND `"refresh": "statusline"` on the claude source in the host's
+  own `quota-sources.json` (the shipped file never marks), a cache older than
+  its TTL makes the collector run `~/.claude/statusline.sh` once with `{}` on
+  stdin. The script does what it does on any redraw: it starts its own detached
+  fetch (with the token it finds itself; the collector reads no credential and
+  calls no endpoint), and the collector waits up to `--refresh-wait` for the
+  cache to change and parse as a JSON object (a redraw by a live Claude Code
+  session that writes it meanwhile counts: the cache is what is wanted). The
+  script is run by `/bin/bash`, with `BASH_ENV`, `ENV`, `SHELLOPTS`, `BASHOPTS`,
+  `PS4`, `CDPATH`, `GLOBIGNORE`, `LD_PRELOAD`, `LD_AUDIT`, `DYLD_INSERT_LIBRARIES` and exported functions left out of its
+  environment, and only when, followed to its target, it is a regular file of
+  the user's that no one but the user can write, in directories (as named and
+  as resolved) of the user's held to the same. A group-writable one counts as
+  the user's only when the group is the user's own with no other member (umask
+  002 makes `~/.claude` 775 on such a host); otherwise it is refused. One at a time
+  (a `flock` on `~/.cache/dev-lead/quota-statusline.lock`, separate from the TUI
+  refresh's `quota-tui.lock`, so the two can run side by side); a run that
+  produced no cache, for any reason (wrote nothing, did not return within 10 s,
+  could not be run), is not repeated for 10 minutes (`quota-statusline.backoff`). Not on Windows (a bash
+  script): the record says so. Problems on the record: `claude refresh skipped:
+  ~/.claude/statusline.sh is not there`, `... is not a regular file of the
+  user's, in a directory of the user's, that only the user can write`, `another refresh is running`, `an earlier
+  refresh wrote no cache N s ago; the next try is in N s`, `claude refresh
+  failed: statusline.sh did not return within N s` / `could not be run`, or `claude refresh
+  failed: statusline.sh did not rewrite the cache within N s` (the script's own
+  10-minute back-off after a failed fetch, no token, or a TTL set shorter than
+  its five minutes all end here). Known limits: the guard is against a file or directory
+  left open by mistake, not against anyone who can already act as the user (Claude Code runs
+  the same script on every redraw): it reads mode bits only (a POSIX ACL is not seen), checks
+  the directory as named and as resolved but not every component of a link chain, and a
+  check-then-run window remains; a back-off marker that cannot be written (full or read-only
+  disk) is said in the problem and the next poll tries again; a backoff file dated in the future
+  does not hold; two claude sources both marked `statusline` run the script once each in a poll;
+  the owner check is not exercised by the tests (they run as one user); other problems on the
+  record: `claude refresh skipped: no /bin/bash`, `its lock file was replaced`, `~/.cache/dev-lead
+  is not a plain directory of the user's`; skips do not back off, failures do; a script that ignores its stdin and draws
+  something slow is bounded by a 10 s timeout, not killed as a tree.
 - **Per-model weekly keys** (`seven_day_<name>`, such as `seven_day_opus`) are
   not read. When any of them holds an object with a `utilization` field, the
   record gets the problem `per-model weekly limits are present and not read`,

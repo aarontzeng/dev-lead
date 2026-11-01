@@ -4269,6 +4269,170 @@ def test_quota_snapshot_windows_refresh(tmp):
                 os.environ[k] = v
 
 
+def test_quota_snapshot_statusline_refresh(tmp):
+    """--refresh on a claude source marked "statusline" runs ~/.claude/statusline.sh once, only when both opt-ins hold and the cache is stale."""
+    now_epoch = datetime_epoch(QS_NOW)
+    old = json.dumps({"five_hour": {"utilization": 99, "resets_at": QS_RESET},
+                      "seven_day": {"utilization": 88, "resets_at": QS_WEEK}})
+    new = json.dumps({"five_hour": {"utilization": 20, "resets_at": QS_RESET},
+                      "seven_day": {"utilization": 33, "resets_at": QS_WEEK}})
+
+    def scenario(label, *, refresh="statusline", flag=True, age=3600, script="write", mode=0o755,
+                 delay=0, wait="3", env_extra=None, home_dir=None, with_cache=True, dir_mode=None,
+                 link_dir_mode=None):
+        d = tmp / ("sl-" + label.replace(" ", "-"))
+        d.mkdir()
+        home = home_dir or (d / "home")
+        (home / ".claude").mkdir(parents=True, exist_ok=True)
+        (home / ".claude").chmod(0o755)           # not the runner's umask: the guard looks at the mode
+        cache = d / "cache.json"
+        if with_cache:
+            cache.write_text(old)
+            os.utime(cache, (now_epoch - age, now_epoch - age))
+        log = d / "calls.log"
+        # the fake stands in for the statusline: it logs that it ran and what came on stdin, and (like the
+        # real one) writes the cache from a detached background job after `delay` seconds
+        body = '#!/bin/bash\ninput=$(cat)\necho "ran:$input" >> %s\n' % log
+        if script == "write":
+            # renamed into place with the fixed clock's mtime already set, so the cache is never seen half-done
+            body += ("( sleep %s; printf '%%s' '%s' > %s.tmp; touch -d @%d %s.tmp; mv %s.tmp %s ) "
+                     ">/dev/null 2>&1 < /dev/null &\n"
+                     % (delay, new, cache, now_epoch - 1, cache, cache, cache))
+        sh = home / ".claude" / "statusline.sh"
+        if script == "hang":
+            body = '#!/bin/bash\ninput=$(cat)\necho "ran:$input" >> %s\nsleep 30\n' % log
+        if script != "missing" and link_dir_mode is not None:
+            # as aadev installs it: ~/.claude/statusline.sh is a link into another directory
+            target_dir = d / "linked"
+            target_dir.mkdir()
+            (target_dir / "statusline.sh").write_text(body)
+            (target_dir / "statusline.sh").chmod(mode)
+            target_dir.chmod(link_dir_mode)
+            sh.symlink_to(target_dir / "statusline.sh")
+        elif script != "missing":
+            sh.write_text(body)
+            sh.chmod(mode)
+        if dir_mode is not None:
+            (home / ".claude").chmod(dir_mode)
+        cfg = _qs_config(d, "cfg", [dict(_qs_source("claude_usage_cache", cache),
+                                         **({"refresh": refresh} if refresh else {}))])
+        args = ["--config", cfg, "--refresh-wait", wait] + (["--refresh"] if flag else [])
+        env = dict(os.environ, HOME=str(home))
+        env.update(env_extra or {})
+        r, doc = _qs(args, env=env)
+        rec = next(iter((doc or {"records": []})["records"]), {"windows": [], "problems": []})
+        calls = log.read_text().splitlines() if log.exists() else []
+        rec["_rc"] = r.returncode                 # a scenario that never reached the refresh must not read as "did not run it"
+        return r, rec, calls, home
+
+    r, rec, calls, _ = scenario("stale")
+    check("statusline refresh: a stale opted-in claude cache runs the statusline once with {} on stdin and the "
+          "record shows the rewritten windows, fresh, with no problem",
+          calls == ["ran:{}"] and rec.get("freshness") == "fresh" and not rec["problems"]
+          and [(w["kind"], w["used_pct"]) for w in rec["windows"]] == [("five_hour", 20), ("weekly", 33)],
+          (calls, rec))
+    r, rec, calls, _ = scenario("delayed write", delay=1)
+    check("statusline refresh: a write that lands a second after the script returns is waited for",
+          calls == ["ran:{}"] and rec.get("freshness") == "fresh" and not rec["problems"], (calls, rec))
+    for label, kw in (("no flag", dict(flag=False)), ("not opted in", dict(refresh=None)),
+                      ("fresh cache", dict(age=60))):
+        r, rec, calls, _ = scenario(label, **kw)
+        check("statusline refresh: %s does not run the script, and the old cache is still read (its own "
+              "windows, its own freshness, no refresh problem)" % label,
+              not calls and rec["_rc"] == 0 and (_qs_win(rec, "five_hour") or {}).get("used_pct") == 99
+              and rec.get("freshness") == ("fresh" if kw.get("age") == 60 else "stale")
+              and not any("refresh" in p for p in rec["problems"]), (calls, rec))
+    r, rec, calls, home = scenario("no write", script="silent", wait="1")
+    first = [p for p in rec["problems"] if "did not rewrite the cache" in p]
+    r2, doc2 = _qs(["--config", str(tmp / "sl-no-write" / "cfg.json"), "--refresh-wait", "1", "--refresh"],
+                   env=dict(os.environ, HOME=str(home)))
+    rec2 = next(iter((doc2 or {"records": []})["records"]), {"problems": []})
+    calls2 = (tmp / "sl-no-write" / "calls.log").read_text().splitlines()
+    check("statusline refresh: a script that writes nothing is a problem, and the next poll within the "
+          "back-off does not run it again",
+          len(first) == 1 and calls == ["ran:{}"] and calls2 == ["ran:{}"]
+          and any("earlier refresh wrote no cache" in p for p in rec2["problems"]), (calls, calls2, rec, rec2))
+    r, rec, calls, _ = scenario("no cache yet", with_cache=False)
+    check("statusline refresh: a cache that does not exist yet is written by the script and read",
+          calls == ["ran:{}"] and (_qs_win(rec, "five_hour") or {}).get("used_pct") == 20
+          and not rec["problems"], (calls, rec))
+    r, rec, calls, home = scenario("hangs", script="hang", wait="1", env_extra={"DEV_LEAD_QUOTA_STATUSLINE_TIMEOUT": "1"})
+    r2, doc2 = _qs(["--config", str(tmp / "sl-hangs" / "cfg.json"), "--refresh-wait", "1", "--refresh"],
+                   env=dict(os.environ, HOME=str(home), DEV_LEAD_QUOTA_STATUSLINE_TIMEOUT="1"))
+    rec2 = next(iter((doc2 or {"records": []})["records"]), {"problems": []})
+    calls2 = (tmp / "sl-hangs" / "calls.log").read_text().splitlines()
+    check("statusline refresh: a script that does not return in time is a problem and backs off like a silent one",
+          any("did not return within 1 s" in p for p in rec["problems"]) and calls == ["ran:{}"]
+          and calls2 == ["ran:{}"] and any("earlier refresh wrote no cache" in p for p in rec2["problems"]),
+          (calls, calls2, rec, rec2))
+    r, rec, calls, _ = scenario("missing script", script="missing")
+    check("statusline refresh: no ~/.claude/statusline.sh is named in the record",
+          any("statusline.sh is not there" in p for p in rec["problems"]), rec)
+    r, rec, calls, _ = scenario("world writable", mode=0o757)
+    check("statusline refresh: a script others can write is refused and not run",
+          not calls and any("only the user can write" in p for p in rec["problems"]), (calls, rec))
+    r, rec, calls, _ = scenario("world writable directory", dir_mode=0o777)
+    check("statusline refresh: a script in a directory others can write is refused and not run",
+          not calls and any("only the user can write" in p for p in rec["problems"]), (calls, rec))
+    r, rec, calls, _ = scenario("linked into a writable directory", link_dir_mode=0o777)
+    check("statusline refresh: a link whose target sits in a directory others can write is refused and not run",
+          not calls and any("only the user can write" in p for p in rec["problems"]), (calls, rec))
+    r, rec, calls, _ = scenario("linked into a plain directory", link_dir_mode=0o755)
+    check("statusline refresh: the same link into a plain directory runs, as aadev installs it",
+          calls == ["ran:{}"] and not rec["problems"], (calls, rec))
+    # the group rule, with the user database faked: an own group of one is the user alone, any other member is not
+    import importlib.util
+    import types
+    from unittest import mock
+    spec = importlib.util.spec_from_file_location("qs_under_test", QS_SCRIPT)
+    qs = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(qs)
+    me = types.SimpleNamespace(pw_name="me", pw_gid=os.getegid())
+    other = types.SimpleNamespace(pw_name="you", pw_gid=os.getegid())
+    elsewhere = types.SimpleNamespace(pw_name="you", pw_gid=os.getegid() + 7)
+
+    def private(members=(), users=None, gid=None):
+        with mock.patch("pwd.getpwuid", return_value=me), \
+                mock.patch("grp.getgrgid", return_value=types.SimpleNamespace(gr_mem=list(members))), \
+                mock.patch("pwd.getpwall", return_value=users if users is not None else [me, elsewhere]):
+            return qs._private_group(os.getegid() if gid is None else gid)
+    with mock.patch.object(qs, "_private_group", return_value=False):
+        shut = [qs._only_user_writes(types.SimpleNamespace(st_mode=m, st_gid=1)) for m in (0o644, 0o664, 0o646, 0o666)]
+    with mock.patch.object(qs, "_private_group", return_value=True):
+        open_ = [qs._only_user_writes(types.SimpleNamespace(st_mode=m, st_gid=1)) for m in (0o644, 0o664, 0o646, 0o666)]
+    check("statusline refresh: others-writable is never the user's alone; group-writable only when the group is private",
+          shut == [True, False, False, False] and open_ == [True, True, False, False], (shut, open_))
+    check("statusline refresh: a user-private group is the user's own group with no other member and no other "
+          "user whose primary group it is",
+          private() and not private(members=["you"]) and not private(users=[me, other])
+          and private(members=["me"]) and not private(gid=os.getegid() + 1), None)
+    # a umask-002 layout (script and ~/.claude both 775) end to end with the real user database: it runs
+    # exactly when the runner's own group is private, as the function says
+    r, rec, calls, _ = scenario("umask 002", mode=0o775, dir_mode=0o775)
+    ran = calls == ["ran:{}"] and not rec["problems"]
+    check("statusline refresh: a 775 script in a 775 ~/.claude runs when the user's group is private and is "
+          "refused when it is not (real pwd/grp)",
+          ran if qs._private_group(os.getegid()) else (not calls and any("only the user can write" in p for p in rec["problems"])),
+          (qs._private_group(os.getegid()), calls, rec))
+    bash_env = tmp / "bash-env.sh"
+    # the file would append to the log the script writes (scenario dir = tmp/sl-<label>); it must never run
+    bash_env.write_text('echo "bashenv-ran" >> %s\n' % (tmp / "sl-bash-env" / "calls.log"))
+    r, rec, calls, _ = scenario("bash env", env_extra={"BASH_ENV": str(bash_env)})
+    check("statusline refresh: BASH_ENV of the collector's environment is not sourced before the script",
+          calls == ["ran:{}"] and rec["_rc"] == 0 and not rec["problems"], (calls, rec))
+    cfg_ok = _qs_config(tmp, "sl-cfg-ok", [dict(_qs_source("claude_usage_cache", tmp / "x.json"), refresh="statusline")])
+    cfg_bad = _qs_config(tmp, "sl-cfg-bad", [dict(_qs_source("agy_quota_cache", tmp / "x.json"), refresh="statusline")])
+    nohome = tmp / "sl-nohome"
+    nohome.mkdir()
+    r_ok, doc_ok = _qs(["--config", cfg_ok, "--refresh"], env=dict(os.environ, HOME=str(nohome)))
+    r_bad, _d = _qs(["--config", cfg_bad])
+    rec_ok = next(iter((doc_ok or {"records": []})["records"]), {"problems": []})
+    check("statusline refresh: the mode is accepted on a claude source (the refresh is reached: it reports "
+          "the missing script) and a config error (exit 2) on another kind",
+          r_ok.returncode == 0 and any("statusline.sh is not there" in p for p in rec_ok["problems"])
+          and r_bad.returncode == 2 and "statusline" in r_bad.stderr, (r_ok.stderr, rec_ok, r_bad.stderr))
+
+
 def test_quota_snapshot_tui_refresh(tmp):
     """--refresh starts agy / cursor-agent in a PRIVATE tmux server, only when both opt-ins hold and the cache is stale."""
     runs_before = len(QS_RUNS)
@@ -13480,6 +13644,9 @@ def main():
     print("install-opencode-go-usage.sh")
     with tempfile.TemporaryDirectory() as td:
         test_install_opencode_go_usage(Path(td))
+    print("quota-snapshot.py --refresh on a claude source (statusline)")
+    with tempfile.TemporaryDirectory() as td:
+        test_quota_snapshot_statusline_refresh(Path(td))
     print("quota-snapshot.py --refresh (private tmux server)")
     with tempfile.TemporaryDirectory() as td:
         try:

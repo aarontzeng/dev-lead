@@ -42,6 +42,8 @@ Contract:
   * It never runs a model and never reads a credential. It starts `codex
     app-server` and reaps it itself. Opt-in twice over -- with --refresh, AND
     on a host whose config marks the source `"refresh": "tmux_spawn"` -- it
+    also (on a claude source marked `"refresh": "statusline"`) runs the person's own ~/.claude/statusline.sh
+    once so that it refetches the usage cache (see refresh_statusline), and
     also starts `agy`, `cursor-agent --trust` or `opencode --standalone` when that cache is missing,
     older than its TTL, more than 60 s in the future, or has an mtime that is
     not a usable time, detached in a tmux
@@ -462,6 +464,9 @@ def load(src, records):
 # ---------------------------------------------------------- claude / cursor ----
 def collect_claude(src, ctx):
     rec = new_record(src, ctx, "claude:subscription", "Claude", "known")
+    why = _refresh_problem(src, ctx)
+    if why:
+        rec["problems"].append(why)
     doc, mtime = load(src, [rec])
     if doc is None:
         return [rec]
@@ -529,7 +534,9 @@ def collect_cursor(src, ctx):
 # no model is called.
 REFRESH_TMUX_SPAWN = "tmux_spawn"
 REFRESH_SPAWN_HIDDEN = "spawn_hidden"             # Windows: the same idea without tmux (see refresh_hidden)
-REFRESH_MODES = (REFRESH_TMUX_SPAWN, REFRESH_SPAWN_HIDDEN)
+REFRESH_STATUSLINE = "statusline"                 # claude: run the person's own statusline script, which fetches (see refresh_statusline)
+REFRESH_MODES = (REFRESH_TMUX_SPAWN, REFRESH_SPAWN_HIDDEN, REFRESH_STATUSLINE)
+STATUSLINE_REFRESH_KINDS = ("claude_usage_cache",)
 # cursor-agent wrote its cache 27 s after a hidden start on Windows (measured 2026-10-28 by a peer): the
 # caller's --refresh-wait is raised to this where it is shorter (the 60 s cap still applies to the option)
 WINDOWS_MIN_WAIT = {"cursor_usage_cache": 45.0}
@@ -1355,6 +1362,148 @@ def _hidden_locked(ctx, kind, path, base):
     return "%s refresh failed: %s did not rewrite its cache within %g s" % (label, os.path.basename(argv[0]), wait)
 
 
+# variables a non-interactive bash reads before its script (and the xtrace prompt, which it also expands)
+STATUSLINE_ENV_DROP = ("BASH_ENV", "ENV", "SHELLOPTS", "BASHOPTS", "PS4", "CDPATH", "GLOBIGNORE",
+                       "LD_PRELOAD", "LD_AUDIT", "DYLD_INSERT_LIBRARIES")
+
+
+def _private_group(gid):
+    """True when `gid` is the user's own group and nobody else is in it (Debian-style user-private groups).
+
+    A file or directory the group can write is then no wider than one only the user can write, which matters
+    because umask 002 makes every directory such a user's tools create group-writable (~/.claude is 775)."""
+    try:
+        import grp
+        import pwd
+        me = pwd.getpwuid(os.geteuid())
+        if gid != os.getegid() or gid != me.pw_gid:
+            return False
+        if any(name != me.pw_name for name in grp.getgrgid(gid).gr_mem):
+            return False
+        return not any(u.pw_gid == gid and u.pw_name != me.pw_name for u in pwd.getpwall())
+    except (ImportError, KeyError, OSError):
+        return False
+
+
+def _only_user_writes(st):
+    """No one but the user can write `st`: not other (any), and not group unless the group is only the user."""
+    if st.st_mode & 0o002:
+        return False
+    return not st.st_mode & 0o020 or _private_group(st.st_gid)
+
+
+def _statusline_timeout():
+    # DEV_LEAD_QUOTA_STATUSLINE_TIMEOUT is a test seam, like DEV_LEAD_QUOTA_TMUX_TIMEOUT
+    try:
+        seconds = float(os.environ.get("DEV_LEAD_QUOTA_STATUSLINE_TIMEOUT", ""))
+    except ValueError:
+        return 10.0
+    return seconds if 0 < seconds <= 60 else 10.0
+
+
+def refresh_statusline(ctx, path):
+    """Run the person's statusline script once so that it refetches the Claude usage cache; None, or why not.
+
+    The cache is written only by that script, and only when Claude Code redraws its status line, so an
+    idle session lets it go stale. Run with an empty `{}` on stdin it draws nothing useful, but it does
+    what it does on every redraw: when the cache is older than its own five minutes (and its own failure
+    back-off has passed) it starts a detached fetch with the token it finds itself. This collector reads
+    no credential and calls no endpoint; it waits for the cache to change and parse as a JSON object.
+
+    ~/.claude/statusline.sh is run only when, followed to its target, it is a regular file of the user's
+    that no one but the user can write (a group-writable one counts when the group is the user's own with
+    no other member, as under umask 002), in directories (as named and as resolved) of the user's held to
+    the same; by /bin/bash, with the shell start-up and loader-preload variables left out of its
+    environment. This is a guard against a file or directory left open by mistake, not against anyone who
+    can already act as the user (Claude Code itself runs the same script on every redraw): mode bits only,
+    no ACLs, and not every component of a link chain. Not on Windows (it is a bash script). One at a time (a lock, its own: it shares nothing
+    with the TUI refresh); a refresh that produced no cache, whatever the reason (a script that wrote
+    nothing, did not return in time or could not be run), is not tried again for BACKOFF_SECONDS. A write
+    by someone else (a real redraw of the status line) during the wait counts as the refresh: the cache
+    is what is wanted, not who wrote it.
+    """
+    label = "claude"
+    if IS_WINDOWS or fcntl is None:
+        return "%s refresh is not supported on Windows (statusline refresh runs statusline.sh)" % label
+    home = os.path.expanduser("~")
+    script = os.path.join(home, ".claude", "statusline.sh")
+    bash = next((b for b in ("/bin/bash", "/usr/bin/bash") if os.access(b, os.X_OK)), None)
+    if bash is None:
+        return "%s refresh skipped: no /bin/bash" % label
+    try:
+        st = os.stat(script)
+        real_dir = os.path.dirname(os.path.realpath(script))
+        dirs = [os.stat(os.path.dirname(script)), os.stat(real_dir)]
+    except OSError:
+        return "%s refresh skipped: ~/.claude/statusline.sh is not there" % label
+    # the file AND the directories it is reached through: whoever can write a directory can swap the
+    # file between this check and the run. Same-user interference stays out of scope, as for every refresh.
+    if (not stat.S_ISREG(st.st_mode) or _not_ours(st) or not _only_user_writes(st)
+            or any(not stat.S_ISDIR(d.st_mode) or _not_ours(d) or not _only_user_writes(d) for d in dirs)):
+        return ("%s refresh skipped: ~/.claude/statusline.sh is not a regular file of the user's, in a "
+                "directory of the user's, that only the user can write" % label)
+    base = os.path.join(home, ".cache", "dev-lead")
+    lock_path = os.path.join(base, "quota-statusline.lock")
+    try:
+        os.makedirs(base, mode=0o700, exist_ok=True)
+        bst = os.lstat(base)
+        if not stat.S_ISDIR(bst.st_mode) or _not_ours(bst):
+            return "%s refresh skipped: ~/.cache/dev-lead is not a plain directory of the user's" % label
+        os.chmod(base, 0o700)
+        lock = os.open(lock_path, os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    except OSError as exc:
+        return "%s refresh failed: cannot create its lock (%s)" % (label, errno_name(exc))
+    try:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            on_disk = os.lstat(lock_path)
+            held = os.fstat(lock)
+        except OSError:
+            return "%s refresh skipped: another refresh is running" % label
+        if (on_disk.st_dev, on_disk.st_ino) != (held.st_dev, held.st_ino):
+            return "%s refresh skipped: its lock file was replaced" % label
+        backoff = os.path.join(base, "quota-statusline.backoff")
+        failed = _mtime_or_none(backoff)
+        if failed is not None:
+            ago = time.time() - failed / 1e9
+            if 0 <= ago < BACKOFF_SECONDS:
+                return "%s refresh skipped: an earlier refresh wrote no cache %d s ago; the next try is in %d s" % (
+                    label, ago, BACKOFF_SECONDS - ago)
+
+        def failure(message):
+            try:                                  # every way of not producing a cache backs off, not only a silent script
+                with open(backoff, "w") as fh:
+                    fh.write(str(time.time()))
+            except OSError:
+                message += " (and its back-off could not be recorded, so the next poll tries again)"
+            return message
+
+        # a shell that starts from the person's environment must not source a file or an exported function
+        # before the checked script runs
+        env = {k: v for k, v in os.environ.items()
+               if k not in STATUSLINE_ENV_DROP and not k.startswith("BASH_FUNC_")}
+        before = _mtime_or_none(path)
+        try:
+            subprocess.run([bash, script], input="{}", text=True, timeout=_statusline_timeout(), check=False,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env)
+        except subprocess.TimeoutExpired:
+            return failure("%s refresh failed: statusline.sh did not return within %g s" % (label, _statusline_timeout()))
+        except (OSError, subprocess.SubprocessError):
+            return failure("%s refresh failed: statusline.sh could not be run" % label)
+        deadline = time.monotonic() + ctx.refresh_wait
+        while time.monotonic() < deadline and not _rewritten(path, before):
+            time.sleep(0.25)
+        if _rewritten(path, before):
+            try:
+                os.unlink(backoff)
+            except OSError:
+                pass
+            return None
+        return failure("%s refresh failed: statusline.sh did not rewrite the cache within %g s" % (label, ctx.refresh_wait))
+    finally:
+        os.close(lock)
+
+
 def refresh_sources(sources, ctx, when):
     """{source name: problem} after refreshing every opted-in, stale TUI cache.
 
@@ -1375,7 +1524,10 @@ def refresh_sources(sources, ctx, when):
             age = (when - updated).total_seconds()
             if -CLOCK_SKEW_SECONDS <= age <= src["ttl_seconds"]:
                 continue                          # fresh already: nothing to start
-        why = (refresh_hidden if mode == REFRESH_SPAWN_HIDDEN else refresh_tui)(ctx, src["kind"], path)
+        if mode == REFRESH_STATUSLINE:
+            why = refresh_statusline(ctx, path)
+        else:
+            why = (refresh_hidden if mode == REFRESH_SPAWN_HIDDEN else refresh_tui)(ctx, src["kind"], path)
         if why:
             problems[src["name"]] = why
     return problems
@@ -1894,10 +2046,13 @@ def load_config(path):
             raise UsageError("%s: kind %s needs a path" % (where, src["kind"]))
         if src["name"] in seen:
             raise UsageError("%s: duplicate name %s" % (where, " ".join(src["name"].split())))
-        if "refresh" in src and not (src["refresh"] in REFRESH_MODES
-                                     and src["kind"] in REFRESH_COMMANDS):
-            raise UsageError("%s: refresh is only %s, and only on %s" % (
-                where, " or ".join(REFRESH_MODES), " or ".join(sorted(REFRESH_COMMANDS))))
+        if "refresh" in src:
+            ok_kinds = (STATUSLINE_REFRESH_KINDS if src["refresh"] == REFRESH_STATUSLINE
+                        else REFRESH_COMMANDS)
+            if not (src["refresh"] in REFRESH_MODES and src["kind"] in ok_kinds):
+                raise UsageError("%s: refresh is only %s, %s on %s, the others on %s" % (
+                    where, " or ".join(REFRESH_MODES), REFRESH_STATUSLINE,
+                    " or ".join(STATUSLINE_REFRESH_KINDS), " or ".join(sorted(REFRESH_COMMANDS))))
         seen.add(src["name"])
     return sources
 
@@ -1931,7 +2086,9 @@ def parse_args(argv):
                         help="bounds the codex exchange; reaping the process adds at "
                              "most about 2 s (default 20)")
     parser.add_argument("--refresh", action="store_true",
-                        help="for a source whose config sets refresh to tmux_spawn (agy, cursor, opencode-go) "
+                        help="for a claude source whose config sets refresh to statusline, run the person's "
+                             "~/.claude/statusline.sh once (it refetches the usage cache itself); "
+                             "for a source whose config sets refresh to tmux_spawn (agy, cursor, opencode-go) "
                              "and whose cache is missing, older than its TTL, more than 60 s "
                              "in the future or of an unusable mtime, start that CLI (cursor-agent "
                              "with --trust; opencode with --standalone) detached in a private tmux server until it rewrites "
