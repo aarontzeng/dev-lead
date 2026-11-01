@@ -164,6 +164,17 @@ What each kind can produce, and when:
 - **Units:** `utilization` is USED percent 0-100, `resets_at` is an ISO string
   with an offset. `five_hour` is `five_hour` (300), `seven_day` is `weekly`
   (10080).
+- **A plan without a window:** a plan with no rolling 5 h limit (Ultra,
+  measured 2026-11-01) answers `five_hour: null` beside a real `seven_day`
+  with HTTP 200. A key that is present and null while the other window is an
+  object with a readable `utilization` (a number from 0 to 100) is a window
+  the plan does not have: it is not listed and adds no problem. A MISSING key,
+  null on both, or null beside an object without a readable `utilization`
+  stays an unread window (listed as `unknown`, with a problem), so a
+  malformed answer is never read as "no such window". The statusline that writes the cache must
+  accept such a response, or the cache stops being rewritten and reads
+  `stale` (it did, from 2026-10-31 14:32, until aadev's statusline took a
+  response with either window).
 - **Per-model weekly keys** (`seven_day_<name>`, such as `seven_day_opus`) are
   not read. When any of them holds an object with a `utilization` field, the
   record gets the problem `per-model weekly limits are present and not read`,

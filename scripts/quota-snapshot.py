@@ -470,11 +470,21 @@ def collect_claude(src, ctx):
     if not any(key in doc for key, _, _ in spec):
         return fail([rec], "parse_error", "neither five_hour nor seven_day is present")
     stamp(rec, ctx, src["ttl_seconds"], from_epoch(mtime), "mtime")
+    # a plan without a rolling 5 h limit (Ultra, 2026-11-01) answers `five_hour: null`
+    # beside a real seven_day: the key is present and null, so there is no such
+    # window, which is not a problem. A MISSING key, or null with no other
+    # readable window to show for it, is still an unread window.
+    # The other window must be readable evidence that the plan has windows at all.
+    has_window = any(isinstance(doc.get(key), dict)
+                     and bad_number(doc[key].get("utilization"), 100) is None
+                     for key, _, _ in spec)
     for key, kind, minutes in spec:
         entry = doc.get(key)
         if isinstance(entry, dict):
             add_window(rec, ctx, key, kind, minutes, entry.get("utilization"),
                        entry.get("resets_at"), "utilization")
+        elif key in doc and entry is None and has_window:
+            continue
         else:
             absent_window(rec, key, kind, minutes)
     # a tighter per-model weekly limit may sit beside seven_day; it is not read,

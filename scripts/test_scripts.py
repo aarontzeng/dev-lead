@@ -2555,9 +2555,36 @@ def test_quota_snapshot(tmp):
               and w5.get("used_pct") == used and (reset is None) == (not rec["problems"]), rec)
     r, doc = cache("claude_usage_cache", {"five_hour": None, "seven_day": claude_ok["seven_day"]})
     rec = only(doc) or {"windows": [], "problems": []}
-    check("quota-snapshot: claude window that is null is unknown with a problem, still listed",
+    check("quota-snapshot: claude five_hour null beside a real seven_day is a plan without that window: "
+          "not listed, no problem",
+          _qs_win(rec, "five_hour") is None and not rec["problems"]
+          and [(w["kind"], w["used_pct"], w["remaining_pct"], w["limit_state"]) for w in rec["windows"]]
+          == [("weekly", 12.5, 87.5, "available")], rec)
+    r, doc = cache("claude_usage_cache", {"five_hour": None, "seven_day": {}})
+    rec = only(doc) or {"windows": [], "problems": []}
+    check("quota-snapshot: claude five_hour null beside an unreadable seven_day is not inferred absent: "
+          "both listed unknown, with problems",
+          [(w["kind"], w["limit_state"], w["used_pct"], w["remaining_pct"]) for w in rec["windows"]]
+          == [("five_hour", "unknown", None, None), ("weekly", "unknown", None, None)]
+          and len(rec["problems"]) >= 2, rec)
+    r, doc = cache("claude_usage_cache", {"seven_day": claude_ok["seven_day"]})
+    rec = only(doc) or {"windows": [], "problems": []}
+    check("quota-snapshot: claude five_hour MISSING is still unknown with a problem, still listed",
           (_qs_win(rec, "five_hour") or {}).get("limit_state") == "unknown"
-          and (_qs_win(rec, "five_hour") or {}).get("used_pct") is None and rec["problems"], rec)
+          and (_qs_win(rec, "five_hour") or {}).get("used_pct") is None
+          and (_qs_win(rec, "weekly") or {}).get("used_pct") == 12.5 and rec["problems"], rec)
+    r, doc = cache("claude_usage_cache", {"five_hour": None, "seven_day": None})
+    rec = only(doc) or {"windows": [], "problems": []}
+    check("quota-snapshot: claude with both windows null lists both as unknown with problems",
+          [(w["kind"], w["limit_state"]) for w in rec["windows"]]
+          == [("five_hour", "unknown"), ("weekly", "unknown")] and len(rec["problems"]) == 2
+          and all(w["used_pct"] is None and w["remaining_pct"] is None for w in rec["windows"]), rec)
+    r, doc = cache("claude_usage_cache", {"five_hour": claude_ok["five_hour"], "seven_day": None})
+    rec = only(doc) or {"windows": [], "problems": []}
+    check("quota-snapshot: claude seven_day null beside a real five_hour is also a window the plan lacks",
+          _qs_win(rec, "weekly") is None and not rec["problems"]
+          and [(w["kind"], w["used_pct"], w["remaining_pct"], w["limit_state"]) for w in rec["windows"]]
+          == [("five_hour", 55, 45, "available")], rec)
 
     # ------------------------------------------------------------------ agy ----
     def agy_entry(fraction, reset=QS_RESET, seconds=99999):
