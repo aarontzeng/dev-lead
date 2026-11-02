@@ -1059,7 +1059,7 @@ def _remove_socket(name):
 
 
 def _rewritten(path, before):
-    """The cache's mtime moved since `before` and it now parses as a JSON object."""
+    """The cache's mtime moved since `before` (a refresh's start, or a back-off marker's mtime) and it now parses as a JSON object."""
     if _mtime_or_none(path) == before:
         return False
     try:
