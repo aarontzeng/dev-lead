@@ -3907,12 +3907,17 @@ def test_quota_snapshot_windows_refresh(tmp):
         held = win.refresh_hidden(ctx(1), "agy_quota_cache", str(cache))
         os.utime(cache, (time.time() + 3600, time.time() + 3600))                     # dated in the future: does not count
         future = win.refresh_hidden(ctx(1), "agy_quota_cache", str(cache))
+        cache.write_text("{not json")
+        os.utime(cache, (marker_t + 4, marker_t + 4))                                 # newer than the marker but not a cache
+        garbage = win.refresh_hidden(ctx(1), "agy_quota_cache", str(cache))
+        cache.write_text("{}")
         os.utime(cache, (marker_t + 4, marker_t + 4))                                 # landed 4 s after the marker
         late = win.refresh_hidden(ctx(1), "agy_quota_cache", str(cache))
         check("quota-snapshot windows refresh: a cache written after the back-off marker lifts it; an older or future-dated one does not",
               held.startswith("agy refresh skipped: an earlier refresh wrote no cache ") and len(runs()) == n_before + 1
               and future.startswith("agy refresh skipped: an earlier refresh wrote no cache ")
-              and "within 1 s" in late, (held, future, late, n_before, len(runs())))
+              and garbage.startswith("agy refresh skipped: an earlier refresh wrote no cache ")
+              and "within 1 s" in late, (held, future, garbage, late, n_before, len(runs())))
         # -- exits early
         log.unlink(missing_ok=True)
         env("exit")

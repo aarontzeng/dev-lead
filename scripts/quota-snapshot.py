@@ -1302,7 +1302,7 @@ BACKOFF_SECONDS = 600     # a source whose refresh just failed to produce a cach
 def _backoff_age(backoff, cache_path):
     """Seconds since a back-off marker was written while it still holds, else None.
 
-    A cache written AFTER the marker (and not dated in the future) shows that the refresh only ran late (a CLI that
+    A cache written AFTER the marker (not dated in the future, and a JSON object) shows that the refresh only ran late (a CLI that
     lands its cache some seconds after the wait, as cursor-agent does on a slow host): the marker is then dropped,
     or the source would sit stale for the rest of the 10 minutes with a working cache path."""
     failed = _mtime_or_none(backoff)
@@ -1313,7 +1313,8 @@ def _backoff_age(backoff, cache_path):
     if not 0 <= ago < BACKOFF_SECONDS:
         return None
     cached = _mtime_or_none(cache_path)
-    if cached is not None and cached > failed and cached / 1e9 <= now + CLOCK_SKEW_SECONDS:
+    if (cached is not None and cached > failed and cached / 1e9 <= now + CLOCK_SKEW_SECONDS
+            and _rewritten(cache_path, failed)):
         try:
             os.unlink(backoff)
         except OSError:
