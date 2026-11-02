@@ -198,7 +198,7 @@ What each kind can produce, and when:
   (a `flock` on `~/.cache/dev-lead/quota-statusline.lock`, separate from the TUI
   refresh's `quota-tui.lock`, so the two can run side by side); a run that
   produced no cache, for any reason (wrote nothing, did not return within 10 s,
-  could not be run), is not repeated for 10 minutes (`quota-statusline.backoff`). Problems on the record: `claude refresh skipped:
+  could not be run), is not repeated for 10 minutes (`quota-statusline.backoff`). Problems on the record (POSIX; Windows below): `claude refresh skipped:
   ~/.claude/statusline.sh is not there`, `... is not a regular file of the
   user's, in a directory of the user's, that only the user can write`, `another refresh is running`, `an earlier
   refresh wrote no cache N s ago; the next try is in N s`, `claude refresh
@@ -218,18 +218,20 @@ What each kind can produce, and when:
   something slow is bounded by a 10 s timeout, not killed as a tree.
   **On Windows (added 0.6.100)** the same mode runs `~/.claude/statusline.ps1` (aadev's, or a stub
   that runs it) as `pwsh -NoProfile -File <it>` with `{}` on stdin, no window, in
-  `~/.cache/dev-lead`, then waits for the cache (`${TEMP}\claude\statusline-usage-cache.json`) to change.
+  the collector's own directory, then waits for the cache (`${TEMP}\claude\statusline-usage-cache.json`) to change.
   The script starts its own detached `-Fetch` under its own 300 s age, 600 s back-off and 30 s fetch
   lock; the collector reads no credential. There is no owner or mode to check, so the guard is by shape:
-  the script is a regular file, not a link, in a `~/.claude` that is not a link or junction, and pwsh is an
-  absolute `pwsh.exe` found on PATH (never the current directory, never a shim). One at a time by an
+  the script is a regular file, not a link or reparse point, in a `~/.claude` that is not a link or junction,
+  and pwsh is an absolute `pwsh.exe` found on PATH (never the current directory, never a shim or other launcher). One at a time by an
   `msvcrt` byte-range lock on `~/.cache/dev-lead/quota-statusline.lock` (separate from the TUI refresh's
   lock), the same `quota-statusline.backoff`, and a 20 s timeout (pwsh starts slowly). Problems:
-  `~/.claude/statusline.ps1 is not there`, `... is not a regular file (not a link) in a ~/.claude that is not a
-  link or junction`, `pwsh was not found on PATH`, `pwsh is a shell shim, not an executable`, and the same
+  `~/.claude/statusline.ps1 is not there`, `... is not a regular file (not a link or reparse point) in a ~/.claude that is not a
+  link or junction`, `pwsh was not found on PATH`, `pwsh is not a .exe`, and the same
   lock, back-off, timeout and no-rewrite messages with `statusline.ps1` as the name. Known limits: checked
   by path (a same-user process could swap the file between check and run, as it could run it itself); no
-  ACL is read; the timeout ends pwsh only, a `-Fetch` it started is its own detached job. Simulated in the
+  ACL is read; pwsh runs with the collector's whole environment (the variable filter above is bash's);
+  the timeout ends pwsh only, a `-Fetch` it started is its own detached job (a timeout still backs off
+  10 minutes while that fetch may finish: the cache then updates on the next redraw or poll). Simulated in the
   tests (fake pwsh, flock-backed `msvcrt`); not yet run on a real Windows host.
 - **Per-model weekly keys** (`seven_day_<name>`, such as `seven_day_opus`) are
   not read. When any of them holds an object with a `utilization` field, the

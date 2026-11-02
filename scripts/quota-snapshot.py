@@ -1475,12 +1475,12 @@ def refresh_statusline(ctx, path):
             return "%s refresh skipped: its lock file was replaced" % label
         env = {k: v for k, v in os.environ.items()
                if k not in STATUSLINE_ENV_DROP and not k.startswith("BASH_FUNC_")}
-        return _statusline_locked(ctx, path, base, [bash, script], env, None, 0)
+        return _statusline_locked(ctx, path, base, [bash, script], env, 0)
     finally:
         os.close(lock)
 
 
-def _statusline_locked(ctx, path, base, argv, env, cwd, flags):
+def _statusline_locked(ctx, path, base, argv, env, flags):
     """argv (the statusline script) with `{}` on stdin, once, with the refresh lock held; None, or why not.
 
     A refresh that produced no cache, whatever the reason, backs off for BACKOFF_SECONDS."""
@@ -1506,7 +1506,7 @@ def _statusline_locked(ctx, path, base, argv, env, cwd, flags):
     timeout = _statusline_timeout()
     try:
         subprocess.run(argv, input="{}", text=True, timeout=timeout, check=False, stdout=subprocess.DEVNULL,
-                       stderr=subprocess.DEVNULL, env=env, cwd=cwd, creationflags=flags)
+                       stderr=subprocess.DEVNULL, env=env, creationflags=flags)
     except subprocess.TimeoutExpired:
         return failure("%s refresh failed: %s did not return within %g s" % (label, name, timeout))
     except (OSError, subprocess.SubprocessError):
@@ -1533,8 +1533,8 @@ def _statusline_windows(ctx, path):
     The same idea as refresh_statusline: the script (aadev's statusline.ps1, or a stub that runs it) starts its
     own detached -Fetch when its cache is older than five minutes and its back-off and fetch lock allow, with the
     token it finds itself; this collector reads no credential. Windows has no owner or mode bits to check, so the
-    guard is by shape: a regular file, not a link, in a ~/.claude that is not a link or junction, started by an
-    absolute pwsh found on PATH (never the current directory) and never through a shim. Known limit: the checks are
+    guard is by shape: a regular file, not a link or reparse point, in a ~/.claude that is not a link or junction,
+    started by an absolute pwsh.exe found on PATH (never the current directory, where it also runs) and never through a shim. Known limit: the checks are
     by path, and a same-user process could swap the file between the check and the run, as it could run it itself."""
     label = "claude"
     if msvcrt is None:
@@ -1545,17 +1545,18 @@ def _statusline_windows(ctx, path):
         st = os.lstat(script)
     except OSError:
         return "%s refresh skipped: ~/.claude/statusline.ps1 is not there" % label
-    if (not stat.S_ISREG(st.st_mode) or stat.S_ISLNK(st.st_mode) or not _plain_dir(os.path.dirname(script))):
-        return ("%s refresh skipped: ~/.claude/statusline.ps1 is not a regular file (not a link) in a "
-                "~/.claude that is not a link or junction" % label)
+    if (not stat.S_ISREG(st.st_mode) or stat.S_ISLNK(st.st_mode) or getattr(st, "st_file_attributes", 0) & _REPARSE_POINT
+            or not _plain_dir(os.path.dirname(script))):
+        return ("%s refresh skipped: ~/.claude/statusline.ps1 is not a regular file (not a link or reparse point) "
+                "in a ~/.claude that is not a link or junction" % label)
     pwsh = _windows_which("pwsh")
     if pwsh is None:
         return "%s refresh skipped: pwsh was not found on PATH" % label
-    if os.path.splitext(pwsh)[1].lower() in _WINDOWS_SHIMS:
-        return "%s refresh skipped: pwsh is a shell shim, not an executable" % label
+    if os.path.splitext(pwsh)[1].lower() != ".exe":
+        return "%s refresh skipped: pwsh is not a .exe (a shim or launcher would end the shell, not pwsh)" % label
     argv = [pwsh, "-NoProfile", "-File", script]
     return _windows_single_flight(label, "quota-statusline.lock", lambda base: _statusline_locked(
-        ctx, path, base, argv, None, base, NO_WINDOW_FLAG))
+        ctx, path, base, argv, None, NO_WINDOW_FLAG))
 
 
 def refresh_sources(sources, ctx, when):

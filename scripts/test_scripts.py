@@ -4273,7 +4273,7 @@ QS_FAKE_PWSH = r"""#!@PYTHON@
 import json, os, sys, time
 stdin = sys.stdin.read()
 with open(os.environ["FAKE_LOG"], "a") as fh:
-    fh.write(json.dumps({"argv": sys.argv[1:], "stdin": stdin, "cwd": os.getcwd()}) + "\n")
+    fh.write(json.dumps({"argv": sys.argv[1:], "stdin": stdin, "cwd": os.getcwd(), "pid": os.getpid()}) + "\n")
 mode = os.environ["FAKE_MODE"]
 if mode == "sleep":
     time.sleep(30)
@@ -4328,9 +4328,9 @@ def test_quota_snapshot_statusline_refresh_windows(tmp):
     seen = []
     real_locked = win._statusline_locked
 
-    def locked(ctx, path, base, argv, env, cwd, flags):
-        seen.append((cwd, flags))
-        return real_locked(ctx, path, base, argv, env, cwd, 0)    # creationflags exist on Windows only
+    def locked(ctx, path, base, argv, env, flags):
+        seen.append(flags)
+        return real_locked(ctx, path, base, argv, env, 0)         # creationflags exist on Windows only
     win._statusline_locked = locked
 
     home = tmp / "slw-home"
@@ -4370,11 +4370,10 @@ def test_quota_snapshot_statusline_refresh_windows(tmp):
         setup("write")
         why = win.refresh_statusline(ctx(5), str(cache))
         got = runs()
-        check("statusline windows: a stale cache runs pwsh -NoProfile -File statusline.ps1 with {} on stdin from dev-lead's own directory, and a rewrite ends it with no problem",
+        check("statusline windows: a stale cache runs pwsh -NoProfile -File statusline.ps1 with {} on stdin from the collector's own directory, and a rewrite ends it with no problem",
               why is None and len(got) == 1 and got[0]["argv"] == ["-NoProfile", "-File", str(script)] and got[0]["stdin"] == "{}"
-              and got[0]["cwd"] == str(base.resolve()) and not (base / "quota-statusline.backoff").exists(), (why, got))
-        check("statusline windows: the run gets no window (CREATE_NO_WINDOW) and starts in dev-lead's own directory",
-              seen and seen[0] == (str(base), 0x08000000), seen)
+              and got[0]["cwd"] == os.getcwd() and not (base / "quota-statusline.backoff").exists(), (why, got))
+        check("statusline windows: the run gets no window (CREATE_NO_WINDOW)", seen == [0x08000000], seen)
         setup("silent")
         why = win.refresh_statusline(ctx(1), str(cache))
         again = win.refresh_statusline(ctx(1), str(cache))
@@ -4383,8 +4382,14 @@ def test_quota_snapshot_statusline_refresh_windows(tmp):
               and again is not None and "an earlier refresh wrote no cache" in again and len(runs()) == 1, (why, again, runs()))
         setup("sleep", timeout="1")
         why = win.refresh_statusline(ctx(1), str(cache))
-        check("statusline windows: a script that does not return in time is ended, named and backs off",
-              why == "claude refresh failed: statusline.ps1 did not return within 1 s" and (base / "quota-statusline.backoff").exists(), why)
+        pids = [r["pid"] for r in runs()]
+        for _ in range(40):
+            if pids and not Path("/proc/%d" % pids[0]).exists():
+                break
+            time.sleep(0.05)
+        check("statusline windows: a script that does not return in time is ended (its process is gone), named and backs off",
+              why == "claude refresh failed: statusline.ps1 did not return within 1 s" and (base / "quota-statusline.backoff").exists()
+              and len(pids) == 1 and not Path("/proc/%d" % pids[0]).exists(), (why, pids))
         # -- guards: nothing is started
         setup("write")
         script.unlink()
@@ -4399,6 +4404,20 @@ def test_quota_snapshot_statusline_refresh_windows(tmp):
               isinstance(why, str) and "is not a regular file" in why and not runs(), why)
         script.unlink()
         script.write_text("# stub")
+        real_lstat = os.lstat
+
+        def reparse_lstat(path, *a, **kw):                         # a regular-looking file that Windows flags as a reparse point
+            st = real_lstat(path, *a, **kw)
+            if str(path) == str(script):
+                return _types.SimpleNamespace(st_mode=st.st_mode, st_file_attributes=0x400)
+            return st
+        os.lstat = reparse_lstat
+        try:
+            why = win.refresh_statusline(ctx(1), str(cache))
+        finally:
+            os.lstat = real_lstat
+        check("statusline windows: a statusline.ps1 that is a reparse point (OneDrive placeholder, junction) is refused and starts nothing",
+              isinstance(why, str) and "reparse point" in why and not runs(), why)
         (home / ".claude").rename(home / ".claude-real")
         (home / ".claude").symlink_to(home / ".claude-real")
         why = win.refresh_statusline(ctx(1), str(cache))
@@ -4415,8 +4434,13 @@ def test_quota_snapshot_statusline_refresh_windows(tmp):
         (shim_dir / "pwsh.CMD").write_text("@echo off")
         os.environ["PATH"] = str(shim_dir)
         why = win.refresh_statusline(ctx(1), str(cache))
-        check("statusline windows: a pwsh that is only a shell shim is refused",
-              why == "claude refresh skipped: pwsh is a shell shim, not an executable" and not runs(), why)
+        (shim_dir / "pwsh.CMD").unlink()
+        (shim_dir / "pwsh.COM").write_text("MZ")
+        os.environ["PATHEXT"] = ".COM;.EXE;.CMD"
+        com = win.refresh_statusline(ctx(1), str(cache))
+        os.environ["PATHEXT"] = ".EXE;.CMD"
+        check("statusline windows: a pwsh that is a shell shim or a .com launcher, not a .exe, is refused",
+              why == com == "claude refresh skipped: pwsh is not a .exe (a shim or launcher would end the shell, not pwsh)" and not runs(), (why, com))
         # -- one at a time, and independent of the TUI refresh's lock
         setup("write")
         holder = os.open(str(base / "quota-statusline.lock"), os.O_RDWR | os.O_CREAT, 0o600)
