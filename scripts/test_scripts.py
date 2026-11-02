@@ -4269,6 +4269,189 @@ def test_quota_snapshot_windows_refresh(tmp):
                 os.environ[k] = v
 
 
+QS_FAKE_PWSH = r"""#!@PYTHON@
+import json, os, sys, time
+stdin = sys.stdin.read()
+with open(os.environ["FAKE_LOG"], "a") as fh:
+    fh.write(json.dumps({"argv": sys.argv[1:], "stdin": stdin, "cwd": os.getcwd()}) + "\n")
+mode = os.environ["FAKE_MODE"]
+if mode == "sleep":
+    time.sleep(30)
+if mode == "write":
+    cache = os.environ["FAKE_CACHE"]
+    with open(cache + ".tmp", "w") as fh:
+        json.dump({"seven_day": {"utilization": 7, "resets_at": "2026-11-08T00:00:00Z"}}, fh)
+    os.replace(cache + ".tmp", cache)
+"""
+
+
+def test_quota_snapshot_statusline_refresh_windows(tmp):
+    """"statusline" on Windows: pwsh runs ~/.claude/statusline.ps1 with {} on stdin; simulated here with a fake pwsh and a flock-backed msvcrt."""
+    import importlib.util as _ilu
+    import types as _types
+    import fcntl as _fcntl
+
+    def load(name, windows):
+        spec = _ilu.spec_from_file_location(name, QS_SCRIPT)
+        mod = _ilu.module_from_spec(spec)
+        saved = (sys.platform, sys.modules.get("fcntl", "absent"))
+        sys.path.insert(0, str(SCRIPTS))
+        try:
+            if windows:
+                sys.platform = "win32"
+                sys.modules["fcntl"] = None
+            spec.loader.exec_module(mod)
+        finally:
+            sys.path.pop(0)
+            sys.platform = saved[0]
+            if saved[1] == "absent":
+                sys.modules.pop("fcntl", None)
+            else:
+                sys.modules["fcntl"] = saved[1]
+        return mod
+    win, posix = load("qs_winsl_under_test", True), load("qs_posixsl_under_test", False)
+    check("statusline windows: the hidden-window flag is CREATE_NO_WINDOW on Windows and nothing elsewhere, and pwsh gets 20 s by default",
+          win.NO_WINDOW_FLAG == 0x08000000 and posix.NO_WINDOW_FLAG == 0 and win._statusline_timeout() == 20.0
+          and posix._statusline_timeout() == 10.0)
+
+    def flock_msvcrt():
+        def locking(fd, mode, n):
+            if mode == 2:
+                try:
+                    _fcntl.flock(fd, _fcntl.LOCK_EX | _fcntl.LOCK_NB)
+                except BlockingIOError as exc:
+                    raise OSError(13, "locked") from exc
+            else:
+                _fcntl.flock(fd, _fcntl.LOCK_UN)
+        return _types.SimpleNamespace(LK_NBLCK=2, LK_UNLCK=0, locking=locking)
+    win.msvcrt = flock_msvcrt()
+    seen = []
+    real_locked = win._statusline_locked
+
+    def locked(ctx, path, base, argv, env, cwd, flags):
+        seen.append((cwd, flags))
+        return real_locked(ctx, path, base, argv, env, cwd, 0)    # creationflags exist on Windows only
+    win._statusline_locked = locked
+
+    home = tmp / "slw-home"
+    (home / ".claude").mkdir(parents=True)
+    (home / ".cache").mkdir()
+    script = home / ".claude" / "statusline.ps1"
+    script.write_text("# stub")
+    binary = tmp / "slw-bin"
+    binary.mkdir()
+    pwsh = binary / "pwsh.EXE"
+    pwsh.write_text(QS_FAKE_PWSH.replace("@PYTHON@", sys.executable))
+    pwsh.chmod(0o755)
+    log, cache = tmp / "slw.log", tmp / "slw-cache.json"
+    base = home / ".cache" / "dev-lead"
+    now_epoch = datetime_epoch(QS_NOW)
+    saved = {k: os.environ.get(k) for k in ("HOME", "USERPROFILE", "PATH", "PATHEXT", "FAKE_MODE", "FAKE_LOG", "FAKE_CACHE",
+                                            "DEV_LEAD_QUOTA_STATUSLINE_TIMEOUT")}
+
+    def setup(mode, timeout=None):
+        os.environ.update(HOME=str(home), PATH=str(binary), PATHEXT=".EXE;.CMD", FAKE_MODE=mode, FAKE_LOG=str(log),
+                          FAKE_CACHE=str(cache))
+        if timeout:
+            os.environ["DEV_LEAD_QUOTA_STATUSLINE_TIMEOUT"] = timeout
+        else:
+            os.environ.pop("DEV_LEAD_QUOTA_STATUSLINE_TIMEOUT", None)
+        (base / "quota-statusline.backoff").unlink(missing_ok=True)
+        log.unlink(missing_ok=True)
+        cache.write_text("{}")
+        os.utime(cache, (now_epoch - 3600, now_epoch - 3600))
+
+    def ctx(wait):
+        return win.Context(None, "codex", 5, "0.0.0", refresh=True, refresh_wait=wait)
+
+    def runs():
+        return [json.loads(x) for x in log.read_text().splitlines()] if log.exists() else []
+    try:
+        setup("write")
+        why = win.refresh_statusline(ctx(5), str(cache))
+        got = runs()
+        check("statusline windows: a stale cache runs pwsh -NoProfile -File statusline.ps1 with {} on stdin from dev-lead's own directory, and a rewrite ends it with no problem",
+              why is None and len(got) == 1 and got[0]["argv"] == ["-NoProfile", "-File", str(script)] and got[0]["stdin"] == "{}"
+              and got[0]["cwd"] == str(base.resolve()) and not (base / "quota-statusline.backoff").exists(), (why, got))
+        check("statusline windows: the run gets no window (CREATE_NO_WINDOW) and starts in dev-lead's own directory",
+              seen and seen[0] == (str(base), 0x08000000), seen)
+        setup("silent")
+        why = win.refresh_statusline(ctx(1), str(cache))
+        again = win.refresh_statusline(ctx(1), str(cache))
+        check("statusline windows: a script that writes nothing is named, backs off for 10 minutes and is not run again in the poll after",
+              why == "claude refresh failed: statusline.ps1 did not rewrite the cache within 1 s" and (base / "quota-statusline.backoff").exists()
+              and again is not None and "an earlier refresh wrote no cache" in again and len(runs()) == 1, (why, again, runs()))
+        setup("sleep", timeout="1")
+        why = win.refresh_statusline(ctx(1), str(cache))
+        check("statusline windows: a script that does not return in time is ended, named and backs off",
+              why == "claude refresh failed: statusline.ps1 did not return within 1 s" and (base / "quota-statusline.backoff").exists(), why)
+        # -- guards: nothing is started
+        setup("write")
+        script.unlink()
+        why = win.refresh_statusline(ctx(1), str(cache))
+        check("statusline windows: a missing statusline.ps1 is named and starts nothing",
+              why == "claude refresh skipped: ~/.claude/statusline.ps1 is not there" and not runs(), why)
+        target = tmp / "slw-real.ps1"
+        target.write_text("# real")
+        script.symlink_to(target)
+        why = win.refresh_statusline(ctx(1), str(cache))
+        check("statusline windows: a statusline.ps1 that is a link is refused and starts nothing",
+              isinstance(why, str) and "is not a regular file" in why and not runs(), why)
+        script.unlink()
+        script.write_text("# stub")
+        (home / ".claude").rename(home / ".claude-real")
+        (home / ".claude").symlink_to(home / ".claude-real")
+        why = win.refresh_statusline(ctx(1), str(cache))
+        check("statusline windows: a ~/.claude that is a link is refused and starts nothing",
+              isinstance(why, str) and "is not a regular file" in why and not runs(), why)
+        (home / ".claude").unlink()
+        (home / ".claude-real").rename(home / ".claude")
+        os.environ["PATH"] = str(tmp / "slw-empty")
+        why = win.refresh_statusline(ctx(1), str(cache))
+        check("statusline windows: no pwsh on PATH is named and starts nothing",
+              why == "claude refresh skipped: pwsh was not found on PATH" and not runs(), why)
+        shim_dir = tmp / "slw-shim"
+        shim_dir.mkdir()
+        (shim_dir / "pwsh.CMD").write_text("@echo off")
+        os.environ["PATH"] = str(shim_dir)
+        why = win.refresh_statusline(ctx(1), str(cache))
+        check("statusline windows: a pwsh that is only a shell shim is refused",
+              why == "claude refresh skipped: pwsh is a shell shim, not an executable" and not runs(), why)
+        # -- one at a time, and independent of the TUI refresh's lock
+        setup("write")
+        holder = os.open(str(base / "quota-statusline.lock"), os.O_RDWR | os.O_CREAT, 0o600)
+        win.msvcrt.locking(holder, win.msvcrt.LK_NBLCK, 1)
+        try:
+            why = win.refresh_statusline(ctx(1), str(cache))
+        finally:
+            win.msvcrt.locking(holder, win.msvcrt.LK_UNLCK, 1)
+            os.close(holder)
+        check("statusline windows: a refresh already running is named and this one starts nothing",
+              why == "claude refresh skipped: another refresh is running" and not runs(), why)
+        tui = os.open(str(base / "quota-tui.lock"), os.O_RDWR | os.O_CREAT, 0o600)
+        win.msvcrt.locking(tui, win.msvcrt.LK_NBLCK, 1)
+        try:
+            why = win.refresh_statusline(ctx(5), str(cache))
+        finally:
+            win.msvcrt.locking(tui, win.msvcrt.LK_UNLCK, 1)
+            os.close(tui)
+        check("statusline windows: the TUI refresh's lock does not hold it back", why is None and len(runs()) == 1, (why, runs()))
+        # -- dispatch by refresh_sources, and the same file on POSIX still goes to the bash path
+        setup("write")
+        from datetime import datetime as _dt, timezone as _tz
+        srcs = [{"name": "claude", "kind": "claude_usage_cache", "ttl_seconds": 300, "path": str(cache), "refresh": "statusline"}]
+        problems = win.refresh_sources(srcs, ctx(5), _dt.fromtimestamp(now_epoch, _tz.utc))
+        check("statusline windows: refresh_sources sends a statusline source to the pwsh run", problems == {} and len(runs()) == 1, (problems, runs()))
+        check("statusline windows: where pwsh cannot run (no msvcrt) the mode says so", (lambda m: (setattr(m, "msvcrt", None), m.refresh_statusline(ctx(1), str(cache)))[1])(
+            load("qs_winsl_nomsvcrt", True)) == "claude refresh is not supported here (statusline refresh needs msvcrt)")
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+
 def test_quota_snapshot_statusline_refresh(tmp):
     """--refresh on a claude source marked "statusline" runs ~/.claude/statusline.sh once, only when both opt-ins hold and the cache is stale."""
     now_epoch = datetime_epoch(QS_NOW)
@@ -13647,6 +13830,9 @@ def main():
     print("quota-snapshot.py --refresh on a claude source (statusline)")
     with tempfile.TemporaryDirectory() as td:
         test_quota_snapshot_statusline_refresh(Path(td))
+    print("quota-snapshot.py --refresh on a claude source (statusline, Windows)")
+    with tempfile.TemporaryDirectory() as td:
+        test_quota_snapshot_statusline_refresh_windows(Path(td))
     print("quota-snapshot.py --refresh (private tmux server)")
     with tempfile.TemporaryDirectory() as td:
         try:

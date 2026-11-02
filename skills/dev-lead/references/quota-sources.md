@@ -16,7 +16,7 @@ behaviour. It is read-only except for one opt-in action, `--refresh` on a host
 that asks for it: it starts `agy`, `cursor-agent --trust` or `opencode --standalone` in a tmux server of
 its own so that a cache that is missing, stale, or without a usable time is
 rewritten (*Refreshing a TUI cache* below), and it runs the person's own
-`~/.claude/statusline.sh` once so that the Claude usage cache is refetched (by
+`~/.claude/statusline.sh` (`statusline.ps1` by pwsh on Windows) once so that the Claude usage cache is refetched (by
 that script, with its own token: *`claude_usage_cache`* below).
 
 ## The output
@@ -198,8 +198,7 @@ What each kind can produce, and when:
   (a `flock` on `~/.cache/dev-lead/quota-statusline.lock`, separate from the TUI
   refresh's `quota-tui.lock`, so the two can run side by side); a run that
   produced no cache, for any reason (wrote nothing, did not return within 10 s,
-  could not be run), is not repeated for 10 minutes (`quota-statusline.backoff`). Not on Windows (a bash
-  script): the record says so. Problems on the record: `claude refresh skipped:
+  could not be run), is not repeated for 10 minutes (`quota-statusline.backoff`). Problems on the record: `claude refresh skipped:
   ~/.claude/statusline.sh is not there`, `... is not a regular file of the
   user's, in a directory of the user's, that only the user can write`, `another refresh is running`, `an earlier
   refresh wrote no cache N s ago; the next try is in N s`, `claude refresh
@@ -217,6 +216,21 @@ What each kind can produce, and when:
   record: `claude refresh skipped: no /bin/bash`, `its lock file was replaced`, `~/.cache/dev-lead
   is not a plain directory of the user's`; skips do not back off, failures do; a script that ignores its stdin and draws
   something slow is bounded by a 10 s timeout, not killed as a tree.
+  **On Windows (added 0.6.100)** the same mode runs `~/.claude/statusline.ps1` (aadev's, or a stub
+  that runs it) as `pwsh -NoProfile -File <it>` with `{}` on stdin, no window, in
+  `~/.cache/dev-lead`, then waits for the cache (`${TEMP}\claude\statusline-usage-cache.json`) to change.
+  The script starts its own detached `-Fetch` under its own 300 s age, 600 s back-off and 30 s fetch
+  lock; the collector reads no credential. There is no owner or mode to check, so the guard is by shape:
+  the script is a regular file, not a link, in a `~/.claude` that is not a link or junction, and pwsh is an
+  absolute `pwsh.exe` found on PATH (never the current directory, never a shim). One at a time by an
+  `msvcrt` byte-range lock on `~/.cache/dev-lead/quota-statusline.lock` (separate from the TUI refresh's
+  lock), the same `quota-statusline.backoff`, and a 20 s timeout (pwsh starts slowly). Problems:
+  `~/.claude/statusline.ps1 is not there`, `... is not a regular file (not a link) in a ~/.claude that is not a
+  link or junction`, `pwsh was not found on PATH`, `pwsh is a shell shim, not an executable`, and the same
+  lock, back-off, timeout and no-rewrite messages with `statusline.ps1` as the name. Known limits: checked
+  by path (a same-user process could swap the file between check and run, as it could run it itself); no
+  ACL is read; the timeout ends pwsh only, a `-Fetch` it started is its own detached job. Simulated in the
+  tests (fake pwsh, flock-backed `msvcrt`); not yet run on a real Windows host.
 - **Per-model weekly keys** (`seven_day_<name>`, such as `seven_day_opus`) are
   not read. When any of them holds an object with a `utilization` field, the
   record gets the problem `per-model weekly limits are present and not read`,
