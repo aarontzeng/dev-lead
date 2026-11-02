@@ -35,7 +35,10 @@ CHANGE_KEYS = ("gerrit", "clones", "gateways")
 # Optional: without it, review legs carry no effort and behave as before.
 # wording_globs (0.6.58): the paths a fix round may change and still be sized
 # as wording only; without it, the documentation suffixes below.
-OPTIONAL_ROOT_KEYS = {"effort", "wording_globs", "small_first_round"}
+# patrol_signatures: when an unattended reviewer posts under my own account, the
+# strings its messages are signed with; a vote cast with such a message is not
+# mine. Without it every vote on my account counts as mine.
+OPTIONAL_ROOT_KEYS = {"effort", "wording_globs", "small_first_round", "patrol_signatures"}
 # An abstract effort ladder. The table names a tier; each adapter's own
 # spelling of it comes from data/launch.json, never from personal rules.
 EFFORT_LADDER = ("low", "medium", "high", "xhigh", "max")
@@ -370,6 +373,10 @@ def validate(doc):
                 else:
                     for index, glob in enumerate(globs):
                         _check_glob(glob, "small_first_round.%s[%s]" % (key, index), problems)
+    if "patrol_signatures" in doc:
+        signatures = doc["patrol_signatures"]
+        if not isinstance(signatures, list) or not all(isinstance(item, str) and item.strip() for item in signatures):
+            problems.error("patrol_signatures", "must be a list of non-empty strings")
     if "wording_globs" in doc:
         wording = doc["wording_globs"]
         if not isinstance(wording, list):
@@ -1402,24 +1409,68 @@ def _approval_value(approval):
         return None
 
 
-def _last_vote(change, identifiers):
-    found = []
+PATROL_VOTE_WINDOW_SECS = 10
+
+
+def _patrol_times(change, identifiers, signatures):
+    """Times of my own messages signed by an unattended reviewer that shares my account."""
+    times = []
+    if not signatures:
+        return times
+    for comment in change.get("comments") or []:
+        if (isinstance(comment, dict) and _identity_matches(comment.get("reviewer"), identifiers)
+                and any(signature in str(comment.get("message", "")) for signature in signatures)):
+            when = _numeric_time(comment.get("timestamp", 0))
+            if when is not None:
+                times.append(when)
+    return times
+
+
+def _is_patrol_vote(approval, patrol_times):
+    """Whether a vote of mine was cast together with a patrol-signed message.
+
+    The unattended reviewer posts under my Gerrit account, so a vote carries no
+    author of its own; the signed message cast in the same review (within a few
+    seconds of grantedOn) is what tells it apart. A patrol vote that overwrote
+    my own on the same patch set cannot be told back from the data -- that
+    direction over-reviews, which is the safe one.
+    """
+    granted = _numeric_time(approval.get("grantedOn", 0))
+    return granted is not None and any(abs(granted - when) <= PATROL_VOTE_WINDOW_SECS for when in patrol_times)
+
+
+def _last_vote(change, identifiers, signatures=()):
+    """My last Code-Review vote: (patch set, approval, summary, patrol summary).
+
+    Votes an unattended reviewer cast under my account (the rules file's
+    patrol_signatures) do not count as mine; the latest of them is returned
+    separately so the lead can still see it.
+    """
+    patrol_times = _patrol_times(change, identifiers, signatures)
+    found, patrol = [], []
     for patch_set in change.get("patchSets") or []:
         for approval in patch_set.get("approvals") or []:
             if approval.get("type") == "Code-Review" and _identity_matches(approval.get("by"), identifiers):
-                found.append((approval.get("grantedOn", 0), patch_set, approval))
+                (patrol if _is_patrol_vote(approval, patrol_times) else found).append(
+                    (approval.get("grantedOn", 0), patch_set, approval))
+    patrol_summary = None
+    if patrol:
+        _when, patch_set, approval = max(patrol, key=lambda item: _time(item[0]))
+        voted_on = _number(patch_set)
+        patrol_summary = {"ps": int(voted_on) if voted_on.isdigit() else voted_on,
+                          "value": approval.get("value")}
     if not found:
-        return None, None, None
+        return None, None, None, patrol_summary
     # Equal times keep the EARLIEST patch set, on purpose: a vote Gerrit copies
     # forward keeps its original grantedOn, and the patch set it was cast on is
     # the content I reviewed -- a sticky -2 copied across a REWORK must not read
     # as a vote on the current patch set.
     _when, patch_set, approval = max(found, key=lambda item: _time(item[0]))
     if _approval_value(approval) in (None, 0):
-        return None, None, None
+        return None, None, None, patrol_summary
     voted_on = _number(patch_set)   # digits, or a non-numeric set the span ignores
     return patch_set, approval, {"ps": int(voted_on) if voted_on.isdigit() else voted_on,
-                                 "value": approval.get("value")}
+                                 "value": approval.get("value")}, patrol_summary
 
 
 def _at_or_after(left, right):
@@ -1767,7 +1818,7 @@ def triage_change(config, raw, path, number, query_json, include_wip, as_of=None
     project = change.get("project")
     gateway = config["gateways"].get(project)
     role = "owner" if _identity_matches(change.get("owner"), identifiers) else "reviewer"
-    voted_set, vote, vote_summary = _last_vote(change, identifiers)
+    voted_set, vote, vote_summary, patrol_vote = _last_vote(change, identifiers, config.get("patrol_signatures") or ())
     fired = []
     if gateway is None:
         _fired(fired, "gateway", "unknown project %s" % project)
@@ -1824,7 +1875,7 @@ def triage_change(config, raw, path, number, query_json, include_wip, as_of=None
     identity = rules_identity(config, raw, path, current["number"] if as_of is not None else None)
     common = {
         "rules": identity, "change": change.get("number", number), "project": project, "gateway": gateway,
-        "role": role, "my_last_vote": vote_summary, "wip": wip, "skip": skip,
+        "role": role, "my_last_vote": vote_summary, "patrol_vote": patrol_vote, "wip": wip, "skip": skip,
         "unmerged_ancestors": ancestors, "unknown_ancestors": unknown_ancestors,
         "topic_members": {"topic": topic, "changes": members, "atomic": False}, "order": rank,
     }

@@ -10878,6 +10878,44 @@ def test_triage(tmp):
     check("triage skip: later comment without my name keeps skip", result.get("skip") is not None, result)
     result = changed(126, [current_vote], comments=[{"timestamp": 30, "reviewer": {"username": "alice"}, "message": "alice revisited"}])
     check("triage skip: my own later comment keeps skip", result.get("skip") is not None, result)
+    # An unattended reviewer may vote under my account. With patrol_signatures
+    # set, a vote cast with a signed message is not mine: it never causes a
+    # skip and is reported apart. Without the key every vote is mine.
+    patrol_config = dict(config, patrol_signatures=["Reviewed-by: patrol-bot"])
+    patrol_file = tmp / "triage-patrol.json"
+    _write_doc(patrol_file, patrol_config)
+    patrol_env = _roster_env(tmp, DEV_LEAD_ROSTER=roster_file, DEV_LEAD_TRIAGE=patrol_file)
+    signed = {"timestamp": 20, "reviewer": {"username": "alice"},
+              "message": "Patch Set 1: Code-Review+1\n\nReviewed-by: patrol-bot some-model"}
+    result = changed(143, [current_vote], comments=[signed], test_env=patrol_env)
+    check("triage patrol: a signed vote is not my vote and does not skip",
+          result.get("skip") is None and result.get("my_last_vote") is None
+          and result.get("patrol_vote") == {"ps": 1, "value": "+1"}, result)
+    result = changed(148, [current_vote], comments=[signed])
+    check("triage patrol: without patrol_signatures a signed vote is still mine",
+          result.get("skip") is not None and result.get("patrol_vote") is None, result)
+    unsigned = dict(signed, message="Patch Set 1: Code-Review+1\n\nlooks fine")
+    result = changed(144, [current_vote], comments=[unsigned], test_env=patrol_env)
+    check("triage patrol: an unsigned vote of mine still skips and has no patrol vote",
+          result.get("skip") is not None and result.get("patrol_vote") is None, result)
+    far = dict(signed, timestamp=500)
+    result = changed(145, [current_vote], comments=[far], test_env=patrol_env)
+    check("triage patrol: a signed message far from the vote does not claim it",
+          result.get("skip") is not None and result.get("patrol_vote") is None, result)
+    other = dict(signed, reviewer={"username": "bob"})
+    result = changed(146, [current_vote], comments=[other], test_env=patrol_env)
+    check("triage patrol: a signature from another account does not claim my vote",
+          result.get("skip") is not None, result)
+    own_then_patrol = patch(1, ps1, base, approvals=[approval("+2", 20)])
+    result = changed(147, [own_then_patrol, patch(2, ps2, ps1, approvals=[approval("+1", 90)])],
+                     comments=[dict(signed, timestamp=90)], test_env=patrol_env)
+    check("triage patrol: my earlier real vote stays mine beside a later patrol vote",
+          (result.get("my_last_vote") or {}).get("ps") == 1
+          and result.get("patrol_vote") == {"ps": 2, "value": "+1"}, result)
+    expect_bad("patrol-signatures-type", lambda doc: doc.update({"patrol_signatures": "Reviewed-by: x"}),
+               "patrol_signatures")
+    expect_bad("patrol-signatures-empty", lambda doc: doc.update({"patrol_signatures": [" "]}), "patrol_signatures")
+
     result = changed(127, [patch(1, small, trigger_old)], owner="carol")
     check("triage order: rule zero can miss and rank one can win", result.get("order") == 1, result)
 
