@@ -1549,7 +1549,7 @@ def _statusline_windows(ctx, path):
             or not _plain_dir(os.path.dirname(script))):
         return ("%s refresh skipped: ~/.claude/statusline.ps1 is not a regular file (not a link or reparse point) "
                 "in a ~/.claude that is not a link or junction" % label)
-    pwsh = _windows_which("pwsh")
+    pwsh = _windows_which("pwsh.exe")      # by name with its extension: a pwsh.com earlier in PATHEXT must not hide it
     if pwsh is None:
         return "%s refresh skipped: pwsh was not found on PATH" % label
     if os.path.splitext(pwsh)[1].lower() != ".exe":

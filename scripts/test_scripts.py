@@ -4340,7 +4340,7 @@ def test_quota_snapshot_statusline_refresh_windows(tmp):
     script.write_text("# stub")
     binary = tmp / "slw-bin"
     binary.mkdir()
-    pwsh = binary / "pwsh.EXE"
+    pwsh = binary / "pwsh.exe"
     pwsh.write_text(QS_FAKE_PWSH.replace("@PYTHON@", sys.executable))
     pwsh.chmod(0o755)
     log, cache = tmp / "slw.log", tmp / "slw-cache.json"
@@ -4383,13 +4383,22 @@ def test_quota_snapshot_statusline_refresh_windows(tmp):
         setup("sleep", timeout="1")
         why = win.refresh_statusline(ctx(1), str(cache))
         pids = [r["pid"] for r in runs()]
+
+        def alive(pid):                                            # subprocess.run reaped it: signal 0 finds no such process
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                return False
+            except OSError:
+                return True
+            return True
         for _ in range(40):
-            if pids and not Path("/proc/%d" % pids[0]).exists():
+            if pids and not alive(pids[0]):
                 break
             time.sleep(0.05)
         check("statusline windows: a script that does not return in time is ended (its process is gone), named and backs off",
               why == "claude refresh failed: statusline.ps1 did not return within 1 s" and (base / "quota-statusline.backoff").exists()
-              and len(pids) == 1 and not Path("/proc/%d" % pids[0]).exists(), (why, pids))
+              and len(pids) == 1 and not alive(pids[0]), (why, pids))
         # -- guards: nothing is started
         setup("write")
         script.unlink()
@@ -4439,8 +4448,17 @@ def test_quota_snapshot_statusline_refresh_windows(tmp):
         os.environ["PATHEXT"] = ".COM;.EXE;.CMD"
         com = win.refresh_statusline(ctx(1), str(cache))
         os.environ["PATHEXT"] = ".EXE;.CMD"
-        check("statusline windows: a pwsh that is a shell shim or a .com launcher, not a .exe, is refused",
-              why == com == "claude refresh skipped: pwsh is not a .exe (a shim or launcher would end the shell, not pwsh)" and not runs(), (why, com))
+        check("statusline windows: a pwsh that is only a shell shim or a .com launcher, never a .exe, is not started",
+              why == com == "claude refresh skipped: pwsh was not found on PATH" and not runs(), (why, com))
+        # a pwsh.com earlier in PATHEXT and PATH must not hide the real pwsh.exe
+        setup("write")
+        os.environ["PATHEXT"] = ".COM;.EXE;.CMD"
+        os.environ["PATH"] = os.pathsep.join((str(shim_dir), str(binary)))
+        why = win.refresh_statusline(ctx(5), str(cache))
+        check("statusline windows: a pwsh.com ahead of the real pwsh.exe (PATHEXT and PATH order) does not hide it",
+              why is None and len(runs()) == 1 and runs()[0]["argv"][0] == "-NoProfile", (why, runs()))
+        os.environ["PATHEXT"] = ".EXE;.CMD"
+        log.unlink(missing_ok=True)
         # -- one at a time, and independent of the TUI refresh's lock
         setup("write")
         holder = os.open(str(base / "quota-statusline.lock"), os.O_RDWR | os.O_CREAT, 0o600)
