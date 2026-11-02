@@ -10948,13 +10948,27 @@ def test_triage(tmp):
     check("triage patrol: a withdrawn patrol vote is no patrol_vote",
           result.get("patrol_vote") is None and result.get("skip") is None, result)
     result = changed(157, [current_vote], comments=[signed], args=("--as-of-ps", "1"), test_env=patrol_env)
-    check("triage patrol: --as-of-ps replay still carries the patrol_vote key without counting it as mine",
-          result.get("my_last_vote") is None and "patrol_vote" in result, result)
+    check("triage patrol: --as-of-ps on the voted patch set drops my approvals there, the patrol's too, and keeps the key",
+          result.get("my_last_vote") is None and "patrol_vote" in result and result["patrol_vote"] is None, result)
     late = patch(1, ps1, base, approvals=[approval("+1", 25)])
     result = changed(158, [late, patch(2, ps2, ps1, created=20)], comments=[dict(signed, timestamp=25)],
                      args=("--as-of-ps", "2"), test_env=patrol_env)
     check("triage patrol: a patrol vote cast after the next upload stays the patrol's in a replay",
           result.get("my_last_vote") is None, result)
+    result = changed(159, [patch(1, ps1, base, approvals=[approval("+1", 58)]), patch(2, ps2, ps1, created=50),
+                           patch(3, ps3, ps2, created=60)],
+                     comments=[dict(signed, timestamp=62)], args=("--as-of-ps", "2"), test_env=patrol_env)
+    check("triage patrol: a signed message after the replay's end cannot claim a vote inside the replay",
+          (result.get("my_last_vote") or {}).get("ps") == 1 and result.get("patrol_vote") is None, result)
+    result = changed(160, [patch(1, ps1, base, approvals=[approval("+1", 5)])],
+                     comments=[{"reviewer": {"username": "alice"}, "message": "Reviewed-by: patrol-bot x"}],
+                     test_env=patrol_env)
+    check("triage patrol: a signed message with no time does not pair with a vote near epoch 0",
+          result.get("skip") is not None and result.get("patrol_vote") is None, result)
+    result = changed(161, [patch(1, ps1, base, approvals=[no_grant])],
+                     comments=[dict(signed, timestamp=5)], test_env=patrol_env)
+    check("triage patrol: a vote with no time does not pair with a signed message near epoch 0",
+          result.get("skip") is not None and result.get("patrol_vote") is None, result)
     expect_bad("patrol-signatures-null", lambda doc: doc.update({"patrol_signatures": None}), "patrol_signatures")
     expect_bad("patrol-signatures-number", lambda doc: doc.update({"patrol_signatures": [1]}), "patrol_signatures")
     _write_doc(tmp / "patrol-empty.json", dict(config, patrol_signatures=[]))

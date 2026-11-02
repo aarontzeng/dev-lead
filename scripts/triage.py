@@ -1421,14 +1421,17 @@ def _signed_by(message, signatures):
     return any(line.strip().startswith(signature) for line in str(message).splitlines() for signature in signatures)
 
 
-def _patrol_times(change, identifiers, signatures):
+def _patrol_times(change, identifiers, signatures, ends_at=None):
     """Times of my own messages signed by an unattended reviewer that shares my account.
 
-    Taken from the change as Gerrit gave it, BEFORE any --as-of replay trims its
-    comments: the replay drops my messages from the replayed upload onward, and a
-    vote kept without its signed message would turn into one of mine. A message
+    Taken BEFORE an --as-of replay trims the comments: the replay drops my
+    messages from the replayed upload onward, and a vote it keeps without its
+    signed message would turn into one of mine. But `ends_at` (the replay's
+    end for everyone) still applies: a message after it belongs to a review the
+    replay must not see, so it cannot claim a vote inside the replay. A message
     with no usable timestamp is not a time at all (never epoch 0).
     """
+    ends_at = ends_at if _numeric_time(ends_at) is not None else None
     times = []
     if not signatures:
         return times
@@ -1436,7 +1439,7 @@ def _patrol_times(change, identifiers, signatures):
         if (isinstance(comment, dict) and _identity_matches(comment.get("reviewer"), identifiers)
                 and _signed_by(comment.get("message", ""), signatures)):
             when = _numeric_time(comment.get("timestamp"))
-            if when is not None:
+            if when is not None and not (ends_at is not None and _at_or_after(when, ends_at)):
                 times.append(when)
     return times
 
@@ -1828,8 +1831,8 @@ def triage_change(config, raw, path, number, query_json, include_wip, as_of=None
     change, all_changes = _query(config, number, query_json)
     identifiers = set(config["me"])
     patrol_signatures = config.get("patrol_signatures") or ()
-    patrol_times = _patrol_times(change, identifiers, patrol_signatures)
     cutoffs = _as_of_cutoffs(change, as_of)
+    patrol_times = _patrol_times(change, identifiers, patrol_signatures, cutoffs["everyone"] if cutoffs else None)
     patch_sets, current = _patch_sets(change, as_of)
     _limit_to_as_of(change, patch_sets, cutoffs, identifiers)
     if not current.get("revision"):
