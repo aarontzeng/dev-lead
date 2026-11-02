@@ -3918,6 +3918,8 @@ def test_quota_snapshot_windows_refresh(tmp):
               and future.startswith("agy refresh skipped: an earlier refresh wrote no cache ")
               and garbage.startswith("agy refresh skipped: an earlier refresh wrote no cache ")
               and "within 1 s" in late, (held, future, garbage, late, n_before, len(runs())))
+        backoff_marker.unlink(missing_ok=True)                                        # the next scenario starts clean
+        cache.unlink(missing_ok=True)
         # -- exits early
         log.unlink(missing_ok=True)
         env("exit")

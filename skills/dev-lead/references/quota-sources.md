@@ -523,7 +523,7 @@ they have open.
   A source whose refresh ran and wrote no cache (or exited first) is not started again for 10 minutes
   (`quota-tui.<cli>.backoff` under `~/.cache/dev-lead`; a refresh that works clears it, so does a cache written after
   the marker (a CLI that lands its cache seconds after the wait, as cursor-agent does on a slow Windows host,
-  measured 4-19 s late; a cache dated in the future or not a JSON object does not count; the claude `statusline` mode's
+  measured 4-19 s late; a cache more than 60 s in the future or not a JSON object does not count; the claude `statusline` mode's
   `quota-statusline.backoff` follows the same rule), and the problem line says how long is left): on a network where a CLI cannot get through (cursor-agent behind a proxy
   it cannot use) it would otherwise spend its whole wait on every poll and hold the lock, so agy and
   opencode-go never got it. On Windows opencode 2.2.0 the background service also drops the go-usage
