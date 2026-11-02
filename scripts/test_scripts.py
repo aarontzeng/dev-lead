@@ -3895,6 +3895,24 @@ def test_quota_snapshot_windows_refresh(tmp):
         ok_run = win.refresh_hidden(ctx(8), "agy_quota_cache", str(cache))
         check("quota-snapshot windows refresh: a refresh that works clears the source's backoff",
               ok_run is None and not backoff_marker.exists(), (ok_run, backoff_marker.exists()))
+        # -- a cache that lands AFTER the failed wait (a slow CLI) shows the refresh only ran late: the back-off is dropped
+        log.unlink(missing_ok=True)
+        cache.unlink(missing_ok=True)
+        env("sleep")
+        win.refresh_hidden(ctx(1), "agy_quota_cache", str(cache))
+        marker_t = backoff_marker.stat().st_mtime
+        n_before = len(runs())
+        cache.write_text("{}")
+        os.utime(cache, (marker_t - 5, marker_t - 5))                                 # older than the marker: still backed off
+        held = win.refresh_hidden(ctx(1), "agy_quota_cache", str(cache))
+        os.utime(cache, (time.time() + 3600, time.time() + 3600))                     # dated in the future: does not count
+        future = win.refresh_hidden(ctx(1), "agy_quota_cache", str(cache))
+        os.utime(cache, (marker_t + 4, marker_t + 4))                                 # landed 4 s after the marker
+        late = win.refresh_hidden(ctx(1), "agy_quota_cache", str(cache))
+        check("quota-snapshot windows refresh: a cache written after the back-off marker lifts it; an older or future-dated one does not",
+              held.startswith("agy refresh skipped: an earlier refresh wrote no cache ") and len(runs()) == n_before + 1
+              and future.startswith("agy refresh skipped: an earlier refresh wrote no cache ")
+              and "within 1 s" in late, (held, future, late, n_before, len(runs())))
         # -- exits early
         log.unlink(missing_ok=True)
         env("exit")
@@ -4380,6 +4398,11 @@ def test_quota_snapshot_statusline_refresh_windows(tmp):
         check("statusline windows: a script that writes nothing is named, backs off for 10 minutes and is not run again in the poll after",
               why == "claude refresh failed: statusline.ps1 did not rewrite the cache within 1 s" and (base / "quota-statusline.backoff").exists()
               and again is not None and "an earlier refresh wrote no cache" in again and len(runs()) == 1, (why, again, runs()))
+        marker_t = (base / "quota-statusline.backoff").stat().st_mtime
+        os.utime(cache, (marker_t + 3, marker_t + 3))              # a cache that landed after the failed wait lifts the back-off
+        late = win.refresh_statusline(ctx(1), str(cache))
+        check("statusline windows: a cache written after the back-off marker lifts it and the script runs again",
+              late == "claude refresh failed: statusline.ps1 did not rewrite the cache within 1 s" and len(runs()) == 2, (late, runs()))
         setup("sleep", timeout="1")
         why = win.refresh_statusline(ctx(1), str(cache))
         pids = [r["pid"] for r in runs()]

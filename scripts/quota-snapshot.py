@@ -1299,6 +1299,29 @@ STUCK_SECONDS = 600       # a CLI that could not be stopped is assumed still run
 BACKOFF_SECONDS = 600     # a source whose refresh just failed to produce a cache is not started again for this long
 
 
+def _backoff_age(backoff, cache_path):
+    """Seconds since a back-off marker was written while it still holds, else None.
+
+    A cache written AFTER the marker (and not dated in the future) shows that the refresh only ran late (a CLI that
+    lands its cache some seconds after the wait, as cursor-agent does on a slow host): the marker is then dropped,
+    or the source would sit stale for the rest of the 10 minutes with a working cache path."""
+    failed = _mtime_or_none(backoff)
+    if failed is None:
+        return None
+    now = time.time()
+    ago = now - failed / 1e9
+    if not 0 <= ago < BACKOFF_SECONDS:
+        return None
+    cached = _mtime_or_none(cache_path)
+    if cached is not None and cached > failed and cached / 1e9 <= now + CLOCK_SKEW_SECONDS:
+        try:
+            os.unlink(backoff)
+        except OSError:
+            pass
+        return None
+    return ago
+
+
 def _hidden_locked(ctx, kind, path, base):
     label = REFRESH_COMMANDS[kind][0]
     marker = os.path.join(base, STUCK_MARKER)
@@ -1311,14 +1334,12 @@ def _hidden_locked(ctx, kind, path, base):
         except OSError:
             pass
     backoff = os.path.join(base, "quota-tui.%s.backoff" % label)
-    failed = _mtime_or_none(backoff)
-    if failed is not None:
-        ago = time.time() - failed / 1e9
-        if 0 <= ago < BACKOFF_SECONDS:
-            # a CLI that cannot get through (a proxy, no network) would otherwise spend its whole wait on every poll
-            # and hold the lock, so the other sources never get it
-            return "%s refresh skipped: an earlier refresh wrote no cache %d s ago; the next try is in %d s" % (
-                label, ago, BACKOFF_SECONDS - ago)
+    ago = _backoff_age(backoff, path)
+    if ago is not None:
+        # a CLI that cannot get through (a proxy, no network) would otherwise spend its whole wait on every poll
+        # and hold the lock, so the other sources never get it
+        return "%s refresh skipped: an earlier refresh wrote no cache %d s ago; the next try is in %d s" % (
+            label, ago, BACKOFF_SECONDS - ago)
     argv, why = _windows_refresh_argv(kind)
     if why:
         return why
@@ -1487,12 +1508,10 @@ def _statusline_locked(ctx, path, base, argv, env, flags):
     label = "claude"
     name = os.path.basename(argv[-1])
     backoff = os.path.join(base, "quota-statusline.backoff")
-    failed = _mtime_or_none(backoff)
-    if failed is not None:
-        ago = time.time() - failed / 1e9
-        if 0 <= ago < BACKOFF_SECONDS:
-            return "%s refresh skipped: an earlier refresh wrote no cache %d s ago; the next try is in %d s" % (
-                label, ago, BACKOFF_SECONDS - ago)
+    ago = _backoff_age(backoff, path)
+    if ago is not None:
+        return "%s refresh skipped: an earlier refresh wrote no cache %d s ago; the next try is in %d s" % (
+            label, ago, BACKOFF_SECONDS - ago)
 
     def failure(message):
         try:                                  # every way of not producing a cache backs off, not only a silent script

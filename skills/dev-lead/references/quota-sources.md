@@ -521,8 +521,9 @@ they have open.
   separate cause, fixed by an `insteadOf` https rewrite in the XDG git config). The 45 s minimum
   covers it; a longer stall is a host problem (reboot), not something this script can fix.
   A source whose refresh ran and wrote no cache (or exited first) is not started again for 10 minutes
-  (`quota-tui.<cli>.backoff` under `~/.cache/dev-lead`; a refresh that works clears it, and the problem
-  line says how long is left): on a network where a CLI cannot get through (cursor-agent behind a proxy
+  (`quota-tui.<cli>.backoff` under `~/.cache/dev-lead`; a refresh that works clears it, so does a cache written after
+  the marker (a CLI that lands its cache seconds after the wait, as cursor-agent does on a slow Windows host,
+  measured 4-19 s late; a cache dated in the future does not count), and the problem line says how long is left): on a network where a CLI cannot get through (cursor-agent behind a proxy
   it cannot use) it would otherwise spend its whole wait on every poll and hold the lock, so agy and
   opencode-go never got it. On Windows opencode 2.2.0 the background service also drops the go-usage
   plugin about an hour after its last TUI attach (the project instance is disposed, measured by a peer),
