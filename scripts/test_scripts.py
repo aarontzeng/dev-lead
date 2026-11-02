@@ -10892,8 +10892,9 @@ def test_triage(tmp):
           result.get("skip") is None and result.get("my_last_vote") is None
           and result.get("patrol_vote") == {"ps": 1, "value": "+1"}, result)
     result = changed(148, [current_vote], comments=[signed])
-    check("triage patrol: without patrol_signatures a signed vote is still mine",
-          result.get("skip") is not None and result.get("patrol_vote") is None, result)
+    check("triage patrol: without patrol_signatures a signed vote is still mine and no patrol_vote key appears",
+          result.get("skip") is not None and (result.get("my_last_vote") or {}).get("ps") == 1
+          and "patrol_vote" not in result, result)
     unsigned = dict(signed, message="Patch Set 1: Code-Review+1\n\nlooks fine")
     result = changed(144, [current_vote], comments=[unsigned], test_env=patrol_env)
     check("triage patrol: an unsigned vote of mine still skips and has no patrol vote",
@@ -10905,13 +10906,60 @@ def test_triage(tmp):
     other = dict(signed, reviewer={"username": "bob"})
     result = changed(146, [current_vote], comments=[other], test_env=patrol_env)
     check("triage patrol: a signature from another account does not claim my vote",
-          result.get("skip") is not None, result)
+          result.get("skip") is not None and (result.get("my_last_vote") or {}).get("ps") == 1
+          and result.get("patrol_vote") is None, result)
     own_then_patrol = patch(1, ps1, base, approvals=[approval("+2", 20)])
     result = changed(147, [own_then_patrol, patch(2, ps2, ps1, approvals=[approval("+1", 90)])],
                      comments=[dict(signed, timestamp=90)], test_env=patrol_env)
     check("triage patrol: my earlier real vote stays mine beside a later patrol vote",
           (result.get("my_last_vote") or {}).get("ps") == 1
           and result.get("patrol_vote") == {"ps": 2, "value": "+1"}, result)
+    # Review round 1 (cursor composer-2.5 + agy gemini-3.8-flash-high).
+    nostamp = {"reviewer": {"username": "alice"}, "message": "Reviewed-by: patrol-bot x"}
+    no_grant = {"type": "Code-Review", "value": "+1", "by": {"username": "alice"}}
+    result = changed(149, [patch(1, ps1, base, approvals=[no_grant])], comments=[nostamp], test_env=patrol_env)
+    check("triage patrol: a signed message and a vote that both lack a time never pair at epoch 0",
+          result.get("skip") is not None and result.get("patrol_vote") is None, result)
+    quoted = dict(signed, message="> Reviewed-by: patrol-bot some-model\nI disagree, see the failing test")
+    result = changed(150, [current_vote], comments=[quoted], test_env=patrol_env)
+    check("triage patrol: a note that only quotes the signature does not claim my vote",
+          result.get("skip") is not None and result.get("patrol_vote") is None, result)
+    midline = dict(signed, message="the footer Reviewed-by: patrol-bot appears mid-line")
+    result = changed(151, [current_vote], comments=[midline], test_env=patrol_env)
+    check("triage patrol: a signature in the middle of a line is not a footer",
+          result.get("skip") is not None, result)
+    indented = dict(signed, message="Patch Set 1: Code-Review+1\n\n  Reviewed-by: patrol-bot x\n")
+    result = changed(152, [current_vote], comments=[indented], test_env=patrol_env)
+    check("triage patrol: a footer line with leading space still counts",
+          result.get("skip") is None and result.get("patrol_vote") == {"ps": 1, "value": "+1"}, result)
+    result = changed(153, [patch(1, ps1, base, approvals=[approval("+1", 30)])],
+                     comments=[dict(signed, timestamp=20)], test_env=patrol_env)
+    check("triage patrol: a signed message exactly 10 s from the vote claims it",
+          result.get("skip") is None and result.get("patrol_vote") == {"ps": 1, "value": "+1"}, result)
+    result = changed(154, [patch(1, ps1, base, approvals=[approval("+1", 31)])],
+                     comments=[dict(signed, timestamp=20)], test_env=patrol_env)
+    check("triage patrol: 11 s away it does not",
+          result.get("skip") is not None and result.get("patrol_vote") is None, result)
+    result = changed(155, [patch(1, ps1, base, approvals=[approval("+1", 18)])],
+                     comments=[dict(signed, timestamp=20)], test_env=patrol_env)
+    check("triage patrol: a signed message after the vote claims it too",
+          result.get("skip") is None and result.get("patrol_vote") == {"ps": 1, "value": "+1"}, result)
+    result = changed(156, [patch(1, ps1, base, approvals=[approval("0", 20)])], comments=[signed], test_env=patrol_env)
+    check("triage patrol: a withdrawn patrol vote is no patrol_vote",
+          result.get("patrol_vote") is None and result.get("skip") is None, result)
+    result = changed(157, [current_vote], comments=[signed], args=("--as-of-ps", "1"), test_env=patrol_env)
+    check("triage patrol: --as-of-ps replay still carries the patrol_vote key without counting it as mine",
+          result.get("my_last_vote") is None and "patrol_vote" in result, result)
+    late = patch(1, ps1, base, approvals=[approval("+1", 25)])
+    result = changed(158, [late, patch(2, ps2, ps1, created=20)], comments=[dict(signed, timestamp=25)],
+                     args=("--as-of-ps", "2"), test_env=patrol_env)
+    check("triage patrol: a patrol vote cast after the next upload stays the patrol's in a replay",
+          result.get("my_last_vote") is None, result)
+    expect_bad("patrol-signatures-null", lambda doc: doc.update({"patrol_signatures": None}), "patrol_signatures")
+    expect_bad("patrol-signatures-number", lambda doc: doc.update({"patrol_signatures": [1]}), "patrol_signatures")
+    _write_doc(tmp / "patrol-empty.json", dict(config, patrol_signatures=[]))
+    check("triage check: an empty patrol_signatures list is valid",
+          checked(tmp / "patrol-empty.json").returncode == 0)
     expect_bad("patrol-signatures-type", lambda doc: doc.update({"patrol_signatures": "Reviewed-by: x"}),
                "patrol_signatures")
     expect_bad("patrol-signatures-empty", lambda doc: doc.update({"patrol_signatures": [" "]}), "patrol_signatures")

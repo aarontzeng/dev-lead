@@ -1412,15 +1412,30 @@ def _approval_value(approval):
 PATROL_VOTE_WINDOW_SECS = 10
 
 
+def _signed_by(message, signatures):
+    """Whether a line of the message starts with one of the signatures.
+
+    A line, not a substring: a note that merely quotes the signature ("> ...")
+    or mentions it mid-sentence is not the unattended reviewer's footer.
+    """
+    return any(line.strip().startswith(signature) for line in str(message).splitlines() for signature in signatures)
+
+
 def _patrol_times(change, identifiers, signatures):
-    """Times of my own messages signed by an unattended reviewer that shares my account."""
+    """Times of my own messages signed by an unattended reviewer that shares my account.
+
+    Taken from the change as Gerrit gave it, BEFORE any --as-of replay trims its
+    comments: the replay drops my messages from the replayed upload onward, and a
+    vote kept without its signed message would turn into one of mine. A message
+    with no usable timestamp is not a time at all (never epoch 0).
+    """
     times = []
     if not signatures:
         return times
     for comment in change.get("comments") or []:
         if (isinstance(comment, dict) and _identity_matches(comment.get("reviewer"), identifiers)
-                and any(signature in str(comment.get("message", "")) for signature in signatures)):
-            when = _numeric_time(comment.get("timestamp", 0))
+                and _signed_by(comment.get("message", ""), signatures)):
+            when = _numeric_time(comment.get("timestamp"))
             if when is not None:
                 times.append(when)
     return times
@@ -1431,22 +1446,23 @@ def _is_patrol_vote(approval, patrol_times):
 
     The unattended reviewer posts under my Gerrit account, so a vote carries no
     author of its own; the signed message cast in the same review (within a few
-    seconds of grantedOn) is what tells it apart. A patrol vote that overwrote
-    my own on the same patch set cannot be told back from the data -- that
-    direction over-reviews, which is the safe one.
+    seconds of grantedOn) is what tells it apart. Known limits: a patrol vote
+    that overwrote my own on the same patch set cannot be told back from the
+    data -- that direction over-reviews, which is the safe one; and Gerrit's
+    messages name no patch set, so a real vote of mine on ANOTHER patch set
+    within the window of a signed message reads as the patrol's.
     """
-    granted = _numeric_time(approval.get("grantedOn", 0))
+    granted = _numeric_time(approval.get("grantedOn"))
     return granted is not None and any(abs(granted - when) <= PATROL_VOTE_WINDOW_SECS for when in patrol_times)
 
 
-def _last_vote(change, identifiers, signatures=()):
+def _last_vote(change, identifiers, patrol_times=()):
     """My last Code-Review vote: (patch set, approval, summary, patrol summary).
 
     Votes an unattended reviewer cast under my account (the rules file's
-    patrol_signatures) do not count as mine; the latest of them is returned
-    separately so the lead can still see it.
+    patrol_signatures, as `patrol_times`) do not count as mine; the latest
+    active one is returned separately so the lead can still see it.
     """
-    patrol_times = _patrol_times(change, identifiers, signatures)
     found, patrol = [], []
     for patch_set in change.get("patchSets") or []:
         for approval in patch_set.get("approvals") or []:
@@ -1457,8 +1473,9 @@ def _last_vote(change, identifiers, signatures=()):
     if patrol:
         _when, patch_set, approval = max(patrol, key=lambda item: _time(item[0]))
         voted_on = _number(patch_set)
-        patrol_summary = {"ps": int(voted_on) if voted_on.isdigit() else voted_on,
-                          "value": approval.get("value")}
+        if _approval_value(approval) not in (None, 0):      # a withdrawn vote is no vote, as for mine
+            patrol_summary = {"ps": int(voted_on) if voted_on.isdigit() else voted_on,
+                              "value": approval.get("value")}
     if not found:
         return None, None, None, patrol_summary
     # Equal times keep the EARLIEST patch set, on purpose: a vote Gerrit copies
@@ -1810,6 +1827,8 @@ def triage_change(config, raw, path, number, query_json, include_wip, as_of=None
                          % (path, ", ".join(missing)))
     change, all_changes = _query(config, number, query_json)
     identifiers = set(config["me"])
+    patrol_signatures = config.get("patrol_signatures") or ()
+    patrol_times = _patrol_times(change, identifiers, patrol_signatures)
     cutoffs = _as_of_cutoffs(change, as_of)
     patch_sets, current = _patch_sets(change, as_of)
     _limit_to_as_of(change, patch_sets, cutoffs, identifiers)
@@ -1818,7 +1837,7 @@ def triage_change(config, raw, path, number, query_json, include_wip, as_of=None
     project = change.get("project")
     gateway = config["gateways"].get(project)
     role = "owner" if _identity_matches(change.get("owner"), identifiers) else "reviewer"
-    voted_set, vote, vote_summary, patrol_vote = _last_vote(change, identifiers, config.get("patrol_signatures") or ())
+    voted_set, vote, vote_summary, patrol_vote = _last_vote(change, identifiers, patrol_times)
     fired = []
     if gateway is None:
         _fired(fired, "gateway", "unknown project %s" % project)
@@ -1875,10 +1894,12 @@ def triage_change(config, raw, path, number, query_json, include_wip, as_of=None
     identity = rules_identity(config, raw, path, current["number"] if as_of is not None else None)
     common = {
         "rules": identity, "change": change.get("number", number), "project": project, "gateway": gateway,
-        "role": role, "my_last_vote": vote_summary, "patrol_vote": patrol_vote, "wip": wip, "skip": skip,
+        "role": role, "my_last_vote": vote_summary, "wip": wip, "skip": skip,
         "unmerged_ancestors": ancestors, "unknown_ancestors": unknown_ancestors,
         "topic_members": {"topic": topic, "changes": members, "atomic": False}, "order": rank,
     }
+    if patrol_signatures:       # a new key only where the rules file asks for it
+        common["patrol_vote"] = patrol_vote
     if as_of is not None:
         common["as_of_patch_set"] = int(current["number"])
     if skip:
