@@ -246,6 +246,16 @@ const age = (secs: number): string =>
 const NAME_W = 18
 const clip = (s: string): string => (s.length > NAME_W ? s.slice(0, NAME_W - 1) + '…' : s.padEnd(NAME_W))
 
+// The status shares the name's row; a long one (requires_action) wrapped onto a
+// line of its own in a narrow pane. Known long words get a short label, any
+// other is cut to STATUS_W columns.
+const STATUS_W = 9
+const STATUS_LABEL: Record<string, string> = { requires_action: 'action', waiting_for_permission: 'waiting' }
+const shortStatus = (w: string): string => {
+  const s = STATUS_LABEL[w] ?? w
+  return s.length > STATUS_W ? s.slice(0, STATUS_W - 1) + '…' : s
+}
+
 // userConfig: quota_alert_pct (0 = no mark; a threshold is the user's own rule, never dev-lead's)
 // and show_agents (false skips the ListAgents poll and its section).
 type Options = { quota_alert_pct?: number; show_agents?: boolean }
@@ -350,7 +360,7 @@ export const register: Register = (on, options) => {
                 {clip(r.name)}
                 <Text dimColor>
                   {' '}
-                  {word}
+                  {shortStatus(word)}
                   {age !== '' ? ` ${age}` : ''}
                   {r.kind === 'cloud' ? ' ☁' : ''}
                 </Text>

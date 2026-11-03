@@ -34,7 +34,11 @@ const ok = (stdout: string) => ({ value: { exitCode: 0, stdout, stderr: '' } })
 
 // The engine beneath the plugin: session, pane, ListAgents, environment, and
 // process.run answered per script. `quota` decides each quota-snapshot call.
-const world = (on: any, quota: (n: number) => Promise<unknown> | unknown) => {
+const world = (
+  on: any,
+  quota: (n: number) => Promise<unknown> | unknown,
+  agentsText = 'This session is me [abc123] — x\n',
+) => {
   const clock = mock.clock(on)
   mock.env(on, { HOME: '/home/t', PATH: '/usr/bin' })
   let calls = 0
@@ -44,7 +48,7 @@ const world = (on: any, quota: (n: number) => Promise<unknown> | unknown) => {
   on('session.start', (_: unknown, e: any) => ({ cwd: e.cwd }))
   on('tool.call', (_: unknown, e: any) => {
     if (e.tool === 'ListAgents') listAgents++
-    return { result: { text: 'This session is me [abc123] — x\n' } }
+    return { result: {}, text: agentsText }
   })
   on('process.run', (_: unknown, e: any) => {
     const argv = e.argv.join(' ')
@@ -141,4 +145,24 @@ test('/quota during a running refresh starts no second run and says so', async (
   const res: any = await $.command.run({ command: 'quota', args: '' } as any)
   expect(w.quotaCalls()).toBe(1)
   expect(String(res?.text)).toMatch(/already running/)
+})
+
+test('a long session status stays on the name row', async ($, on) => {
+  const text =
+    'This session is me [abc123] — x\n' +
+    '  Tech-Chef [0a79fa]  ·  Remote Control  ·  requires_action\n' +
+    '  Some-Very-Long-Session-Name [0b79fa]  ·  Remote Control  ·  waiting_for_permission\n'
+  const w = world(on, () => ok(snapshot('2030-01-01T00:01:00Z', 5)), text)
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await w.clock.settle()
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  const all = await ui.findAll({ type: 'Text' })
+  const rows = all.filter(t => /Tech-Chef|Some-Very/.test(t.text))
+  expect(rows).toHaveLength(2)
+  for (const r of rows) {
+    // glyph + space + 18-column name + space + status: the status part is at most 9 columns.
+    expect(r.text.length).toBeLessThanOrEqual(2 + 18 + 1 + 9)
+  }
+  expect(rows[0]?.text).toMatch(/action/)
+  await ui.unmount()
 })
