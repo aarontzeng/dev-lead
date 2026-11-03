@@ -14,7 +14,7 @@ const PANE = {
   },
 } as const
 
-const snapshot = (at: string, used: number) =>
+const snapshot = (at: string, used: number, five?: number) =>
   JSON.stringify({
     generated_at: at,
     records: [
@@ -22,7 +22,10 @@ const snapshot = (at: string, used: number) =>
         source: 'codex',
         family: 'GPT',
         freshness: 'fresh',
-        windows: [{ kind: 'weekly', used_pct: used, resets_at: '2030-01-01T00:00:00Z' }],
+        windows: [
+          ...(five === undefined ? [] : [{ kind: 'five_hour', used_pct: five, resets_at: '2030-01-01T00:00:00Z' }]),
+          { kind: 'weekly', used_pct: used, resets_at: '2030-01-01T00:00:00Z' },
+        ],
       },
     ],
   })
@@ -85,11 +88,16 @@ test('quota refreshes do not pile up while one is still running', async ($, on) 
 })
 
 test('a fresh window at or above the alert is red, below it is not', { options: { quota_alert_pct: 90 } }, async ($, on) => {
-  const w = world(on, () => ok(snapshot('2030-01-01T00:01:00Z', 95)))
+  const w = world(on, () => ok(snapshot('2030-01-01T00:01:00Z', 95, 50)))
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
   await w.clock.settle()
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  expect((await ui.find({ type: 'Text', text: /95%/ }))?.props.color).toBe('red')
+  const high = await ui.find({ type: 'Text', text: /95%/ })
+  const low = await ui.find({ type: 'Text', text: /50%/ })
+  expect(high).toBeDefined()
+  expect(low).toBeDefined()
+  expect(high?.props.color).toBe('red')
+  expect(low?.props.color).toBeUndefined()
   await ui.unmount()
 })
 
@@ -98,7 +106,9 @@ test('no alert set: a 95% window is not red', async ($, on) => {
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
   await w.clock.settle()
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  expect((await ui.find({ type: 'Text', text: /95%/ }))?.props.color).toBeUndefined()
+  const row = await ui.find({ type: 'Text', text: /95%/ })
+  expect(row).toBeDefined()
+  expect(row?.props.color).toBeUndefined()
   await ui.unmount()
 })
 
@@ -113,6 +123,22 @@ test('show_agents false never calls ListAgents (start, clock, /quota)', { option
 test('show_agents default polls ListAgents', async ($, on) => {
   const w = world(on, () => ok(snapshot('2030-01-01T00:01:00Z', 5)))
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
-  await w.clock.advance(16_000)
-  expect(w.listAgents()).toBeGreaterThan(0)
+  await w.clock.settle()
+  const atStart = w.listAgents()
+  expect(atStart).toBeGreaterThan(0)
+  // The 15 s clock keeps polling after the first call.
+  await w.clock.advance(31_000)
+  expect(w.listAgents()).toBeGreaterThan(atStart)
+})
+
+test('/quota during a running refresh starts no second run and says so', async ($, on) => {
+  const w = world(on, async n => {
+    if (n === 1) await w.clock.sleep(100_000)
+    return ok(snapshot('2030-01-01T00:01:00Z', 5))
+  })
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await w.clock.settle()
+  const res: any = await $.command.run({ command: 'quota', args: '' } as any)
+  expect(w.quotaCalls()).toBe(1)
+  expect(String(res?.text)).toMatch(/already running/)
 })

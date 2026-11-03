@@ -121,8 +121,9 @@ const STALL_TICKS = 4
 let quotaBusy = false
 let quotaSkipped = 0
 let quotaSeq = 0
-const refresh = async ($: EngineInterface, tick = false) => {
-  if (quotaBusy && (!tick || ++quotaSkipped < STALL_TICKS)) return
+// Resolves false when a run was already going and this call started none.
+const refresh = async ($: EngineInterface, tick = false): Promise<boolean> => {
+  if (quotaBusy && (!tick || ++quotaSkipped < STALL_TICKS)) return false
   quotaSkipped = 0
   const seq = ++quotaSeq
   quotaBusy = true
@@ -149,15 +150,16 @@ const refresh = async ($: EngineInterface, tick = false) => {
         resetsAt: String(w.resets_at),
       })),
     }))
-    if (seq !== quotaSeq) return
+    if (seq !== quotaSeq) return true
     await update($, view, () => ({ rows, at: hhmm(data.generated_at), error: '' }))
   } catch (err) {
-    if (seq !== quotaSeq) return
+    if (seq !== quotaSeq) return true
     const msg = err instanceof Error ? err.message : String(err)
     await update($, view, old => ({ ...old, error: msg.slice(0, 120) }))
   } finally {
     if (seq === quotaSeq) quotaBusy = false
   }
+  return true
 }
 
 // ListAgents prints "This session is NAME [ref] — …" and one
@@ -260,7 +262,7 @@ export const register: Register = (on, options) => {
     })
     void $.ui.open({ id: PANE, title: 'Quota' })
     void refresh($)
-    $.clock.every(EVERY_MS, () => refresh($, true))
+    $.clock.every(EVERY_MS, () => { void refresh($, true) })
     if (showAgents) {
       void pollAgents($)
       $.clock.every(AGENTS_EVERY_MS, () => pollAgents($, true))
@@ -280,9 +282,13 @@ export const register: Register = (on, options) => {
 
   on('command.run', { command: 'quota' }, async $ => {
     await $.ui.open({ id: PANE, title: 'Quota' })
-    await Promise.all([refresh($), ...(showAgents ? [pollAgents($)] : []), pollLegs($)])
+    const [started] = await Promise.all([refresh($), ...(showAgents ? [pollAgents($)] : []), pollLegs($)])
 
-    return { text: 'Quota pane refreshed.' }
+    return {
+      text: started
+        ? 'Quota pane refreshed.'
+        : 'A quota refresh was already running; the pane updates when it finishes.',
+    }
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
