@@ -1,0 +1,25 @@
+{
+  "name": "dev-lead-panel",
+  "version": "0.1.0",
+  "description": "Claude Code side pane for dev-lead: each delegate CLI's quota windows, the peer Claude sessions, and the dev-lead legs running now.",
+  "author": { "name": "Aaron Tzeng", "url": "https://github.com/aarontzeng" },
+  "homepage": "https://github.com/aarontzeng/dev-lead",
+  "license": "MIT",
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "quota_alert_pct": {
+      "type": "number",
+      "title": "Quota alert (% used)",
+      "description": "Mark a fresh quota window red at or above this percentage used. 0 turns the mark off.",
+      "default": 0,
+      "min": 0,
+      "max": 100
+    },
+    "show_agents": {
+      "type": "boolean",
+      "title": "Show peer sessions",
+      "description": "List this session and the peer sessions ListAgents reports, polled every 15 seconds.",
+      "default": true
+    }
+  }
+}

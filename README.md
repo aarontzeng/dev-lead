@@ -487,6 +487,11 @@ ln -s ~/.claude/skills ~/.gemini/antigravity-cli/skills  # agy
 Or skip symlinks entirely: drop [templates/AGENTS.md](templates/AGENTS.md)
 into your project root (see Portability below).
 
+**Optional side pane (Claude Code only)**: `claude plugin install dev-lead-panel@dev-lead`
+adds a pane with each delegate CLI's quota windows, the peer Claude sessions and the
+dev-lead legs running now. It is a separate plugin so that installing it is the opt-in;
+options and details in [plugins/dev-lead-panel](plugins/dev-lead-panel/README.md).
+
 ### Your leg roster
 
 Which model each CLI runs, per role and round, lives in a machine-local

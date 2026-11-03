@@ -19,6 +19,17 @@
         "orchestration",
         "cross-model"
       ]
+    },
+    {
+      "name": "dev-lead-panel",
+      "source": "./plugins/dev-lead-panel",
+      "description": "Optional Claude Code side pane for dev-lead: delegate CLI quota windows, peer Claude sessions, and the dev-lead legs running now. Install it only where you want the pane.",
+      "category": "engineering",
+      "keywords": [
+        "quota",
+        "dashboard",
+        "multi-agent"
+      ]
     }
   ]
 }
