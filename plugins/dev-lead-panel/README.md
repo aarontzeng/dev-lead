@@ -45,6 +45,14 @@ directory).
   newest numeric version first. A symlinked or `--plugin-dir` dev-lead leaves no cache entry,
   and the pane then shows the lookup error in place of the quota rows; `DEV_LEAD_ROOT` is not read.
 - The agents section parses `ListAgents`' text; a format change there shows up as an empty list.
+- `/quota` says "refreshed" whenever it started a snapshot run, also when that run then
+  failed; the failure shows in the pane, not in the command's answer.
+- If writing the pane's error itself fails, the timer-driven refresh leaves an unhandled
+  rejection (the same holds for the agents and legs polls).
+- Not covered by tests: the seq checks that keep an older quota answer from landing
+  over a newer one (process.run's 150 s timeout ends a run before the four-tick takeover
+  can start a second one, so no test can reach two live runs), a window exactly at the
+  alert threshold, a stale window above it, and the exact 15 s agents interval.
 
 ## Tests
 
