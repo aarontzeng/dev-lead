@@ -7,7 +7,8 @@ An optional Claude Code side pane for dev-lead. It shows:
 - **Agents**: this session and every peer session `ListAgents` reports, every 15
   seconds (● running, ○ idle, ◆ a session on this machine, ☁ cloud).
 - **dev-lead legs**: the review and implement legs running as this user (adapter,
-  role, model, effort, age, working directory), from `scripts/legs.py`, which never
+  role, model, effort, age, and the working directory on Linux and macOS; Windows
+  shows no directory), from `scripts/legs.py`, which never
   prints a command line. Every 15 seconds; every 60 on Windows.
 
 Type `/quota` to open the pane and refresh it now.

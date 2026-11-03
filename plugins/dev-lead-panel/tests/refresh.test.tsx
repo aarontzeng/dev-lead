@@ -1,0 +1,118 @@
+import { expect, mock, test } from 'claude-code/testing'
+
+const PANE = {
+  plugin: 'dev-lead-panel',
+  component: 'Pane',
+  requestId: 'dev-lead-panel',
+  props: {
+    title: 'Quota',
+    isFocused: false,
+    bodyColumns: 40,
+    placement: 'dock',
+    scroll: { offset: 0, bodyRows: 60 },
+    view: {},
+  },
+} as const
+
+const snapshot = (at: string, used: number) =>
+  JSON.stringify({
+    generated_at: at,
+    records: [
+      {
+        source: 'codex',
+        family: 'GPT',
+        freshness: 'fresh',
+        windows: [{ kind: 'weekly', used_pct: used, resets_at: '2030-01-01T00:00:00Z' }],
+      },
+    ],
+  })
+
+const ok = (stdout: string) => ({ value: { exitCode: 0, stdout, stderr: '' } })
+
+// The engine beneath the plugin: session, pane, ListAgents, environment, and
+// process.run answered per script. `quota` decides each quota-snapshot call.
+const world = (on: any, quota: (n: number) => Promise<unknown> | unknown) => {
+  const clock = mock.clock(on)
+  mock.env(on, { HOME: '/home/t', PATH: '/usr/bin' })
+  let calls = 0
+  let listAgents = 0
+  on('command.register', () => ({ value: { command: 'quota' } }))
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('session.start', (_: unknown, e: any) => ({ cwd: e.cwd }))
+  on('tool.call', (_: unknown, e: any) => {
+    if (e.tool === 'ListAgents') listAgents++
+    return { result: { text: 'This session is me [abc123] — x\n' } }
+  })
+  on('process.run', (_: unknown, e: any) => {
+    const argv = e.argv.join(' ')
+    if (argv.includes('quota-snapshot.py')) return quota(++calls)
+    return ok(JSON.stringify({ legs: [] }))
+  })
+  return { clock, quotaCalls: () => calls, listAgents: () => listAgents }
+}
+
+test('a slow older quota refresh never overwrites a newer one', async ($, on) => {
+  // Run 1 answers 11% after 100 s (inside its 150 s timeout); any later run answers 77% at once.
+  const w = world(on, async n => {
+    if (n === 1) {
+      await w.clock.sleep(100_000)
+      return ok(snapshot('2030-01-01T00:01:00Z', 11))
+    }
+    return ok(snapshot('2030-01-01T00:02:00Z', 77))
+  })
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  // At 110 s run 1 has landed and no later tick has come since the 60 s one.
+  await w.clock.advance(110_000)
+
+  // Whatever is shown must come from the run that started last.
+  const want = w.quotaCalls() === 1 ? /11%/ : /77%/
+  const stale = w.quotaCalls() === 1 ? /77%/ : /11%/
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await ui.find({ type: 'Text', text: want })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: stale })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('quota refreshes do not pile up while one is still running', async ($, on) => {
+  const w = world(on, async n => {
+    if (n === 1) await w.clock.sleep(130_000)
+    return ok(snapshot('2030-01-01T00:01:00Z', 5))
+  })
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  // Ticks at 60 s and 120 s fall inside run 1 and are skipped.
+  await w.clock.advance(125_000)
+  expect(w.quotaCalls()).toBe(1)
+})
+
+test('a fresh window at or above the alert is red, below it is not', { options: { quota_alert_pct: 90 } }, async ($, on) => {
+  const w = world(on, () => ok(snapshot('2030-01-01T00:01:00Z', 95)))
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await w.clock.settle()
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect((await ui.find({ type: 'Text', text: /95%/ }))?.props.color).toBe('red')
+  await ui.unmount()
+})
+
+test('no alert set: a 95% window is not red', async ($, on) => {
+  const w = world(on, () => ok(snapshot('2030-01-01T00:01:00Z', 95)))
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await w.clock.settle()
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect((await ui.find({ type: 'Text', text: /95%/ }))?.props.color).toBeUndefined()
+  await ui.unmount()
+})
+
+test('show_agents false never calls ListAgents (start, clock, /quota)', { options: { show_agents: false } }, async ($, on) => {
+  const w = world(on, () => ok(snapshot('2030-01-01T00:01:00Z', 5)))
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await w.clock.advance(61_000)
+  await $.command.run({ command: 'quota', args: '' } as any)
+  expect(w.listAgents()).toBe(0)
+})
+
+test('show_agents default polls ListAgents', async ($, on) => {
+  const w = world(on, () => ok(snapshot('2030-01-01T00:01:00Z', 5)))
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await w.clock.advance(16_000)
+  expect(w.listAgents()).toBeGreaterThan(0)
+})

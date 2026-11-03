@@ -113,7 +113,19 @@ const resetLabel = (iso: string): string => {
 // 15. opencode-go needs opencode 2 with dev-lead's go-usage plugin and
 // "refresh": "tmux_spawn" in the host's quota-sources.json; the snapshot then
 // starts `opencode --standalone`, whose plugin rewrites usage.json in about 5 s.
-const refresh = async ($: EngineInterface) => {
+// A poll that never settles is replaced after this many skipped timer ticks.
+const STALL_TICKS = 4
+
+// One refresh at a time, like the agents and legs polls below: a run can take up
+// to 150 s against a 60 s clock, and an older answer must not land over a newer one.
+let quotaBusy = false
+let quotaSkipped = 0
+let quotaSeq = 0
+const refresh = async ($: EngineInterface, tick = false) => {
+  if (quotaBusy && (!tick || ++quotaSkipped < STALL_TICKS)) return
+  quotaSkipped = 0
+  const seq = ++quotaSeq
+  quotaBusy = true
   try {
     const win = await isWindows($)
     const env = await childEnv($, win)
@@ -137,10 +149,14 @@ const refresh = async ($: EngineInterface) => {
         resetsAt: String(w.resets_at),
       })),
     }))
+    if (seq !== quotaSeq) return
     await update($, view, () => ({ rows, at: hhmm(data.generated_at), error: '' }))
   } catch (err) {
+    if (seq !== quotaSeq) return
     const msg = err instanceof Error ? err.message : String(err)
     await update($, view, old => ({ ...old, error: msg.slice(0, 120) }))
+  } finally {
+    if (seq === quotaSeq) quotaBusy = false
   }
 }
 
@@ -149,7 +165,6 @@ const refresh = async ($: EngineInterface) => {
 // One poll of each kind at a time: a slow run must not overlap the next tick
 // or land its older answer after a newer one.
 // Takeover counts skipped ticks, not wall time, so a clock set back cannot stall it.
-const STALL_TICKS = 4
 let agentsBusy = false
 let agentsSkipped = 0
 let agentsSeq = 0
@@ -245,7 +260,7 @@ export const register: Register = (on, options) => {
     })
     void $.ui.open({ id: PANE, title: 'Quota' })
     void refresh($)
-    $.clock.every(EVERY_MS, () => refresh($))
+    $.clock.every(EVERY_MS, () => refresh($, true))
     if (showAgents) {
       void pollAgents($)
       $.clock.every(AGENTS_EVERY_MS, () => pollAgents($, true))
