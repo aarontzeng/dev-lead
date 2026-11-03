@@ -275,7 +275,8 @@ export const register: Register = (on, options) => {
       })
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
-      await update($, view, old => ({ ...old, error: `/quota not registered: ${msg}`.slice(0, 120) }))
+      // Not awaited: a failing write here must not skip the rest of the hook either.
+      void update($, view, old => ({ ...old, error: `/quota not registered: ${msg}`.slice(0, 120) })).catch(() => {})
     }
     void $.ui.open({ id: PANE, title: 'Quota' })
     void refresh($)
