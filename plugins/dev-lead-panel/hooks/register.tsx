@@ -266,10 +266,17 @@ export const register: Register = (on, options) => {
   const alertPct = Number.isFinite(raw) && raw > 0 && raw <= 100 ? raw : 0
   const showAgents = opts.show_agents !== false
   on('session.start', async ($, e, next) => {
-    await $.command.register({
-      name: 'quota',
-      description: 'Open the quota pane and refresh it now',
-    })
+    // Another plugin may own /quota already (seen: the old quota-panel mod still
+    // loaded beside this one). Losing the command must not lose the pane and its polls.
+    try {
+      await $.command.register({
+        name: 'quota',
+        description: 'Open the quota pane and refresh it now',
+      })
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      await update($, view, old => ({ ...old, error: `/quota not registered: ${msg}`.slice(0, 120) }))
+    }
     void $.ui.open({ id: PANE, title: 'Quota' })
     void refresh($)
     $.clock.every(EVERY_MS, () => { void refresh($, true) })

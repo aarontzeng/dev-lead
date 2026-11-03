@@ -38,13 +38,21 @@ const world = (
   on: any,
   quota: (n: number) => Promise<unknown> | unknown,
   agentsText = 'This session is me [abc123] — x\n',
+  quotaTaken = false,
 ) => {
   const clock = mock.clock(on)
   mock.env(on, { HOME: '/home/t', PATH: '/usr/bin' })
   let calls = 0
   let listAgents = 0
-  on('command.register', () => ({ value: { command: 'quota' } }))
-  on('ui.open', () => ({ value: { isPlaced: true } }))
+  let opened = 0
+  on('command.register', () => {
+    if (quotaTaken) throw new Error('"/quota" refused: the plugin quota-panel registered it already')
+    return { value: { command: 'quota' } }
+  })
+  on('ui.open', () => {
+    opened++
+    return { value: { isPlaced: true } }
+  })
   on('session.start', (_: unknown, e: any) => ({ cwd: e.cwd }))
   on('tool.call', (_: unknown, e: any) => {
     if (e.tool === 'ListAgents') listAgents++
@@ -55,7 +63,7 @@ const world = (
     if (argv.includes('quota-snapshot.py')) return quota(++calls)
     return ok(JSON.stringify({ legs: [] }))
   })
-  return { clock, quotaCalls: () => calls, listAgents: () => listAgents }
+  return { clock, quotaCalls: () => calls, listAgents: () => listAgents, opened: () => opened }
 }
 
 test('a slow older quota refresh never overwrites a newer one', async ($, on) => {
@@ -194,5 +202,18 @@ test('status words are coloured by what they ask of you', async ($, on) => {
   const odd = await word(/^ stopping$/)
   expect(odd.color).toBe('yellow')
   expect(odd.bold).toBeFalsy()
+  await ui.unmount()
+})
+
+test('the pane still opens and polls when /quota is already taken', async ($, on) => {
+  // Another plugin (the old quota-panel mod) owns /quota: registering it throws.
+  const w = world(on, () => ok(snapshot('2030-01-01T00:01:00Z', 42)), undefined, true)
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await w.clock.settle()
+  expect(w.opened()).toBeGreaterThan(0)
+  expect(w.quotaCalls()).toBe(1)
+  expect(w.listAgents()).toBeGreaterThan(0)
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await ui.find({ type: 'Text', text: /42%/ })).toBeDefined()
   await ui.unmount()
 })
