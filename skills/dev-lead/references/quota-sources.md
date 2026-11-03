@@ -17,7 +17,10 @@ that asks for it: it starts `agy`, `cursor-agent --trust` or `opencode --standal
 its own so that a cache that is missing, stale, or without a usable time is
 rewritten (*Refreshing a TUI cache* below), and it runs the person's own
 `~/.claude/statusline.sh` (`statusline.ps1` by pwsh on Windows) once so that the Claude usage cache is refetched (by
-that script, with its own token: *`claude_usage_cache`* below).
+that script, with its own token: *`claude_usage_cache`* below). A third opt-in,
+`"refresh": "fetch"` on a claude or cursor source, runs dev-lead's own
+`quota-fetch.py` instead, which DOES read that login (*Fetching a claude or
+cursor cache* below); the collector itself still reads no credential.
 
 ## The output
 
@@ -89,10 +92,12 @@ What each kind can produce, and when:
 
 ## What every source shares
 
-- **Read-only.** It never runs a model and never reads a credential. It
+- **Read-only.** It never runs a model and never reads a credential itself. It
   starts `codex app-server` and ends that one itself; with `--refresh` on a
   host that opts in it may also start `agy`, `cursor-agent --trust` or `opencode --standalone` in a
-  private tmux server (*Refreshing a TUI cache*).
+  private tmux server (*Refreshing a TUI cache*), or run `quota-fetch.py`,
+  which does read the Claude Code or Cursor login (*Fetching a claude or cursor
+  cache*).
 - **No invented values.** A value that is missing, a boolean, a string, not
   finite or out of range is reported as `null` with `limit_state` `unknown`
   and a line in `problems`. It is never clamped, zeroed or filled from another
@@ -274,6 +279,47 @@ What each kind can produce, and when:
   read from the other pool. The statusline renderer does fall back across
   pools, which would report one pool's headroom as the other's.
 - **Not verified:** which models the `3p` pool covers.
+
+## Fetching a claude or cursor cache
+
+`"refresh": "fetch"` (0.6.107; `quota-setup.py` writes it) lets a host with no
+statusline still have these two caches. On `--refresh`, a cache that is
+missing, older than its TTL or with no usable time makes the collector run
+`quota-fetch.py <claude|cursor> --out <cache path>` from its own directory with
+its own interpreter, then wait for the cache to change, as the statusline
+refresh does (its own lock and 10-minute back-off per source, under
+`~/.cache/dev-lead/quota-fetch-<name>.*`).
+
+- **claude:** the token is `CLAUDE_CODE_OAUTH_TOKEN`, the macOS Keychain item
+  `Claude Code-credentials`, or `~/.claude/.credentials.json`
+  (`claudeAiOauth.accessToken`); `GET https://api.anthropic.com/api/oauth/usage`,
+  stored as it came when it carries a `five_hour` or `seven_day` utilization.
+- **cursor:** the access token from cursor's `auth.json` or the Cursor IDE's
+  `state.vscdb`; the Connect RPCs `GetSandUsageStatus`, `GetPlanInfo`,
+  `GetCurrentPeriodUsage`, stored as schema 2 (`unified`, `plan`, `weekly_pct`,
+  `weekly_reset`). The prepaid balance and the legacy billing-cycle summary are
+  not fetched: the collector reads neither.
+- **The write:** a private temporary file renamed into place, 0600, both
+  through the directory's descriptor. The directory is created 0700; an
+  existing one must be the user's (not a link), and when the group or others
+  have any bit on it, it is made 0700 first (which also zeroes a POSIX ACL's
+  mask). Every directory above it must be root's or the user's and not
+  writable by group or others unless sticky (`/tmp` is shared). Only the
+  windows the collector reads are stored (`five_hour`, `seven_day`,
+  `seven_day_*`: utilization and resets_at). Not on Windows yet: the fetcher
+  refuses to write there.
+- **Never:** the token is not printed, logged or written; this script passes
+  it in no environment or argv (a `CLAUDE_CODE_OAUTH_TOKEN` the person exported
+  is read from there, and is kept out of the Keychain lookup's environment); a
+  redirect is never followed; no request starts and no body read continues
+  past about 20 s for the whole fetch (one read in flight can overrun by its
+  10 s socket timeout), and the collector ends the fetcher after 25 s; a
+  failure prints one line naming the step.
+- **Problems on the record:** `<name> refresh skipped: quota-fetch.py is not
+  beside quota-snapshot.py`, `... another refresh is running`, `<name> refresh
+  failed: quota-fetch.py did not rewrite the cache within N s` (no login, an
+  HTTP error, a refused directory: the fetcher's own line is not kept), and the
+  back-off line.
 
 ## Refreshing a TUI cache
 

@@ -35,11 +35,29 @@ Set under `/config` (or `pluginConfigs["dev-lead-panel"].options` in settings.js
 | `quota_alert_pct` | `0` | Mark a fresh window red at or above this % used. `0` = no mark: a threshold is your own rule, dev-lead sets none. |
 | `show_agents` | `true` | `false` skips the `ListAgents` poll and hides the section. |
 
-Each poll lets `quota-snapshot.py --refresh` wake agy, cursor and opencode-go when
-their cache is past its TTL (see `quota-sources.json` in dev-lead's plugin data
-directory).
+## Getting numbers on a new host
+
+Only codex is asked directly. claude, cursor, agy and opencode-go are read from
+caches that something else writes, so a fresh host shows them as **NO DATA**
+("no cache on this host"). Run **`/dev-lead:quota-setup`**: it shows a plan, and
+on your yes it
+
+- marks claude and cursor `refresh: fetch`, so dev-lead's `quota-fetch.py` reads
+  this host's own Claude Code / Cursor login and asks that vendor's usage endpoint
+  (the token goes only there and is never written anywhere);
+- gives agy a status line that keeps its cache, when agy has none of its own;
+- installs the opencode Go usage plugin when opencode is there;
+- marks agy and opencode-go `refresh: tmux_spawn` when tmux is installed.
+
+It never replaces a refresh mode or an agy status line you already have. Each poll
+then lets `quota-snapshot.py --refresh` refresh whatever is past its TTL (see
+`quota-sources.json` in dev-lead's plugin data directory). A row that is old shows
+**STALE** with the reason under it.
 
 ## Known limits
+
+- `/dev-lead:quota-setup` is not available on Windows yet (it says so and changes nothing);
+  a Windows host still needs aadev's statusline scripts or a hand-written `quota-sources.json`.
 
 - It finds dev-lead through the plugin cache (`~/.claude/plugins/cache/dev-lead/dev-lead/<version>`),
   newest numeric version first. A symlinked or `--plugin-dir` dev-lead leaves no cache entry,

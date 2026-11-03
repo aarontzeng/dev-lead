@@ -39,7 +39,10 @@ Contract:
   * Exit 0 whenever the object was printed, even if every source failed (the
     failures are inside the records). Exit 2 for a usage or config error, with
     one line on stderr and nothing on stdout.
-  * It never runs a model and never reads a credential. It starts `codex
+  * It never runs a model and never reads a credential itself. On a claude or cursor source a host
+    marked `"refresh": "fetch"` (quota-setup.py writes it), --refresh runs dev-lead's own
+    quota-fetch.py, which does read that login to ask its vendor's usage endpoint (see refresh_fetch
+    and quota-fetch.py's contract). It starts `codex
     app-server` and reaps it itself. Opt-in twice over -- with --refresh, AND
     on a host whose config marks the source `"refresh": "tmux_spawn"` -- it
     also (on a claude source marked `"refresh": "statusline"`) runs the person's own ~/.claude/statusline.sh
@@ -535,8 +538,13 @@ def collect_cursor(src, ctx):
 REFRESH_TMUX_SPAWN = "tmux_spawn"
 REFRESH_SPAWN_HIDDEN = "spawn_hidden"             # Windows: the same idea without tmux (see refresh_hidden)
 REFRESH_STATUSLINE = "statusline"                 # claude: run the person's own statusline script, which fetches (see refresh_statusline)
-REFRESH_MODES = (REFRESH_TMUX_SPAWN, REFRESH_SPAWN_HIDDEN, REFRESH_STATUSLINE)
+REFRESH_FETCH = "fetch"                           # claude/cursor: run dev-lead's own quota-fetch.py (see refresh_fetch)
+REFRESH_MODES = (REFRESH_TMUX_SPAWN, REFRESH_SPAWN_HIDDEN, REFRESH_STATUSLINE, REFRESH_FETCH)
 STATUSLINE_REFRESH_KINDS = ("claude_usage_cache",)
+# kind -> the quota-fetch.py source name; the fetcher is the one place that reads the login
+FETCH_REFRESH_KINDS = {"claude_usage_cache": "claude", "cursor_usage_cache": "cursor"}
+FETCH_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "quota-fetch.py")
+FETCH_TIMEOUT = 25          # quota-fetch.py ends its own requests within about 20 s (WHOLE_FETCH); start-up on top
 # cursor-agent wrote its cache 27 s after a hidden start on Windows (measured 2026-10-28 by a peer): the
 # caller's --refresh-wait is raised to this where it is shorter (the 60 s cap still applies to the option)
 WINDOWS_MIN_WAIT = {"cursor_usage_cache": 45.0}
@@ -1502,13 +1510,14 @@ def refresh_statusline(ctx, path):
         os.close(lock)
 
 
-def _statusline_locked(ctx, path, base, argv, env, flags):
-    """argv (the statusline script) with `{}` on stdin, once, with the refresh lock held; None, or why not.
+def _statusline_locked(ctx, path, base, argv, env, flags, label="claude", backoff_name="quota-statusline.backoff",
+                       name=None, timeout=None, wait=None):
+    """argv (the statusline script, or quota-fetch.py) with `{}` on stdin, once, with the refresh lock held;
+    None, or why not.
 
     A refresh that produced no cache, whatever the reason, backs off for BACKOFF_SECONDS."""
-    label = "claude"
-    name = os.path.basename(argv[-1])
-    backoff = os.path.join(base, "quota-statusline.backoff")
+    name = name or os.path.basename(argv[-1])
+    backoff = os.path.join(base, backoff_name)
     ago = _backoff_age(backoff, path)
     if ago is not None:
         return "%s refresh skipped: an earlier refresh wrote no cache %d s ago; the next try is in %d s" % (
@@ -1523,7 +1532,8 @@ def _statusline_locked(ctx, path, base, argv, env, flags):
         return message
 
     before = _mtime_or_none(path)
-    timeout = _statusline_timeout()
+    timeout = timeout or _statusline_timeout()
+    wait = ctx.refresh_wait if wait is None else wait
     try:
         subprocess.run(argv, input="{}", text=True, timeout=timeout, check=False, stdout=subprocess.DEVNULL,
                        stderr=subprocess.DEVNULL, env=env, creationflags=flags)
@@ -1531,7 +1541,7 @@ def _statusline_locked(ctx, path, base, argv, env, flags):
         return failure("%s refresh failed: %s did not return within %g s" % (label, name, timeout))
     except (OSError, subprocess.SubprocessError):
         return failure("%s refresh failed: %s could not be run" % (label, name))
-    deadline = time.monotonic() + ctx.refresh_wait
+    deadline = time.monotonic() + wait
     while time.monotonic() < deadline and not _rewritten(path, before):
         time.sleep(0.25)
     if _rewritten(path, before):
@@ -1540,7 +1550,7 @@ def _statusline_locked(ctx, path, base, argv, env, flags):
         except OSError:
             pass
         return None
-    return failure("%s refresh failed: %s did not rewrite the cache within %g s" % (label, name, ctx.refresh_wait))
+    return failure("%s refresh failed: %s did not rewrite the cache within %g s" % (label, name, wait))
 
 
 # CREATE_NO_WINDOW: the pwsh that runs the Windows statusline gets no window (0 where nothing is started)
@@ -1579,6 +1589,58 @@ def _statusline_windows(ctx, path):
         ctx, path, base, argv, None, NO_WINDOW_FLAG))
 
 
+def refresh_fetch(ctx, kind, path):
+    """Run dev-lead's own quota-fetch.py for this kind once, so that it writes the cache; None, or why not.
+
+    The opt-in that READS A CREDENTIAL (`"refresh": "fetch"`, written by quota-setup.py): quota-fetch.py
+    takes the Claude Code or Cursor login the person already has and asks that vendor's usage endpoint, so
+    that the pane needs no statusline. This collector still reads none: it starts the fetcher, a script of
+    its own tree (the same trust as this one), with this interpreter, and waits for the cache to change.
+    One at a time per source (a lock), and a fetch that wrote no cache backs off for BACKOFF_SECONDS, as
+    the statusline refresh does."""
+    label = FETCH_REFRESH_KINDS[kind]
+    lock_name, backoff_name = "quota-fetch-%s.lock" % label, "quota-fetch-%s.backoff" % label
+    if not os.path.isfile(FETCH_SCRIPT):
+        return "%s refresh skipped: quota-fetch.py is not beside quota-snapshot.py" % label
+    argv = [sys.executable, FETCH_SCRIPT, label, "--out", path]
+    env = {k: v for k, v in os.environ.items()
+           if k not in STATUSLINE_ENV_DROP and not k.startswith("BASH_FUNC_")}
+
+    def run(base):
+        return _statusline_locked(ctx, path, base, argv, env, NO_WINDOW_FLAG, label=label,
+                                  backoff_name=backoff_name, name="quota-fetch.py", timeout=FETCH_TIMEOUT,
+                                  wait=0.5)            # it writes before it exits: no long wait after it
+    if IS_WINDOWS:
+        if msvcrt is None:
+            return "%s refresh is not supported here (it needs msvcrt)" % label
+        return _windows_single_flight(label, lock_name, run)
+    if fcntl is None:
+        return "%s refresh is not supported here (it needs POSIX file locks)" % label
+    base = os.path.join(os.path.expanduser("~"), ".cache", "dev-lead")
+    lock_path = os.path.join(base, lock_name)
+    try:
+        os.makedirs(base, mode=0o700, exist_ok=True)
+        bst = os.lstat(base)
+        if not stat.S_ISDIR(bst.st_mode) or _not_ours(bst):
+            return "%s refresh skipped: ~/.cache/dev-lead is not a plain directory of the user's" % label
+        os.chmod(base, 0o700)
+        lock = os.open(lock_path, os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    except OSError as exc:
+        return "%s refresh failed: cannot create its lock (%s)" % (label, errno_name(exc))
+    try:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            on_disk = os.lstat(lock_path)
+            held = os.fstat(lock)
+        except OSError:
+            return "%s refresh skipped: another refresh is running" % label
+        if (on_disk.st_dev, on_disk.st_ino) != (held.st_dev, held.st_ino):
+            return "%s refresh skipped: its lock file was replaced" % label
+        return run(base)
+    finally:
+        os.close(lock)
+
+
 def refresh_sources(sources, ctx, when):
     """{source name: problem} after refreshing every opted-in, stale TUI cache.
 
@@ -1601,6 +1663,8 @@ def refresh_sources(sources, ctx, when):
                 continue                          # fresh already: nothing to start
         if mode == REFRESH_STATUSLINE:
             why = refresh_statusline(ctx, path)
+        elif mode == REFRESH_FETCH:
+            why = refresh_fetch(ctx, src["kind"], path)
         else:
             why = (refresh_hidden if mode == REFRESH_SPAWN_HIDDEN else refresh_tui)(ctx, src["kind"], path)
         if why:
@@ -2123,11 +2187,13 @@ def load_config(path):
             raise UsageError("%s: duplicate name %s" % (where, " ".join(src["name"].split())))
         if "refresh" in src:
             ok_kinds = (STATUSLINE_REFRESH_KINDS if src["refresh"] == REFRESH_STATUSLINE
+                        else FETCH_REFRESH_KINDS if src["refresh"] == REFRESH_FETCH
                         else REFRESH_COMMANDS)
             if not (src["refresh"] in REFRESH_MODES and src["kind"] in ok_kinds):
-                raise UsageError("%s: refresh is only %s, %s on %s, the others on %s" % (
+                raise UsageError("%s: refresh is only %s, %s on %s, %s on %s, the others on %s" % (
                     where, " or ".join(REFRESH_MODES), REFRESH_STATUSLINE,
-                    " or ".join(STATUSLINE_REFRESH_KINDS), " or ".join(sorted(REFRESH_COMMANDS))))
+                    " or ".join(STATUSLINE_REFRESH_KINDS), REFRESH_FETCH, " or ".join(sorted(FETCH_REFRESH_KINDS)),
+                    " or ".join(sorted(REFRESH_COMMANDS))))
         seen.add(src["name"])
     return sources
 
@@ -2140,7 +2206,9 @@ def local_config():
     opts in to `"refresh": "tmux_spawn"`; the shipped data/ file never does.
     """
     plugin = os.environ.get("CLAUDE_PLUGIN_DATA")
-    if plugin and Path(plugin).name.startswith(PLUGIN_NAME + "-"):
+    # dev-lead-panel's own directory also starts "dev-lead-": it is not dev-lead's (review 2026-11-03)
+    if plugin and Path(plugin).name.startswith(PLUGIN_NAME + "-") \
+            and Path(plugin).name != PLUGIN_NAME + "-panel" and not Path(plugin).name.startswith(PLUGIN_NAME + "-panel-"):
         base = Path(plugin)
     else:
         base = Path(os.path.expanduser("~")) / ".claude" / "plugins" / "data" / "dev-lead-dev-lead"

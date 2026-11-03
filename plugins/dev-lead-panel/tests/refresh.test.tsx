@@ -217,3 +217,42 @@ test('the pane still opens and polls when /quota is already taken', async ($, on
   expect(await ui.find({ type: 'Text', text: /42%/ })).toBeDefined()
   await ui.unmount()
 })
+
+test('a source with no cache says NO DATA and how to set it up; an old one says STALE and why', async ($, on) => {
+  const rec = (source: string, freshness: string, read_status: string, problems: string[]) =>
+    ({ source, family: 'X', freshness, read_status, problems, windows: [] })
+  const w = world(on, () => ok(JSON.stringify({
+    generated_at: '2030-01-01T00:01:00Z',
+    records: [
+      // a failed refresh is listed first, the missing cache after it: still NO DATA
+      rec('claude', 'unknown', 'missing', ['claude refresh failed: quota-fetch.py did not rewrite the cache within 0.5 s',
+                                           'cache file does not exist']),
+      rec('cursor', 'stale', 'ok', ['cursor refresh failed: quota-fetch.py did not rewrite the cache within 30 s']),
+    ],
+  })))
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await w.clock.settle()
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await ui.find({ type: 'Text', text: /NO DATA/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /run \/dev-lead:quota-setup/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /STALE/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /cursor refresh failed/ })).toBeDefined()
+  // a missing cache is not also called STALE
+  const claudeHead = await ui.find({ type: 'Text', text: /claude/ })
+  expect(JSON.stringify(claudeHead?.props ?? {})).not.toMatch(/STALE/)
+  await ui.unmount()
+})
+
+test('a missing codex binary shows its own problem, not the quota-setup hint', async ($, on) => {
+  const w = world(on, () => ok(JSON.stringify({
+    generated_at: '2030-01-01T00:01:00Z',
+    records: [{ source: 'codex', family: 'GPT', freshness: 'unknown', read_status: 'missing',
+                problems: ['codex binary not found'], windows: [] }],
+  })))
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await w.clock.settle()
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await ui.find({ type: 'Text', text: /codex binary not found/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /quota-setup/ })).toBeUndefined()
+  await ui.unmount()
+})

@@ -144,6 +144,11 @@ const refresh = async ($: EngineInterface, tick = false): Promise<boolean> => {
       source: String(r.source),
       family: r.family ? String(r.family) : (FAMILY_OVERRIDE[String(r.source)] ?? '?'),
       freshness: String(r.freshness),
+      status: String(r.read_status ?? ''),
+      problem: Array.isArray(r.problems) && r.problems.length ? String(r.problems[0]) : '',
+      // any of its problems, not the first: a failed refresh is listed before the missing cache
+      noCache: r.read_status === 'missing'
+        && Array.isArray(r.problems) && r.problems.some((p: unknown) => /cache file does not exist/.test(String(p))),
       windows: (r.windows ?? []).map((w: any) => ({
         kind: String(w.kind),
         usedPct: Number(w.used_pct),
@@ -324,11 +329,16 @@ export const register: Register = (on, options) => {
         {v.error !== '' && <Text color="red">{v.error}</Text>}
         {v.rows.map(r => {
           const stale = r.freshness !== 'fresh'
+          // "no cache at all" is a setup problem, not old data: say so, and how to fix it
+          // (a missing codex binary is also 'missing', and setup cannot fix that: it shows its own problem)
+          const missing = r.noCache
+          const hint = missing ? 'no cache on this host: run /dev-lead:quota-setup' : stale ? r.problem : ''
           return (
             <Box flexDirection="column" marginTop={1}>
               <Text bold dimColor={stale}>
-                {r.source} <Text dimColor>({r.family}){stale ? ' STALE' : ''}</Text>
+                {r.source} <Text dimColor>({r.family}){missing ? ' NO DATA' : stale ? ' STALE' : ''}</Text>
               </Text>
+              {hint !== '' && <Text dimColor>{hint.length > 60 ? hint.slice(0, 59) + '…' : hint}</Text>}
               {r.windows.map(w => (
                 <Text
                   dimColor={stale}

@@ -6,9 +6,12 @@ happy path: a helper that silently succeeds on a broken input is exactly the
 class of bug these scripts exist to remove (a bracket that checks the wrong
 directory still exits 0, and reads as a passing safety check).
 """
+import contextlib
+import io
 import json
 import os
 import shlex
+import stat
 import shutil
 import signal
 import subprocess
@@ -4522,6 +4525,417 @@ def test_quota_snapshot_statusline_refresh_windows(tmp):
                 os.environ.pop(k, None)
             else:
                 os.environ[k] = v
+
+
+
+# ------------------------------------------------- quota-fetch / quota-setup ----
+def _load_script(name, modname):
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(modname, SCRIPTS / name)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_quota_fetch(tmp):
+    """quota-fetch.py: the login is read and sent only as the Authorization header; the cache is written
+    atomically 0600 into a directory only the user can write; a failure says which step and never the token."""
+    qf = _load_script("quota-fetch.py", "quota_fetch_t")
+    home = tmp / "home"
+    (home / ".claude").mkdir(parents=True)
+    secret = "sk-ant-oat01-SECRET-TOKEN-VALUE"
+    (home / ".claude" / ".credentials.json").write_text(json.dumps({"claudeAiOauth": {"accessToken": secret}}))
+    sent = []
+
+    def answer(status, doc):
+        def fake(url, headers, data=None):
+            sent.append((url, dict(headers), data))
+            return status, doc
+        return fake
+
+    old_env = dict(os.environ)
+    os.environ["HOME"] = str(home)
+    os.environ.pop("CLAUDE_CODE_OAUTH_TOKEN", None)
+    old_platform = qf.sys.platform
+    qf.sys.platform = "linux"                    # no Keychain lookup in the test, on any runner
+    try:
+        good = {"five_hour": None, "seven_day": {"utilization": 24.0, "resets_at": "2030-01-01T00:00:00Z"}}
+        qf._request = answer(200, good)
+        out = tmp / "c" / "claude.json"
+        rc = qf.main(["claude", "--out", str(out)])
+        check("quota-fetch claude: writes the endpoint's answer as the cache, 0600, in a new 0700 directory",
+              rc == 0 and json.loads(out.read_text()) == good
+              and stat.S_IMODE(out.stat().st_mode) == 0o600 and stat.S_IMODE(out.parent.stat().st_mode) == 0o700,
+              (rc, out.exists()))
+        check("quota-fetch claude: the token goes only into the Authorization header of the usage endpoint",
+              len(sent) == 1 and sent[0][0] == qf.CLAUDE_USAGE_URL
+              and sent[0][1].get("Authorization") == "Bearer " + secret
+              and secret not in out.read_text(), sent and sent[0][0])
+        # leftovers: the private temporary file is gone
+        check("quota-fetch claude: no temporary file is left beside the cache",
+              sorted(p.name for p in out.parent.iterdir()) == ["claude.json"], list(out.parent.iterdir()))
+
+        for label, status, doc in (("HTTP 401", 401, None), ("no utilization", 200, {"five_hour": None})):
+            qf._request = answer(status, doc)
+            out2 = tmp / ("c-" + label.replace(" ", "-")) / "claude.json"
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                rc = qf.main(["claude", "--out", str(out2)])
+            check("quota-fetch claude: %s exits 1, writes nothing and does not print the token" % label,
+                  rc == 1 and not out2.exists() and secret not in err.getvalue() and err.getvalue().strip(),
+                  (rc, err.getvalue()))
+
+        shared = tmp / "shared"
+        shared.mkdir()
+        shared.chmod(0o777)
+        qf._request = answer(200, good)
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            rc = qf.main(["claude", "--out", str(shared / "claude.json")])
+        check("quota-fetch: a cache directory of the user's that others can write is made 0700 before the write",
+              rc == 0 and (shared / "claude.json").exists() and stat.S_IMODE(shared.stat().st_mode) == 0o700,
+              (rc, err.getvalue(), oct(shared.stat().st_mode)))
+
+        (home / ".claude" / ".credentials.json").unlink()
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            rc = qf.main(["claude", "--out", str(tmp / "c3" / "claude.json")])
+        check("quota-fetch claude: no login found exits 1 and says where it looked",
+              rc == 1 and "no Claude Code login" in err.getvalue(), err.getvalue())
+        os.environ["CLAUDE_CODE_OAUTH_TOKEN"] = "env-token"
+        sent.clear()
+        qf.main(["claude", "--out", str(tmp / "c4" / "claude.json")])
+        check("quota-fetch claude: CLAUDE_CODE_OAUTH_TOKEN is used first",
+              sent and sent[0][1]["Authorization"] == "Bearer env-token", sent)
+
+        # cursor
+        cfg = tmp / "xdg"
+        (cfg / "cursor").mkdir(parents=True)
+        (cfg / "cursor" / "auth.json").write_text(json.dumps({"accessToken": "cur-secret"}))
+        os.environ["XDG_CONFIG_HOME"] = str(cfg)
+        answers = {"GetSandUsageStatus": {"isUnified": True, "usagePercent": 0.3, "cursorPlanName": "X",
+                                          "nextResetTimestampUtc": "2030-01-08T00:00:00Z"},
+                   "GetPlanInfo": {"planInfo": {"planName": "X"}},
+                   "GetCurrentPeriodUsage": {"planUsage": {}}}
+
+        def cursor_fake(url, headers, data=None):
+            sent.append((url, dict(headers), data))
+            return 200, answers.get(url.rsplit("/", 1)[-1])
+        sent.clear()
+        qf._request = cursor_fake
+        out = tmp / "cu" / "cursor.json"
+        rc = qf.main(["cursor", "--out", str(out)])
+        doc = json.loads(out.read_text()) if out.exists() else None
+        check("quota-fetch cursor: a unified plan is stored as schema 2 with the fraction as a percentage",
+              rc == 0 and doc == {"schema": 2, "unified": True, "plan": "X", "weekly_pct": 30.0,
+                                  "weekly_reset": "2030-01-08T00:00:00Z"}, doc)
+        check("quota-fetch cursor: every RPC carries the token only as a Bearer header to api2.cursor.sh",
+              sent and all(u.startswith(qf.CURSOR_RPC) and h["Authorization"] == "Bearer cur-secret"
+                           for u, h, _ in sent), [u for u, _, _ in sent])
+        answers["GetSandUsageStatus"] = {"isUnified": False}
+        rc = qf.main(["cursor", "--out", str(out)])
+        check("quota-fetch cursor: a plan that is not unified is stored as unified false",
+              rc == 0 and json.loads(out.read_text()) == {"schema": 2, "unified": False}, out.read_text())
+        answers["GetSandUsageStatus"] = None
+        rc = qf.main(["cursor", "--out", str(tmp / "cu2" / "cursor.json")])
+        check("quota-fetch cursor: no answer exits 1", rc == 1, rc)
+
+        # only the windows reach the disk, never the rest of the answer
+        leaky = {"seven_day": {"utilization": 5, "resets_at": "2030-01-01T00:00:00Z", "token": "LEAK1"},
+                 "five_hour": None, "seven_day_opus": None, "account": {"email": "LEAK2"},
+                 "seven_day_breakdown": {"rows": ["LEAK3"]}}
+        qf._request = answer(200, leaky)
+        out = tmp / "f" / "claude.json"
+        qf.main(["claude", "--out", str(out)])
+        text = out.read_text() if out.exists() else ""
+        check("quota-fetch claude: only five_hour/seven_day/seven_day_* utilization and resets_at are stored",
+              json.loads(text or "{}") == {"seven_day": {"utilization": 5, "resets_at": "2030-01-01T00:00:00Z"},
+                                           "five_hour": None, "seven_day_opus": None}
+              and "LEAK" not in text, text)
+
+        # a directory above the cache that someone else could rename is refused
+        open_dir = tmp / "open"
+        open_dir.mkdir()
+        open_dir.chmod(0o777)                     # not sticky
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            rc = qf.main(["claude", "--out", str(open_dir / "sub" / "claude.json")])
+        check("quota-fetch: a non-sticky directory above the cache that others can write is refused",
+              rc == 1 and not (open_dir / "sub").exists() and "above the cache" in err.getvalue(), err.getvalue())
+        sticky = tmp / "sticky"
+        sticky.mkdir()
+        sticky.chmod(0o1777)
+        rc = qf.main(["claude", "--out", str(sticky / "sub" / "claude.json")])
+        check("quota-fetch: a sticky shared directory above it (like /tmp) is fine",
+              rc == 0 and (sticky / "sub" / "claude.json").exists(), rc)
+        own = tmp / "own"
+        own.mkdir()
+        own.chmod(0o775)                          # as umask 002 leaves /tmp/claude
+        rc = qf.main(["claude", "--out", str(own / "claude.json")])
+        check("quota-fetch: a cache directory of the user's that the group can write is made 0700, then used",
+              rc == 0 and stat.S_IMODE(own.stat().st_mode) == 0o700 and (own / "claude.json").exists(),
+              (rc, oct(own.stat().st_mode)))
+        grp_parent = tmp / "grp"
+        grp_parent.mkdir()
+        grp_parent.chmod(0o775)                   # a non-sticky ancestor the group can write: refused
+        rc = qf.main(["claude", "--out", str(grp_parent / "sub" / "claude.json")])
+        check("quota-fetch: a non-sticky ancestor the group can write is refused, whatever the group",
+              rc == 1 and not (grp_parent / "sub").exists(), rc)
+        qf.IS_WINDOWS = True
+        try:
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                rc = qf.main(["claude", "--out", str(tmp / "win" / "claude.json")])
+        finally:
+            qf.IS_WINDOWS = False
+        check("quota-fetch: on Windows it refuses to write (no directory checks there yet)",
+              rc == 1 and "not supported on Windows" in err.getvalue() and not (tmp / "win").exists(),
+              err.getvalue())
+
+        # transport: never a redirect, never plain HTTP, never past the deadline
+        fresh = _load_script("quota-fetch.py", "qf_fresh")
+        handlers = []
+
+        class _Stop:
+            def open(self, *a, **k):
+                raise fresh.urllib.error.URLError("stop here")
+
+        def spy(*hs):
+            handlers.extend(hs)
+            return _Stop()
+        real_build = fresh.urllib.request.build_opener
+        fresh.urllib.request.build_opener = spy
+        try:
+            try:
+                fresh._request("https://api.anthropic.com/x", {"Authorization": "Bearer t"})
+            except fresh.FetchError:
+                pass
+        finally:
+            fresh.urllib.request.build_opener = real_build
+        check("quota-fetch: every request goes through an opener that refuses redirects",
+              any(isinstance(h, fresh._NoRedirect) for h in handlers)
+              and fresh._NoRedirect().redirect_request(None, None, 302, "", {}, "https://evil/") is None, handlers)
+        try:
+            fresh._request("http://api.anthropic.com/x", {})
+            got = None
+        except fresh.FetchError as exc:
+            got = str(exc)
+        check("quota-fetch: a non-HTTPS URL is refused before anything is sent", got and "non-HTTPS" in got, got)
+        fresh._DEADLINE[0] = time.monotonic() - 1
+        try:
+            fresh._request("https://api.anthropic.com/x", {})
+            got = None
+        except fresh.FetchError as exc:
+            got = str(exc)
+        check("quota-fetch: a request past the whole-fetch deadline is not started", got == "ran out of time", got)
+
+        class _Trickle:
+            """a body that keeps coming, a little at a time, within every socket timeout"""
+            status = 200
+            reads = 0
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def read(self, n):                    # what a fill-the-buffer read does with a trickle: never returns
+                time.sleep(60)
+                return b" " * n
+
+            def read1(self, n):                   # what has arrived: one byte, a little later
+                _Trickle.reads += 1
+                time.sleep(0.2)
+                return b" "
+
+        class _Opener:
+            def open(self, *a, **k):
+                return _Trickle()
+        fresh.urllib.request.build_opener = lambda *hs: _Opener()
+        fresh._DEADLINE[0] = time.monotonic() + 1
+        started = time.monotonic()
+        try:
+            try:
+                fresh._request("https://api.anthropic.com/x", {})
+                got = None
+            except fresh.FetchError as exc:
+                got = str(exc)
+        finally:
+            fresh.urllib.request.build_opener = real_build
+        check("quota-fetch: a body that trickles in is cut at the whole-fetch deadline",
+              got == "ran out of time" and time.monotonic() - started < 3, (got, _Trickle.reads))
+    finally:
+        qf.sys.platform = old_platform
+        os.environ.clear()
+        os.environ.update(old_env)
+
+
+def test_quota_snapshot_fetch_refresh(tmp):
+    """--refresh on a source marked "fetch" runs the quota-fetch.py beside quota-snapshot.py, only when the
+    cache is stale; a fetch that writes nothing backs off; fetch on any other kind is a usage error."""
+    now_epoch = datetime_epoch(QS_NOW)
+    new = json.dumps({"five_hour": {"utilization": 20, "resets_at": QS_RESET},
+                      "seven_day": {"utilization": 33, "resets_at": QS_WEEK}})
+
+    def scenario(label, *, age=3600, writes=True, kind="claude_usage_cache", runs=1):
+        d = tmp / ("f-" + label.replace(" ", "-"))
+        (d / "bin").mkdir(parents=True)
+        shutil.copy2(QS_SCRIPT, d / "bin" / "quota-snapshot.py")
+        shutil.copy2(SCRIPTS / "_common.py", d / "bin" / "_common.py")
+        log = d / "calls.log"
+        cache = d / "cache.json"
+        if age is not None:
+            cache.write_text(json.dumps({"five_hour": {"utilization": 99, "resets_at": QS_RESET},
+                                         "seven_day": {"utilization": 88, "resets_at": QS_WEEK}}))
+            os.utime(cache, (now_epoch - age, now_epoch - age))
+        fake = ("import sys, os, json\nopen(%r, 'a').write(' '.join(sys.argv[1:]) + '\\n')\n" % str(log))
+        if writes:
+            fake += ("out = sys.argv[sys.argv.index('--out') + 1]\nopen(out + '.t', 'w').write(%r)\n"
+                     "os.utime(out + '.t', (%d, %d))\nos.replace(out + '.t', out)\n" % (new, now_epoch - 1, now_epoch - 1))
+        (d / "bin" / "quota-fetch.py").write_text(fake)
+        src = dict(_qs_source(kind, cache), refresh="fetch")
+        cfg = _qs_config(d, "cfg", [src])
+        home = d / "home"
+        home.mkdir()
+        env = dict(os.environ, HOME=str(home))
+        results = [_qs(["--config", cfg, "--refresh", "--refresh-wait", "2"], env=env,
+                       script=str(d / "bin" / "quota-snapshot.py")) for _ in range(runs)]
+        calls = log.read_text().splitlines() if log.exists() else []
+        return results, calls, cache
+
+    results, calls, cache = scenario("stale2")
+    r, doc = results[0]
+    rec = (doc or {"records": [{}]})["records"][0]
+    check("fetch refresh: a stale claude cache runs quota-fetch.py claude --out <cache> once and reads its write",
+          calls == ["claude --out %s" % cache] and rec.get("freshness") == "fresh"
+          and [(w["kind"], w["used_pct"]) for w in rec.get("windows", [])] == [("five_hour", 20), ("weekly", 33)],
+          (calls, rec))
+    results, calls, cache = scenario("missing cache", age=None)
+    check("fetch refresh: a missing cache is fetched too", len(calls) == 1, calls)
+    results, calls, cache = scenario("fresh", age=60)
+    check("fetch refresh: a fresh cache starts nothing", calls == [], calls)
+    results, calls, cache = scenario("cursor", kind="cursor_usage_cache", age=None)
+    check("fetch refresh: a cursor source runs quota-fetch.py cursor",
+          calls and calls[0].startswith("cursor --out "), calls)
+    results, calls, cache = scenario("no write", writes=False, runs=2)
+    recs = [(d or {"records": [{}]})["records"][0] for _, d in results]
+    check("fetch refresh: a fetch that wrote nothing is a problem on the record, and the next run backs off "
+          "instead of starting it again",
+          len(calls) == 1 and any("did not rewrite the cache" in p for p in recs[0].get("problems", []))
+          and any("next try is in" in p for p in recs[1].get("problems", [])), (calls, recs))
+    d = tmp / "f-bad-kind"
+    d.mkdir()
+    cfg = _qs_config(d, "cfg", [dict(_qs_source("agy_quota_cache", d / "c.json"), refresh="fetch")])
+    r, doc = _qs(["--config", cfg])
+    check("fetch refresh: fetch on an agy source is a usage error (exit 2)",
+          r.returncode == 2 and "fetch on" in r.stderr, (r.returncode, r.stderr))
+
+
+def test_quota_setup(tmp):
+    """quota-setup.py: plan only by default; --apply adds refresh modes without overriding any, sets agy's
+    status line only when agy has none, and backs up what it changes."""
+    def host(label, *, bins=("agy", "tmux", "cursor-agent"), agy_settings=None, local=None):
+        d = tmp / ("s-" + label.replace(" ", "-"))
+        home, binp = d / "home", d / "bin"
+        binp.mkdir(parents=True)
+        home.mkdir()
+        for b in bins:
+            (binp / b).write_text("#!/bin/sh\nexit 0\n")
+            (binp / b).chmod(0o755)
+        # only what the scripts need from the system: a runner's own tmux or agy must not leak in
+        for tool in ("python3", "bash", "sh", "cp", "mkdir", "mv", "rm", "chmod", "cat", "ls", "readlink", "dirname"):
+            found = shutil.which(tool)
+            if found and not (binp / tool).exists():
+                (binp / tool).symlink_to(found)
+        if agy_settings is not None:
+            p = home / ".gemini" / "antigravity-cli" / "settings.json"
+            p.parent.mkdir(parents=True)
+            p.write_text(json.dumps(agy_settings))
+        if local is not None:
+            p = home / ".claude" / "plugins" / "data" / "dev-lead-dev-lead" / "quota-sources.json"
+            p.parent.mkdir(parents=True)
+            p.write_text(json.dumps(local))
+        env = {k: v for k, v in os.environ.items() if k not in ("XDG_CONFIG_HOME", "CLAUDE_PLUGIN_DATA")}
+        env.update(HOME=str(home), PATH=str(binp))
+        return home, env
+
+    def setup(env, *args):
+        return run("python3", str(SCRIPTS / "quota-setup.py"), *args, env=env, timeout=60)
+
+    def sources(home):
+        p = home / ".claude" / "plugins" / "data" / "dev-lead-dev-lead" / "quota-sources.json"
+        return {s["name"]: s.get("refresh") for s in json.loads(p.read_text())["sources"]} if p.exists() else None
+
+    home, env = host("dry run")
+    r = setup(env)
+    check("quota-setup: without --apply nothing is written",
+          r.returncode == 0 and sources(home) is None and not (home / ".gemini").exists()
+          and "plan only" in r.stdout, (r.returncode, r.stdout))
+
+    home, env = host("fresh")
+    r = setup(env, "--apply")
+    st = home / ".gemini" / "antigravity-cli" / "settings.json"
+    agy = json.loads(st.read_text()) if st.exists() else {}
+    check("quota-setup --apply on a fresh host: claude and cursor fetch, agy tmux_spawn, codex untouched",
+          sources(home) == {"codex": None, "claude": "fetch", "agy": "tmux_spawn", "cursor": "fetch",
+                            "opencode-go": None}, (r.stdout, r.stderr, sources(home)))
+    script = home / ".config" / "dev-lead" / "agy-statusline.py"
+    check("quota-setup --apply: agy with no status line gets dev-lead's, from a stable copy",
+          script.is_file() and agy.get("statusLine", {}).get("command") == "python3 %s" % script, agy)
+
+    own = {"statusLine": {"type": "command", "command": "~/my-line.sh", "enabled": True}, "model": "m"}
+    home, env = host("own agy line", agy_settings=own)
+    r = setup(env, "--apply")
+    agy = json.loads((home / ".gemini" / "antigravity-cli" / "settings.json").read_text())
+    check("quota-setup --apply: a person's own agy status line is kept, and the plan says what it must write",
+          agy == own and "statusline-quota-cache.json" in r.stdout, (agy, r.stdout))
+
+    shipped = json.loads((SCRIPTS.parent / "data" / "quota-sources.json").read_text())
+    for s in shipped["sources"]:
+        if s["name"] == "claude":
+            s["refresh"] = "statusline"
+    home, env = host("existing refresh", local=shipped)
+    r = setup(env, "--apply")
+    check("quota-setup --apply: a refresh the host already chose is kept",
+          (sources(home) or {}).get("claude") == "statusline" and (sources(home) or {}).get("cursor") == "fetch",
+          sources(home))
+    baks = list((home / ".claude" / "plugins" / "data" / "dev-lead-dev-lead").glob("quota-sources.json.bak.*"))
+    check("quota-setup --apply: the host's sources file is backed up before it is rewritten", len(baks) == 1, baks)
+
+    home, env = host("malformed", local={"schema_version": 1})
+    r = setup(env, "--apply")
+    check("quota-setup: a sources file with no list of sources stops it before any write",
+          r.returncode == 1 and "no list of named sources" in r.stdout
+          and not (home / ".gemini").exists() and not (home / ".config").exists(), (r.returncode, r.stdout))
+
+    home, env = host("panel data dir")
+    env["CLAUDE_PLUGIN_DATA"] = str(home / ".claude" / "plugins" / "data" / "dev-lead-panel-dev-lead")
+    r = setup(env, "--apply")
+    check("quota-setup: CLAUDE_PLUGIN_DATA of dev-lead-panel is not dev-lead's: the default directory is written",
+          sources(home) is not None
+          and not (home / ".claude" / "plugins" / "data" / "dev-lead-panel-dev-lead").exists(), r.stdout)
+
+    home, env = host("old agy copy")
+    dest = home / ".config" / "dev-lead" / "agy-statusline.py"
+    dest.parent.mkdir(parents=True)
+    dest.write_text("# my edit\n")
+    r = setup(env, "--apply")
+    baks = list(dest.parent.glob("agy-statusline.py.bak.*"))
+    check("quota-setup --apply: a changed agy-statusline.py copy is backed up before it is replaced",
+          len(baks) == 1 and baks[0].read_text() == "# my edit\n"
+          and dest.read_bytes() == (SCRIPTS / "agy-statusline.py").read_bytes(), (baks, r.stdout))
+
+    r = subprocess.run(["python3", str(SCRIPTS / "agy-statusline.py")], input=b"\xff\xfe not json",
+                       capture_output=True, timeout=30)
+    check("agy-statusline: bad input still prints a line and exits 0",
+          r.returncode == 0 and r.stdout.strip() == b"agy", (r.returncode, r.stdout, r.stderr))
+
+    home, env = host("no tmux", bins=("agy",))
+    r = setup(env, "--apply")
+    check("quota-setup --apply: without tmux agy gets no tmux_spawn, and the plan says why",
+          (sources(home) or {}).get("agy") is None and "tmux is not installed" in r.stdout
+          and (sources(home) or {}).get("cursor") is None, (sources(home), r.stdout))
 
 
 def test_quota_snapshot_statusline_refresh(tmp):
@@ -13999,6 +14413,15 @@ def main():
     print("install-opencode-go-usage.sh")
     with tempfile.TemporaryDirectory() as td:
         test_install_opencode_go_usage(Path(td))
+    print("quota-fetch.py")
+    with tempfile.TemporaryDirectory() as td:
+        test_quota_fetch(Path(td))
+    print("quota-snapshot.py --refresh on a fetch source")
+    with tempfile.TemporaryDirectory() as td:
+        test_quota_snapshot_fetch_refresh(Path(td))
+    print("quota-setup.py")
+    with tempfile.TemporaryDirectory() as td:
+        test_quota_setup(Path(td))
     print("quota-snapshot.py --refresh on a claude source (statusline)")
     with tempfile.TemporaryDirectory() as td:
         test_quota_snapshot_statusline_refresh(Path(td))
