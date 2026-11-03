@@ -354,13 +354,19 @@ export const register: Register = (on, options) => {
             // Same-machine sessions are background work: a yellow diamond, never the remote green.
             const glyph = local ? '◆' : active ? '●' : idle ? '○' : '◌'
             const tint = local ? 'yellow' : active ? 'green' : idle ? undefined : 'yellow'
+            // The status word: a session waiting on you is bold yellow, running green,
+            // idle dim, anything else plain yellow.
+            const asks = word === 'requires_action' || word === 'waiting_for_permission'
+            const statusTint = asks ? 'yellow' : active ? 'green' : idle ? undefined : 'yellow'
             return (
               <Text dimColor={idle}>
                 <Text color={tint}>{glyph}</Text>{' '}
                 {clip(r.name)}
-                <Text dimColor>
+                <Text color={statusTint} bold={asks} dimColor={idle}>
                   {' '}
                   {shortStatus(word)}
+                </Text>
+                <Text dimColor>
                   {age !== '' ? ` ${age}` : ''}
                   {r.kind === 'cloud' ? ' ☁' : ''}
                 </Text>

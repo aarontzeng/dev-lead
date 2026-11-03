@@ -166,3 +166,33 @@ test('a long session status stays on the name row', async ($, on) => {
   expect(rows[0]?.text).toMatch(/action/)
   await ui.unmount()
 })
+
+test('status words are coloured by what they ask of you', async ($, on) => {
+  const text =
+    'This session is me [abc123] — x\n' +
+    '  Runner [0a0001]  ·  Remote Control  ·  running\n' +
+    '  Sleeper [0a0002]  ·  Remote Control  ·  idle\n' +
+    '  Asker [0a0003]  ·  Remote Control  ·  requires_action\n' +
+    '  Odd [0a0004]  ·  Remote Control  ·  stopping\n'
+  const w = world(on, () => ok(snapshot('2030-01-01T00:01:00Z', 5)), text)
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await w.clock.settle()
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  const word = async (re: RegExp) => {
+    const t = await ui.find({ type: 'Text', text: re })
+    expect(t).toBeDefined()
+    return t?.props ?? {}
+  }
+  const running = await word(/^ running$/)
+  expect(running.color).toBe('green')
+  const idle = await word(/^ idle$/)
+  expect(idle.color).toBeUndefined()
+  expect(idle.dimColor).toBe(true)
+  const action = await word(/^ action$/)
+  expect(action.color).toBe('yellow')
+  expect(action.bold).toBe(true)
+  const odd = await word(/^ stopping$/)
+  expect(odd.color).toBe('yellow')
+  expect(odd.bold).toBeFalsy()
+  await ui.unmount()
+})
