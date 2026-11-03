@@ -47,6 +47,9 @@ directory).
 - The agents section parses `ListAgents`' text; a format change there shows up as an empty list.
 - `/quota` says "refreshed" whenever it started a snapshot run, also when that run then
   failed; the failure shows in the pane, not in the command's answer.
+- When another plugin already owns `/quota`, the pane still opens and polls, but the
+  `/quota not registered` notice races the first quota refresh: it may never show, or
+  show again after the rows arrive.
 - If writing the pane's error itself fails, the timer-driven refresh leaves an unhandled
   rejection (the same holds for the agents and legs polls).
 - Not covered by tests: the seq checks that keep an older quota answer from landing
