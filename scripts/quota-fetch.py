@@ -48,14 +48,12 @@ Contract:
 from __future__ import annotations
 
 import argparse
-import base64
 import json
 import os
 import ssl
 import stat
 import subprocess
 import sys
-import tempfile
 import time
 import urllib.error
 import urllib.request

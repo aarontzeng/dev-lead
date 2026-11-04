@@ -1553,7 +1553,6 @@ def test_claim_audit_parsing(tmp):
     # the new file; not counting them shifted every later claim in the hunk.
     ihc = tmp / "interhunk"
     make_repo(ihc, commits=1)
-    ibase = git(ihc, "rev-parse", "HEAD").stdout.strip()
     (ihc / "doc.md").write_text("".join(f"l{i}\n" for i in range(1, 11)))
     git(ihc, "add", "-A")
     git(ihc, "commit", "-qm", "ten lines")
@@ -6203,7 +6202,7 @@ def test_quota_snapshot_tui_refresh(tmp):
     # two sources refresh in one process: a tree the first could not delete must not block the second
     two = tmp / "two-resets"
     two.mkdir()
-    for round_no in (1, 2):
+    for _round in (1, 2):
         wd = two / "quota-tui"
         wd.mkdir(mode=0o700, exist_ok=True)
         here_fd = os.open(".", os.O_RDONLY)
@@ -7914,7 +7913,7 @@ def test_leg_cmd():
                                   input="lens", capture_output=True, text=True)
         check("review-prompt: a failed materialization leaves no half-written evidence behind",
               bad_base.returncode != 0 and no_launch(bad_base.stdout) and not broken.exists(), bad_base.stderr)
-        for root, dirs, files in os.walk(ev):
+        for root, _dirs, _files in os.walk(ev):
             os.chmod(root, 0o755)
 
         # A name BASE is pinned to its commit once: prompt and evidence carry the hash.
@@ -7926,7 +7925,7 @@ def test_leg_cmd():
         check("review-prompt: a branch-name BASE is resolved to its commit in the prompt",
               byname.returncode == 0 and ("%s..%s" % (base, head)) in byname.stdout
               and "the-base" not in byname.stdout, byname.stderr)
-        for root, dirs, files in os.walk(named):
+        for root, _dirs, _files in os.walk(named):
             os.chmod(root, 0o755)
         # ...and in the evidence: the name reaches git exactly once, to be
         # resolved. A stable branch cannot tell the two apart, so log the calls.
@@ -7944,7 +7943,7 @@ def test_leg_cmd():
         named_calls = [l for l in callog.read_text().splitlines() if "the-base" in l]
         check("review-prompt: the BASE name is used once, to resolve it; the evidence uses the hash",
               len(named_calls) == 1 and "rev-parse" in named_calls[0], named_calls)
-        for root, dirs, files in os.walk(logged):
+        for root, _dirs, _files in os.walk(logged):
             os.chmod(root, 0o755)
         bad = subprocess.run([sys.executable, str(gen), "--adapter", "codex", "--base", "no-such-rev",
                               "--target", str(repo)], input="lens", capture_output=True, text=True)
@@ -12088,7 +12087,7 @@ def test_triage(tmp):
     chmod_amend_ps1 = commit("chmod amend one")
     (repo / "tools" / "amend.sh").chmod(0o755)
     git(repo, "add", "-A")
-    chmod_amend_ps2 = commit("chmod amend two")
+    commit("chmod amend two")
     git(repo, "checkout", "-q", "-B", "chmod-amend-2", base)
     write("tools/amend.sh", script_text)
     (repo / "tools" / "amend.sh").chmod(0o755)
@@ -13850,7 +13849,7 @@ def test_freeze_clone(tmp):
     directory inside the target."""
     freeze, verify = SCRIPTS / "freeze-target.sh", SCRIPTS / "verify-target.sh"
     repo = tmp / "clone-src"
-    shas = make_repo(repo, commits=2)
+    make_repo(repo, commits=2)
     sha = git(repo, "rev-parse", "HEAD").stdout.strip()
     dest = tmp / "clone-frozen"
     r = run(freeze, repo, "HEAD", dest, "--clone")
@@ -14436,7 +14435,7 @@ def select_sections(argv):
     """The (name, body) pairs argv asks for, None after --list, exit 2 on an unknown name."""
     all_sections = sections()
     names, skip_next = [], False
-    for i, a in enumerate(argv):
+    for a in argv:
         if skip_next:
             skip_next = False
             continue

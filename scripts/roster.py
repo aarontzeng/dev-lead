@@ -191,9 +191,6 @@ def effort_flag_refusal(adapter, role, effort):
     A flag adapter whose vocabulary is closed also refuses a word outside it
     (effort_word_refusal, 0.6.56).
     """
-    launch, _ = data()
-    spec = launch[adapter]
-    eff = spec["effort"]
     mech = role_mechanism(adapter, role)
     effort = effort or ""
     if mech == "model_suffix":
@@ -1066,7 +1063,6 @@ def _args_for(adapter, role, model, effort_value):
     config_only on its applies_to_role never contributes --effort: leg-cmd.sh
     refuses the flag, and the value is only what to expect in the config file.
     """
-    eff = _effort_spec(adapter)
     mech = role_mechanism(adapter, role)
     if mech == "config_only":
         return "--model %s" % model
