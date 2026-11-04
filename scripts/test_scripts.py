@@ -6217,10 +6217,16 @@ def test_quota_snapshot_tui_refresh(tmp):
         _lock_dir(wd / "locked")                  # undeletable on Python 3.13+ as well
         qs._reset_workdir(str(wd), (wd.stat().st_dev, wd.stat().st_ino))
     left = sorted(p.name for p in two.iterdir())
-    check("tui refresh: a second reset in the same process works even though the first left a tree it could "
-          "not delete (the working directory is fresh and empty, each leftover has its own name)",
-          (two / "quota-tui").is_dir() and list((two / "quota-tui").iterdir()) == []
-          and len([n for n in left if n.startswith("quota-tui.gone.")]) == 2, left)
+    fresh = (two / "quota-tui").is_dir() and list((two / "quota-tui").iterdir()) == []
+    if sys.version_info >= (3, 13) and skip_as_root(
+            "tui refresh: a second reset in the same process works even though the first left a tree it "
+            "could not delete", "on Python 3.13+ neither the deep chain nor the locked directory stops "
+            "root deleting the tree, so no leftover is made; the fresh working directory is still checked"):
+        check("tui refresh: ...as root, each reset still leaves a fresh, empty working directory", fresh, left)
+    else:
+        check("tui refresh: a second reset in the same process works even though the first left a tree it could "
+              "not delete (the working directory is fresh and empty, each leftover has its own name)",
+              fresh and len([n for n in left if n.startswith("quota-tui.gone.")]) == 2, left)
     _rm_locked(*[two / n for n in left if n != "quota-tui"])
 
     # the lock file replaced between open and lock: that lock is on a file nobody else sees
