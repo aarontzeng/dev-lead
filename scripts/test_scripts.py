@@ -82,6 +82,23 @@ def check(name, cond, detail=""):
         FAILURES.append(name)
 
 
+# Root reads, writes and searches whatever the permission bits say, so a check that builds an
+# unreadable, unwritable or unsearchable directory proves nothing as root -- and failed there
+# (a container, a devcontainer, a cloud session) although nothing was wrong. Such a check is
+# skipped as root and says so; as any other user it runs as before.
+AS_ROOT = hasattr(os, "geteuid") and os.geteuid() == 0
+SKIPS = []
+
+
+def skip_as_root(name, why):
+    """True, with the skip printed and counted, when running as root."""
+    if not AS_ROOT:
+        return False
+    print(f"  skip {name} (as root: {why})")
+    SKIPS.append(name)
+    return True
+
+
 def flag_value(command, flag):
     """The token after `flag` in one shell command line, or None -- and None
     when the flag appears more than once, so a dangling or contradictory second
@@ -1536,7 +1553,6 @@ def test_claim_audit_parsing(tmp):
     # the new file; not counting them shifted every later claim in the hunk.
     ihc = tmp / "interhunk"
     make_repo(ihc, commits=1)
-    ibase = git(ihc, "rev-parse", "HEAD").stdout.strip()
     (ihc / "doc.md").write_text("".join(f"l{i}\n" for i in range(1, 11)))
     git(ihc, "add", "-A")
     git(ihc, "commit", "-qm", "ten lines")
@@ -5348,11 +5364,13 @@ def test_quota_snapshot_tui_refresh(tmp):
             os.close(here)
         return depth
     leftovers = list((home / ".cache" / "dev-lead").glob("quota-tui.gone.*"))
-    check("tui refresh: ...the undeletable tree was really built (the leftover still holds the unwritable "
-          "directory, and before Python 3.13 the chain of 1200 directories too)",
-          len(leftovers) == 1 and (leftovers[0] / "locked" / "f").exists()
-          and (sys.version_info >= (3, 13) or chain_depth(leftovers[0] / "deep") == 1200),
-          [(p.name, chain_depth(p / "deep")) for p in leftovers])
+    if not skip_as_root("tui refresh: ...the undeletable tree was really built",
+                        "an unwritable directory is deleted anyway, so no leftover is kept"):
+        check("tui refresh: ...the undeletable tree was really built (the leftover still holds the unwritable "
+              "directory, and before Python 3.13 the chain of 1200 directories too)",
+              len(leftovers) == 1 and (leftovers[0] / "locked" / "f").exists()
+              and (sys.version_info >= (3, 13) or chain_depth(leftovers[0] / "deep") == 1200),
+              [(p.name, chain_depth(p / "deep")) for p in leftovers])
     gone = list((home / ".cache" / "dev-lead").glob("quota-tui.gone.*"))
     check("tui refresh: a residue tree deeper than the recursion limit does not crash the run (records "
           "printed, exit 0), the run really started and was stopped, and the working directory is a fresh "
@@ -6184,7 +6202,7 @@ def test_quota_snapshot_tui_refresh(tmp):
     # two sources refresh in one process: a tree the first could not delete must not block the second
     two = tmp / "two-resets"
     two.mkdir()
-    for round_no in (1, 2):
+    for _round in (1, 2):
         wd = two / "quota-tui"
         wd.mkdir(mode=0o700, exist_ok=True)
         here_fd = os.open(".", os.O_RDONLY)
@@ -6199,10 +6217,16 @@ def test_quota_snapshot_tui_refresh(tmp):
         _lock_dir(wd / "locked")                  # undeletable on Python 3.13+ as well
         qs._reset_workdir(str(wd), (wd.stat().st_dev, wd.stat().st_ino))
     left = sorted(p.name for p in two.iterdir())
-    check("tui refresh: a second reset in the same process works even though the first left a tree it could "
-          "not delete (the working directory is fresh and empty, each leftover has its own name)",
-          (two / "quota-tui").is_dir() and list((two / "quota-tui").iterdir()) == []
-          and len([n for n in left if n.startswith("quota-tui.gone.")]) == 2, left)
+    fresh = (two / "quota-tui").is_dir() and list((two / "quota-tui").iterdir()) == []
+    if sys.version_info >= (3, 13) and skip_as_root(
+            "tui refresh: a second reset in the same process works even though the first left a tree it "
+            "could not delete", "on Python 3.13+ neither the deep chain nor the locked directory stops "
+            "root deleting the tree, so no leftover is made; the fresh working directory is still checked"):
+        check("tui refresh: ...as root, each reset still leaves a fresh, empty working directory", fresh, left)
+    else:
+        check("tui refresh: a second reset in the same process works even though the first left a tree it could "
+              "not delete (the working directory is fresh and empty, each leftover has its own name)",
+              fresh and len([n for n in left if n.startswith("quota-tui.gone.")]) == 2, left)
     _rm_locked(*[two / n for n in left if n != "quota-tui"])
 
     # the lock file replaced between open and lock: that lock is on a file nobody else sees
@@ -7895,7 +7919,7 @@ def test_leg_cmd():
                                   input="lens", capture_output=True, text=True)
         check("review-prompt: a failed materialization leaves no half-written evidence behind",
               bad_base.returncode != 0 and no_launch(bad_base.stdout) and not broken.exists(), bad_base.stderr)
-        for root, dirs, files in os.walk(ev):
+        for root, _dirs, _files in os.walk(ev):
             os.chmod(root, 0o755)
 
         # A name BASE is pinned to its commit once: prompt and evidence carry the hash.
@@ -7907,7 +7931,7 @@ def test_leg_cmd():
         check("review-prompt: a branch-name BASE is resolved to its commit in the prompt",
               byname.returncode == 0 and ("%s..%s" % (base, head)) in byname.stdout
               and "the-base" not in byname.stdout, byname.stderr)
-        for root, dirs, files in os.walk(named):
+        for root, _dirs, _files in os.walk(named):
             os.chmod(root, 0o755)
         # ...and in the evidence: the name reaches git exactly once, to be
         # resolved. A stable branch cannot tell the two apart, so log the calls.
@@ -7925,7 +7949,7 @@ def test_leg_cmd():
         named_calls = [l for l in callog.read_text().splitlines() if "the-base" in l]
         check("review-prompt: the BASE name is used once, to resolve it; the evidence uses the hash",
               len(named_calls) == 1 and "rev-parse" in named_calls[0], named_calls)
-        for root, dirs, files in os.walk(logged):
+        for root, _dirs, _files in os.walk(logged):
             os.chmod(root, 0o755)
         bad = subprocess.run([sys.executable, str(gen), "--adapter", "codex", "--base", "no-such-rev",
                               "--target", str(repo)], input="lens", capture_output=True, text=True)
@@ -8999,14 +9023,16 @@ def test_config_effort_write(tmp):
     cfg.write_text(original)
     for b in cfgdir.glob("config.toml.bak.*"):
         b.unlink()
-    os.chmod(cfgdir, 0o500)
-    try:
-        out = ce("--yes")
-    finally:
-        os.chmod(cfgdir, 0o700)
-    check("config-effort: a failed backup refuses and writes nothing",
-          out.returncode != 0 and "backup failed" in out.stdout and cfg.read_text() == original,
-          out.stdout)
+    if not skip_as_root("config-effort: a failed backup refuses and writes nothing",
+                        "a 0500 directory does not stop the backup"):
+        os.chmod(cfgdir, 0o500)
+        try:
+            out = ce("--yes")
+        finally:
+            os.chmod(cfgdir, 0o700)
+        check("config-effort: a failed backup refuses and writes nothing",
+              out.returncode != 0 and "backup failed" in out.stdout and cfg.read_text() == original,
+              out.stdout)
 
     # an existing backup is never overwritten, even by a change in the same
     # second: occupy the next few seconds' names, then change again
@@ -12067,7 +12093,7 @@ def test_triage(tmp):
     chmod_amend_ps1 = commit("chmod amend one")
     (repo / "tools" / "amend.sh").chmod(0o755)
     git(repo, "add", "-A")
-    chmod_amend_ps2 = commit("chmod amend two")
+    commit("chmod amend two")
     git(repo, "checkout", "-q", "-B", "chmod-amend-2", base)
     write("tools/amend.sh", script_text)
     (repo / "tools" / "amend.sh").chmod(0o755)
@@ -13018,13 +13044,15 @@ def test_triage_fix_round(tmp):
     check("triage fix: ...while a record of another change is not this count's to read",
           got.returncode == 0, got.stdout + got.stderr)
     (records / (stranger + ".json")).unlink()
-    records.chmod(0o300)
-    try:
-        got, _ = scoped("--fix-of", pointed, "--blocker", "x")
-    finally:
-        records.chmod(0o755)
-    check("triage fix: a records directory that cannot be listed refuses the count",
-          got.returncode == 2 and "cannot list the triage records" in got.stderr, got.stdout + got.stderr)
+    if not skip_as_root("triage fix: a records directory that cannot be listed refuses the count",
+                        "a 0300 directory can still be listed"):
+        records.chmod(0o300)
+        try:
+            got, _ = scoped("--fix-of", pointed, "--blocker", "x")
+        finally:
+            records.chmod(0o755)
+        check("triage fix: a records directory that cannot be listed refuses the count",
+              got.returncode == 2 and "cannot list the triage records" in got.stderr, got.stdout + got.stderr)
     saved = (records / (gone + ".json")).read_text()
     (records / (gone + ".json")).write_text("{")
     got, _ = scoped()
@@ -13053,14 +13081,16 @@ def test_triage_fix_round(tmp):
     hidden = tmp / "hidden-records"
     hidden.mkdir()
     (records / (pointed + ".json")).symlink_to(hidden / "record.json")
-    hidden.chmod(0o000)
-    try:
-        got, _ = scoped("--fix-of", pointed, "--blocker", "x")
-    finally:
-        hidden.chmod(0o755)
-    check("triage fix: a record linked into a directory that cannot be searched is an error, not a traceback",
-          got.returncode == 2 and "cannot reach the record" in got.stderr and "do not remove it" in got.stderr
-          and "link to nothing" not in got.stderr and "Traceback" not in got.stderr, got.stdout + got.stderr)
+    if not skip_as_root("triage fix: a record linked into a directory that cannot be searched is an error, "
+                        "not a traceback", "a 0000 directory can still be searched"):
+        hidden.chmod(0o000)
+        try:
+            got, _ = scoped("--fix-of", pointed, "--blocker", "x")
+        finally:
+            hidden.chmod(0o755)
+        check("triage fix: a record linked into a directory that cannot be searched is an error, not a traceback",
+              got.returncode == 2 and "cannot reach the record" in got.stderr and "do not remove it" in got.stderr
+              and "link to nothing" not in got.stderr and "Traceback" not in got.stderr, got.stdout + got.stderr)
     (records / (pointed + ".json")).unlink()
     for broken_fix in ('"round 2"', '{"of": "%s", "round": 2}' % r1, '{"root": "%s", "round": 0}' % s1, "null",
                        '{"root": "bad-root", "round": 2}', '{"root": "%s", "round": 2}' % ("g" * 40),
@@ -13074,14 +13104,16 @@ def test_triage_fix_round(tmp):
     check("triage fix: a skipped record is not a reviewed head to size a fix from",
           got.returncode == 2 and "was a skip" in got.stderr, got.stdout + got.stderr)
     (records / (pointed + ".json")).write_text(kept)
-    records.chmod(0o600)
-    try:
-        got, _ = scoped("--fix-of", pointed, "--blocker", "x")
-    finally:
-        records.chmod(0o755)
-    check("triage fix: a records directory that cannot be searched is named, not taken for a missing record",
-          got.returncode == 2 and "cannot reach the record" in got.stderr and "no triage record" not in got.stderr,
-          got.stdout + got.stderr)
+    if not skip_as_root("triage fix: a records directory that cannot be searched is named, not taken for a "
+                        "missing record", "a 0600 directory can still be searched"):
+        records.chmod(0o600)
+        try:
+            got, _ = scoped("--fix-of", pointed, "--blocker", "x")
+        finally:
+            records.chmod(0o755)
+        check("triage fix: a records directory that cannot be searched is named, not taken for a missing record",
+              got.returncode == 2 and "cannot reach the record" in got.stderr and "no triage record" not in got.stderr,
+              got.stdout + got.stderr)
     write("src/added.py", "".join("added %d\n" % i for i in range(3)))
     added = commit("fix: a module the change adds")
     got, _ = scoped("--fix-of", gone, "--blocker", "x")
@@ -13823,7 +13855,7 @@ def test_freeze_clone(tmp):
     directory inside the target."""
     freeze, verify = SCRIPTS / "freeze-target.sh", SCRIPTS / "verify-target.sh"
     repo = tmp / "clone-src"
-    shas = make_repo(repo, commits=2)
+    make_repo(repo, commits=2)
     sha = git(repo, "rev-parse", "HEAD").stdout.strip()
     dest = tmp / "clone-frozen"
     r = run(freeze, repo, "HEAD", dest, "--clone")
@@ -14265,20 +14297,35 @@ def test_clear_host_residue(tmp):
     check("residue: a non-repo is refused", run(clear, tmp / "no-such-dir").returncode == 1)
 
 
-def main():
-    for script in ("freeze-target.sh", "verify-target.sh", "snapshot-refs.sh",
-                   "await-codex-job.sh", "renorm-only.sh", "leg-log-check.sh", "clear-host-residue.sh"):
-        p = SCRIPTS / script
-        if not p.is_file():
-            print(f"  FAIL missing script: {script}")
-            FAILURES.append(script)
-        elif not p.stat().st_mode & 0o111:
-            print(f"  FAIL not executable: {script}")
-            FAILURES.append(script)
-    if FAILURES:
-        print("\nFAIL — scripts missing or not executable")
-        sys.exit(1)
 
+def _in_tmp(fn, *, cleanup=None, env=None):
+    """A section body that gets its own temporary directory."""
+    def run():
+        with tempfile.TemporaryDirectory() as td:
+            try:
+                if env is not None:
+                    with env(Path(td)):
+                        fn(Path(td))
+                else:
+                    fn(Path(td))
+            finally:
+                if cleanup:
+                    cleanup(td)
+    return run
+
+
+def _titled(*parts):
+    """Run (title, body) pairs in order; a None title prints nothing (a body that continues the
+    previous heading, as in the hand-written sequence this replaces)."""
+    def run():
+        for title, body in parts:
+            if title:
+                print(title)
+            body()
+    return run
+
+
+def _shell_helpers():
     with tempfile.TemporaryDirectory() as td:
         tmp = Path(td)
         print("freeze-target.sh")
@@ -14300,145 +14347,186 @@ def main():
         print("leg-log-check.sh")
         test_leg_log_check(tmp)
 
-    print("lint.py check_paths")
-    test_lint_paths()
 
-    print("lint.py check_helper_args")
-    test_lint_helper_args()
+def _unlock(td):
+    # a locked residue a failed check left behind must not break the teardown
+    subprocess.run(["chmod", "-R", "u+w", td], check=False)
 
-    print("lint.py check_mermaid")
-    test_lint_mermaid()
 
-    print("lint.py check_frozen_target")
-    test_lint_frozen_target()
+def sections():
+    """(name, body) in the order the suite runs them. A name is what `test_scripts.py <name>`
+    selects; a prefix selects every section it starts (`quota` runs all the quota-* ones)."""
+    return [
+        ("shell", _shell_helpers),
+        ("lint", _titled(
+            ("lint.py check_paths", test_lint_paths),
+            ("lint.py check_helper_args", test_lint_helper_args),
+            ("lint.py check_mermaid", test_lint_mermaid),
+            ("lint.py check_frozen_target", test_lint_frozen_target),
+            ("lint.py check_pairing_rule", test_lint_pairing_rule),
+            ("lint.py check_leaf_rule", test_lint_leaf_rule),
+            ("lint.py check_launch", test_lint_launch),
+            ("lint.py plain checks (structure, frontmatter, manifest, links, fences, var_order, tracked, "
+             "sentinels, families)", test_lint_plain_checks),
+            ("lint.py check_delegate_guardrails", test_lint_delegate_guardrails),
+            ("lint.py check_delegate_audit_trails", test_lint_delegate_audit_trails))),
+        ("common", _titled(("scripts/_common.py and scripts/lib.sh", _in_tmp(test_common)))),
+        ("leg-cmd", _titled((None, test_leg_cmd), (None, test_leg_cmd_refusal_fails_when_run),
+                            (None, test_leg_cmd_windows_cmd_shim), (None, test_triage_bash_on_windows))),
+        ("lockdown", _titled(("check-opencode-lockdown.py and leg-cmd.sh --help", _in_tmp(test_opencode_lockdown)))),
+        ("triage-launch", _titled(("leg-cmd.sh triage gate and review-prompt input",
+                                   _in_tmp(lambda t: (test_triage_launch_gate(t), test_review_prompt_input(t)))))),
+        ("roster", _titled(("roster.py write lock", _in_tmp(test_roster_write_lock)),
+                           ("roster.py", _in_tmp(test_roster)),
+                           ("roster.py merge gate", _in_tmp(lambda t: test_merge_gate(t, SCRIPTS / "roster.py"))))),
+        ("config-effort", _titled(
+            ("config_only effort (leg-cmd + roster check)", _in_tmp(test_config_effort, env=_legacy_launch_env)),
+            ("roster.py config-effort (the consented config write)",
+             _in_tmp(test_config_effort_write, env=_legacy_launch_env)))),
+        ("triage", _titled(
+            ("triage.py", _in_tmp(test_triage)),
+            ("triage.py range records and round-check", _in_tmp(test_triage_gate)),
+            (None, _in_tmp(test_triage_fix_round)),
+            ("triage.py text lines (comment, docstring and blank lines are not counted toward small_delta_lines)",
+             _in_tmp(test_triage_text_lines)),
+            (None, _in_tmp(test_triage_small_first_round)))),
+        ("lint-version", _titled(
+            ("lint.py check_version", _in_tmp(test_lint_version)),
+            ("lint.py check_version_moves_with_content", _in_tmp(test_lint_version_moves_with_content)),
+            ("lint.py check_version_not_published", _in_tmp(test_lint_published_version)))),
+        ("release", _titled(("release.sh", _in_tmp(test_release)))),
+        ("claim-audit", _titled(("claim-audit.py", _in_tmp(test_claim_audit)),
+                                ("claim-audit.py parsing, range and exit codes", _in_tmp(test_claim_audit_parsing)))),
+        ("quota-snapshot", _titled(("quota-snapshot.py", _in_tmp(test_quota_snapshot)))),
+        ("quota-windows", _titled(
+            ("quota-snapshot.py on native Windows (simulated)", _in_tmp(test_quota_snapshot_windows)),
+            ("quota-snapshot.py spawn_hidden refresh on native Windows (simulated)",
+             _in_tmp(test_quota_snapshot_windows_refresh)))),
+        ("opencode-go-usage", _titled(("install-opencode-go-usage.sh", _in_tmp(test_install_opencode_go_usage)))),
+        ("quota-fetch", _titled(("quota-fetch.py", _in_tmp(test_quota_fetch)),
+                                ("quota-snapshot.py --refresh on a fetch source",
+                                 _in_tmp(test_quota_snapshot_fetch_refresh)))),
+        ("quota-setup", _titled(("quota-setup.py", _in_tmp(test_quota_setup)))),
+        ("quota-statusline", _titled(
+            ("quota-snapshot.py --refresh on a claude source (statusline)", _in_tmp(test_quota_snapshot_statusline_refresh)),
+            ("quota-snapshot.py --refresh on a claude source (statusline, Windows)",
+             _in_tmp(test_quota_snapshot_statusline_refresh_windows)))),
+        ("quota-tui", _titled(("quota-snapshot.py --refresh (private tmux server)",
+                               _in_tmp(test_quota_snapshot_tui_refresh, cleanup=_unlock)))),
+    ]
 
-    print("lint.py check_pairing_rule")
-    test_lint_pairing_rule()
 
-    print("lint.py check_leaf_rule")
-    test_lint_leaf_rule()
+USAGE = """usage: test_scripts.py [--list] [--jobs N] [SECTION...]
+  no SECTION    run every section, in order (what CI runs)
+  SECTION       run the section with that name; a name that is no section's is a prefix
+                (`quota` runs quota-snapshot, quota-windows, quota-fetch, ...; `triage` runs
+                only triage, `triage triage-launch` both)
+  --list        print the section names and stop
+  --jobs N      run the selected sections in N processes at once; each section's output
+                is printed whole, in the usual order, once it has finished"""
 
-    print("lint.py check_launch")
-    test_lint_launch()
 
-    print("lint.py plain checks (structure, frontmatter, manifest, links, fences, var_order, tracked, sentinels, families)")
-    test_lint_plain_checks()
-    print("lint.py check_delegate_guardrails")
-    test_lint_delegate_guardrails()
+def _jobs_arg(argv):
+    if "--jobs" not in argv:
+        return 1
+    i = argv.index("--jobs")
+    try:
+        return max(1, int(argv[i + 1]))
+    except (IndexError, ValueError):
+        print(USAGE)
+        sys.exit(2)
 
-    print("lint.py check_delegate_audit_trails")
-    test_lint_delegate_audit_trails()
-    print("scripts/_common.py and scripts/lib.sh")
-    with tempfile.TemporaryDirectory() as td:
-        test_common(Path(td))
-    test_leg_cmd()
-    test_leg_cmd_refusal_fails_when_run()
-    test_leg_cmd_windows_cmd_shim()
-    test_triage_bash_on_windows()
-    print("check-opencode-lockdown.py and leg-cmd.sh --help")
-    with tempfile.TemporaryDirectory() as td:
-        test_opencode_lockdown(Path(td))
-    print("leg-cmd.sh triage gate and review-prompt input")
-    with tempfile.TemporaryDirectory() as td:
-        test_triage_launch_gate(Path(td))
-        test_review_prompt_input(Path(td))
-    print("roster.py write lock")
-    with tempfile.TemporaryDirectory() as td:
-        test_roster_write_lock(Path(td))
 
-    print("roster.py")
-    with tempfile.TemporaryDirectory() as td:
-        test_roster(Path(td))
-    print("roster.py merge gate")
-    with tempfile.TemporaryDirectory() as td:
-        test_merge_gate(Path(td), SCRIPTS / "roster.py")
-    print("config_only effort (leg-cmd + roster check)")
-    with tempfile.TemporaryDirectory() as td:
-        with _legacy_launch_env(Path(td)):
-            test_config_effort(Path(td))
-    print("roster.py config-effort (the consented config write)")
-    with tempfile.TemporaryDirectory() as td:
-        with _legacy_launch_env(Path(td)):
-            test_config_effort_write(Path(td))
+def select_sections(argv):
+    """The (name, body) pairs argv asks for, None after --list, exit 2 on an unknown name."""
+    all_sections = sections()
+    names, skip_next = [], False
+    for a in argv:
+        if skip_next:
+            skip_next = False
+            continue
+        if a == "--jobs":
+            skip_next = True
+            continue
+        if a in ("-h", "--help"):
+            print(USAGE)
+            sys.exit(0)
+        if a == "--list":
+            for name, _ in all_sections:
+                print(name)
+            return None
+        if a.startswith("-"):
+            print(USAGE)
+            sys.exit(2)
+        names.append(a)
+    if not names:
+        return all_sections
+    known = {n for n, _ in all_sections}
 
-    print("triage.py")
-    with tempfile.TemporaryDirectory() as td:
-        test_triage(Path(td))
-    print("triage.py range records and round-check")
-    with tempfile.TemporaryDirectory() as td:
-        test_triage_gate(Path(td))
-    with tempfile.TemporaryDirectory() as td:
-        test_triage_fix_round(Path(td))
+    def matches(n, a):                   # an exact name selects only itself; otherwise a prefix selects a group
+        return n == a if a in known else n.startswith(a + "-")
+    picked = [(n, run) for n, run in all_sections if any(matches(n, a) for a in names)]
+    unknown = [a for a in names if not any(matches(n, a) for n, _ in all_sections)]
+    if unknown:
+        print("test_scripts: no section named %s (see --list)" % ", ".join(unknown))
+        sys.exit(2)
+    return picked
 
-    print("triage.py text lines (comment, docstring and blank lines are not counted toward small_delta_lines)")
-    with tempfile.TemporaryDirectory() as td:
-        test_triage_text_lines(Path(td))
 
-    with tempfile.TemporaryDirectory() as td:
-        test_triage_small_first_round(Path(td))
+def run_in_parallel(selected, jobs):
+    """Each section in its own `test_scripts.py <name>` process, at most `jobs` at a time. Its
+    output is printed whole once it ends, in the usual order; its failures and skips are read
+    back from the summary line it prints."""
+    import concurrent.futures
 
-    print("lint.py check_version")
-    with tempfile.TemporaryDirectory() as td:
-        test_lint_version(Path(td))
+    def one(name):
+        r = subprocess.run([sys.executable, str(Path(__file__).resolve()), name], capture_output=True, text=True)
+        return r
+    with concurrent.futures.ThreadPoolExecutor(max_workers=jobs) as pool:
+        futures = [(name, pool.submit(one, name)) for name, _ in selected]
+        for name, fut in futures:
+            r = fut.result()
+            body = r.stdout.rstrip("\n").split("\n")
+            summary = body[-1] if body else ""
+            while body and (not body[-1].strip() or body[-1] == summary):
+                body.pop()
+            print("\n".join(body))
+            if r.stderr.strip():
+                print(r.stderr.rstrip("\n"))
+            if r.returncode != 0:
+                failed = [l[len("  FAIL "):] for l in body if l.startswith("  FAIL ")]
+                FAILURES.extend(failed or ["section %s exited %d" % (name, r.returncode)])
+            SKIPS.extend(l[len("  skip "):].split(" (as root:")[0] for l in body
+                         if l.startswith("  skip ") and " (as root:" in l)
 
-    print("lint.py check_version_moves_with_content")
-    with tempfile.TemporaryDirectory() as td:
-        test_lint_version_moves_with_content(Path(td))
-
-    print("lint.py check_version_not_published")
-    with tempfile.TemporaryDirectory() as td:
-        test_lint_published_version(Path(td))
-
-    print("release.sh")
-    with tempfile.TemporaryDirectory() as td:
-        test_release(Path(td))
-
-    print("claim-audit.py")
-    with tempfile.TemporaryDirectory() as td:
-        test_claim_audit(Path(td))
-
-    print("claim-audit.py parsing, range and exit codes")
-    with tempfile.TemporaryDirectory() as td:
-        test_claim_audit_parsing(Path(td))
-
-    print("quota-snapshot.py")
-    with tempfile.TemporaryDirectory() as td:
-        test_quota_snapshot(Path(td))
-    print("quota-snapshot.py on native Windows (simulated)")
-    with tempfile.TemporaryDirectory() as td:
-        test_quota_snapshot_windows(Path(td))
-    print("quota-snapshot.py spawn_hidden refresh on native Windows (simulated)")
-    with tempfile.TemporaryDirectory() as td:
-        test_quota_snapshot_windows_refresh(Path(td))
-    print("install-opencode-go-usage.sh")
-    with tempfile.TemporaryDirectory() as td:
-        test_install_opencode_go_usage(Path(td))
-    print("quota-fetch.py")
-    with tempfile.TemporaryDirectory() as td:
-        test_quota_fetch(Path(td))
-    print("quota-snapshot.py --refresh on a fetch source")
-    with tempfile.TemporaryDirectory() as td:
-        test_quota_snapshot_fetch_refresh(Path(td))
-    print("quota-setup.py")
-    with tempfile.TemporaryDirectory() as td:
-        test_quota_setup(Path(td))
-    print("quota-snapshot.py --refresh on a claude source (statusline)")
-    with tempfile.TemporaryDirectory() as td:
-        test_quota_snapshot_statusline_refresh(Path(td))
-    print("quota-snapshot.py --refresh on a claude source (statusline, Windows)")
-    with tempfile.TemporaryDirectory() as td:
-        test_quota_snapshot_statusline_refresh_windows(Path(td))
-    print("quota-snapshot.py --refresh (private tmux server)")
-    with tempfile.TemporaryDirectory() as td:
-        try:
-            test_quota_snapshot_tui_refresh(Path(td))
-        finally:                                  # a locked residue a failed check left behind must not break the teardown
-            subprocess.run(["chmod", "-R", "u+w", td], check=False)
-
+def main():
+    for script in ("freeze-target.sh", "verify-target.sh", "snapshot-refs.sh",
+                   "await-codex-job.sh", "renorm-only.sh", "leg-log-check.sh", "clear-host-residue.sh"):
+        p = SCRIPTS / script
+        if not p.is_file():
+            print(f"  FAIL missing script: {script}")
+            FAILURES.append(script)
+        elif not p.stat().st_mode & 0o111:
+            print(f"  FAIL not executable: {script}")
+            FAILURES.append(script)
     if FAILURES:
-        print(f"\nFAIL — {len(FAILURES)} test(s) failed")
+        print("\nFAIL — scripts missing or not executable")
         sys.exit(1)
-    print("\ntest_scripts: all passed")
+
+    selected = select_sections(sys.argv[1:])
+    if selected is None:
+        return
+    jobs = _jobs_arg(sys.argv[1:])
+    if jobs > 1 and len(selected) > 1:
+        run_in_parallel(selected, jobs)
+    else:
+        for _, run in selected:
+            run()
+    skipped = f" ({len(SKIPS)} skipped as root: {'; '.join(SKIPS)})" if SKIPS else ""
+    if FAILURES:
+        print(f"\nFAIL — {len(FAILURES)} test(s) failed{skipped}")
+        sys.exit(1)
+    print(f"\ntest_scripts: all passed{skipped}")
 
 
 if __name__ == "__main__":

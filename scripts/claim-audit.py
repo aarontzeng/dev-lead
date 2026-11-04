@@ -454,8 +454,8 @@ def main() -> int:
     width = max(len(f"{p}:{n}") for p, n, _, _ in hits)
     for path, lineno, kind, text in hits:
         print(f"  {f'{path}:{lineno}':<{width}}  [{kind}]  {excerpt(text)}")
-    print(f"\nclaim-audit: an attention cue, not a control -- it verifies nothing "
-          f"and exits 0 either way.")
+    print("\nclaim-audit: an attention cue, not a control -- it verifies nothing "
+          "and exits 0 either way.")
     print(f"claim-audit: hits={len(hits)}")
     return 0
 

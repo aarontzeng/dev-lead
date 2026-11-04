@@ -168,7 +168,7 @@ def materialize(target, base, head, dest, made=None):
            "commit, not in base/; \\t \\n \\\\ escaped in paths)\n"
            + "".join(l + "\n" for l in lines)).encode("utf-8", "surrogateescape"))
     # Read-only for the leg's whole run, not just equal at the endpoints.
-    for root, dirs, files in os.walk(dest, topdown=False):
+    for root, _dirs, files in os.walk(dest, topdown=False):
         for f in files:
             os.chmod(os.path.join(root, f), stat.S_IRUSR | stat.S_IRGRP | stat.S_IROTH)
         os.chmod(root, stat.S_IRUSR | stat.S_IXUSR | stat.S_IRGRP | stat.S_IXGRP
