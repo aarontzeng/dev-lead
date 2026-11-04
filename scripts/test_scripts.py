@@ -82,6 +82,23 @@ def check(name, cond, detail=""):
         FAILURES.append(name)
 
 
+# Root reads, writes and searches whatever the permission bits say, so a check that builds an
+# unreadable, unwritable or unsearchable directory proves nothing as root -- and failed there
+# (a container, a devcontainer, a cloud session) although nothing was wrong. Such a check is
+# skipped as root and says so; as any other user it runs as before.
+AS_ROOT = hasattr(os, "geteuid") and os.geteuid() == 0
+SKIPS = []
+
+
+def skip_as_root(name, why):
+    """True, with the skip printed and counted, when running as root."""
+    if not AS_ROOT:
+        return False
+    print(f"  skip {name} (as root: {why})")
+    SKIPS.append(name)
+    return True
+
+
 def flag_value(command, flag):
     """The token after `flag` in one shell command line, or None -- and None
     when the flag appears more than once, so a dangling or contradictory second
@@ -5348,11 +5365,13 @@ def test_quota_snapshot_tui_refresh(tmp):
             os.close(here)
         return depth
     leftovers = list((home / ".cache" / "dev-lead").glob("quota-tui.gone.*"))
-    check("tui refresh: ...the undeletable tree was really built (the leftover still holds the unwritable "
-          "directory, and before Python 3.13 the chain of 1200 directories too)",
-          len(leftovers) == 1 and (leftovers[0] / "locked" / "f").exists()
-          and (sys.version_info >= (3, 13) or chain_depth(leftovers[0] / "deep") == 1200),
-          [(p.name, chain_depth(p / "deep")) for p in leftovers])
+    if not skip_as_root("tui refresh: ...the undeletable tree was really built",
+                        "an unwritable directory is deleted anyway, so no leftover is kept"):
+        check("tui refresh: ...the undeletable tree was really built (the leftover still holds the unwritable "
+              "directory, and before Python 3.13 the chain of 1200 directories too)",
+              len(leftovers) == 1 and (leftovers[0] / "locked" / "f").exists()
+              and (sys.version_info >= (3, 13) or chain_depth(leftovers[0] / "deep") == 1200),
+              [(p.name, chain_depth(p / "deep")) for p in leftovers])
     gone = list((home / ".cache" / "dev-lead").glob("quota-tui.gone.*"))
     check("tui refresh: a residue tree deeper than the recursion limit does not crash the run (records "
           "printed, exit 0), the run really started and was stopped, and the working directory is a fresh "
@@ -8999,14 +9018,16 @@ def test_config_effort_write(tmp):
     cfg.write_text(original)
     for b in cfgdir.glob("config.toml.bak.*"):
         b.unlink()
-    os.chmod(cfgdir, 0o500)
-    try:
-        out = ce("--yes")
-    finally:
-        os.chmod(cfgdir, 0o700)
-    check("config-effort: a failed backup refuses and writes nothing",
-          out.returncode != 0 and "backup failed" in out.stdout and cfg.read_text() == original,
-          out.stdout)
+    if not skip_as_root("config-effort: a failed backup refuses and writes nothing",
+                        "a 0500 directory does not stop the backup"):
+        os.chmod(cfgdir, 0o500)
+        try:
+            out = ce("--yes")
+        finally:
+            os.chmod(cfgdir, 0o700)
+        check("config-effort: a failed backup refuses and writes nothing",
+              out.returncode != 0 and "backup failed" in out.stdout and cfg.read_text() == original,
+              out.stdout)
 
     # an existing backup is never overwritten, even by a change in the same
     # second: occupy the next few seconds' names, then change again
@@ -13018,13 +13039,15 @@ def test_triage_fix_round(tmp):
     check("triage fix: ...while a record of another change is not this count's to read",
           got.returncode == 0, got.stdout + got.stderr)
     (records / (stranger + ".json")).unlink()
-    records.chmod(0o300)
-    try:
-        got, _ = scoped("--fix-of", pointed, "--blocker", "x")
-    finally:
-        records.chmod(0o755)
-    check("triage fix: a records directory that cannot be listed refuses the count",
-          got.returncode == 2 and "cannot list the triage records" in got.stderr, got.stdout + got.stderr)
+    if not skip_as_root("triage fix: a records directory that cannot be listed refuses the count",
+                        "a 0300 directory can still be listed"):
+        records.chmod(0o300)
+        try:
+            got, _ = scoped("--fix-of", pointed, "--blocker", "x")
+        finally:
+            records.chmod(0o755)
+        check("triage fix: a records directory that cannot be listed refuses the count",
+              got.returncode == 2 and "cannot list the triage records" in got.stderr, got.stdout + got.stderr)
     saved = (records / (gone + ".json")).read_text()
     (records / (gone + ".json")).write_text("{")
     got, _ = scoped()
@@ -13053,14 +13076,16 @@ def test_triage_fix_round(tmp):
     hidden = tmp / "hidden-records"
     hidden.mkdir()
     (records / (pointed + ".json")).symlink_to(hidden / "record.json")
-    hidden.chmod(0o000)
-    try:
-        got, _ = scoped("--fix-of", pointed, "--blocker", "x")
-    finally:
-        hidden.chmod(0o755)
-    check("triage fix: a record linked into a directory that cannot be searched is an error, not a traceback",
-          got.returncode == 2 and "cannot reach the record" in got.stderr and "do not remove it" in got.stderr
-          and "link to nothing" not in got.stderr and "Traceback" not in got.stderr, got.stdout + got.stderr)
+    if not skip_as_root("triage fix: a record linked into a directory that cannot be searched is an error, "
+                        "not a traceback", "a 0000 directory can still be searched"):
+        hidden.chmod(0o000)
+        try:
+            got, _ = scoped("--fix-of", pointed, "--blocker", "x")
+        finally:
+            hidden.chmod(0o755)
+        check("triage fix: a record linked into a directory that cannot be searched is an error, not a traceback",
+              got.returncode == 2 and "cannot reach the record" in got.stderr and "do not remove it" in got.stderr
+              and "link to nothing" not in got.stderr and "Traceback" not in got.stderr, got.stdout + got.stderr)
     (records / (pointed + ".json")).unlink()
     for broken_fix in ('"round 2"', '{"of": "%s", "round": 2}' % r1, '{"root": "%s", "round": 0}' % s1, "null",
                        '{"root": "bad-root", "round": 2}', '{"root": "%s", "round": 2}' % ("g" * 40),
@@ -13074,14 +13099,16 @@ def test_triage_fix_round(tmp):
     check("triage fix: a skipped record is not a reviewed head to size a fix from",
           got.returncode == 2 and "was a skip" in got.stderr, got.stdout + got.stderr)
     (records / (pointed + ".json")).write_text(kept)
-    records.chmod(0o600)
-    try:
-        got, _ = scoped("--fix-of", pointed, "--blocker", "x")
-    finally:
-        records.chmod(0o755)
-    check("triage fix: a records directory that cannot be searched is named, not taken for a missing record",
-          got.returncode == 2 and "cannot reach the record" in got.stderr and "no triage record" not in got.stderr,
-          got.stdout + got.stderr)
+    if not skip_as_root("triage fix: a records directory that cannot be searched is named, not taken for a "
+                        "missing record", "a 0600 directory can still be searched"):
+        records.chmod(0o600)
+        try:
+            got, _ = scoped("--fix-of", pointed, "--blocker", "x")
+        finally:
+            records.chmod(0o755)
+        check("triage fix: a records directory that cannot be searched is named, not taken for a missing record",
+              got.returncode == 2 and "cannot reach the record" in got.stderr and "no triage record" not in got.stderr,
+              got.stdout + got.stderr)
     write("src/added.py", "".join("added %d\n" % i for i in range(3)))
     added = commit("fix: a module the change adds")
     got, _ = scoped("--fix-of", gone, "--blocker", "x")
@@ -14435,10 +14462,11 @@ def main():
         finally:                                  # a locked residue a failed check left behind must not break the teardown
             subprocess.run(["chmod", "-R", "u+w", td], check=False)
 
+    skipped = f" ({len(SKIPS)} skipped as root: {'; '.join(SKIPS)})" if SKIPS else ""
     if FAILURES:
-        print(f"\nFAIL — {len(FAILURES)} test(s) failed")
+        print(f"\nFAIL — {len(FAILURES)} test(s) failed{skipped}")
         sys.exit(1)
-    print("\ntest_scripts: all passed")
+    print(f"\ntest_scripts: all passed{skipped}")
 
 
 if __name__ == "__main__":
