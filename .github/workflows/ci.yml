@@ -36,6 +36,11 @@ jobs:
         run: python3 scripts/test_scripts.py
       - name: Shell syntax
         run: for f in scripts/*.sh; do bash -n "$f"; done
+      # pyflakes-class errors only (unused or undefined names, syntax): a name used before it is
+      # assigned, or an import left behind, fails the push. Pinned so a ruff release cannot turn
+      # CI red on its own.
+      - name: Static check (ruff F, E9)
+        run: pipx run ruff==0.16.9 check --select F,E9 --output-format concise scripts plugins opencode-plugin
 
   # A pushed tag is not a Release. GitHub never promotes one, which is how
   # v0.2.0's tag landed on origin while the sidebar still read
