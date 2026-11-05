@@ -7,7 +7,9 @@ before any item.
 
 Status (0.6.114): items 1-3 are done (0.6.109-0.6.111; fixes from their review in 0.6.112-
 0.6.114, which also add a `runner` section of checks, so the count is no longer 2,394).
-Items 4-6 are open; item 7 waits for the next change to one of its scripts.
+Item 5 is done in 0.6.115 (tests and manifest; the type check cannot run on a runner, see
+the panel README). Items 4 and 6 are open; item 7 waits for the next change to one of its
+scripts.
 
 ## What was measured
 

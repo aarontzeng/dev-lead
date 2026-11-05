@@ -79,5 +79,10 @@ then lets `quota-snapshot.py --refresh` refresh whatever is past its TTL (see
 
 ```
 claude plugin test plugins/dev-lead-panel
-python3 -m pytest -q plugins/dev-lead-panel/scripts/test_legs.py
+python3 -m unittest discover -s plugins/dev-lead-panel/scripts -p 'test_*.py'
 ```
+
+CI runs both, and `claude plugin validate plugins/dev-lead-panel`, in the `panel` job
+(`.github/workflows/ci.yml`), with the Claude Code CLI pinned there. The TypeScript is
+type-checked only on a machine where a session has loaded the plugin from this folder, which
+is what writes the declarations `tsconfig.json` points at: `tsc -p plugins/dev-lead-panel`.

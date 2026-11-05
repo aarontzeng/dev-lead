@@ -42,6 +42,27 @@ jobs:
       - name: Static check (ruff F, E9)
         run: pipx run ruff==0.16.9 check --select F,E9 --output-format concise scripts plugins opencode-plugin
 
+  # The dev-lead-panel plugin: its manifest, its 18 UI tests (they need the Claude Code CLI, which
+  # runs them without a login) and legs.py's tests. Pinned so a CLI release cannot turn CI red
+  # on its own: move the pin when the panel is changed for a newer CLI. Its TypeScript is not
+  # type-checked here: the declarations it is checked against are written only by a session
+  # that loads the plugin from its folder, never on a runner.
+  panel:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Claude Code CLI
+        run: npm install -g @anthropic-ai/claude-code@2.1.318 && claude --version
+      - name: Panel manifest
+        run: claude plugin validate plugins/dev-lead-panel
+      - name: Panel UI tests
+        run: claude plugin test plugins/dev-lead-panel
+      - name: legs.py tests
+        run: python3 -m unittest discover -s plugins/dev-lead-panel/scripts -p 'test_*.py' -v
+
   # A pushed tag is not a Release. GitHub never promotes one, which is how
   # v0.2.0's tag landed on origin while the sidebar still read
   # "dev-lead v0.1.0 (Latest)" -- the tag was there, the Release object was not.
