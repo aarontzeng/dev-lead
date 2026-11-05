@@ -14525,11 +14525,21 @@ def test_native(tmp):
         r = run(*argv, env=wenv, cwd=str(repo))
         check("native: on Windows a cursor .cmd shim with no .ps1 is refused, naming the newline cut",
               r.returncode != 0 and "first newline" in r.stderr and no_launch(r.stdout), (r.stdout[-300:], r.stderr[-400:]))
-        (fake / "cursor-agent.ps1").write_text("# shim\n")
+        # a recorder in place of the real .ps1: it writes each argument it receives, joined by a marker
+        rec = tmp / "ps1-args.txt"
+        (fake / "cursor-agent.ps1").write_text(
+            "[IO.File]::WriteAllText($env:PS1_REC, ($args -join '<ARG>'), [Text.UTF8Encoding]::new($false))\n")
         r = run(*argv, env=wenv, cwd=str(repo))
         check("native: on Windows the .ps1 beside it is run by pwsh instead",
-              r.returncode == 0 and "pwsh -NoProfile -NonInteractive -File" in r.stdout and "cursor-agent.ps1" in r.stdout,
-              (r.stdout[-300:], r.stderr[-400:]))
+              r.returncode == 0 and "pwsh -NoProfile -NonInteractive -File" in r.stdout and "cursor-agent.ps1" in r.stdout
+              and "cursor-agent.cmd" not in r.stdout, (r.stdout[-300:], r.stderr[-400:]))
+        # ...and run as emitted, the multi-line brief reaches the .ps1 whole, as one argument
+        brief = "first line of the brief\nsecond line, after the newline cmd.exe would cut at"
+        (tmp / "run" / "prompt.md").write_text(brief + "\n")
+        ran = run(bash, "-c", r.stdout, env=dict(wenv, PS1_REC=str(rec)), cwd=str(repo))
+        got = rec.read_text(encoding="utf-8").split("<ARG>") if rec.is_file() else []
+        check("native: on Windows the emitted pwsh command hands the .ps1 the whole multi-line brief as one argument",
+              ran.returncode == 0 and got[-1:] == [brief], (ran.returncode, got[-2:], ran.stderr[-400:]))
 
 
 def _in_tmp(fn, *, cleanup=None, env=None):
