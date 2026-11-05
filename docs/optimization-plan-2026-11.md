@@ -8,8 +8,11 @@ before any item.
 Status (0.6.114): items 1-3 are done (0.6.109-0.6.111; fixes from their review in 0.6.112-
 0.6.114, which also add a `runner` section of checks, so the count is no longer 2,394).
 Item 5 is done in 0.6.115 (tests and manifest; the type check cannot run on a runner, see
-the panel README). Items 4 and 6 are open; item 7 waits for the next change to one of its
-scripts.
+the panel README). Item 4 is done in 0.6.116 in a narrower form than written below: measured
+on windows-latest, every section of the suite builds POSIX fixtures (it executes .sh files
+directly, its bare `bash` is the WSL launcher there, it uses fcntl and uids), so the Windows
+job runs a new `native` section that runs each script as a lead on Windows does, plus
+`runner`. Item 6 is open; item 7 waits for the next change to one of its scripts.
 
 ## What was measured
 

@@ -139,7 +139,9 @@ def materialize(target, base, head, dest, made=None):
         # Exclusive and no-follow: a name another process planted after the
         # directory check -- a symlink into the frozen tree, say -- is refused,
         # never written through, and never recorded as ours to clean up.
-        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
+        # Native Windows has no O_NOFOLLOW; O_EXCL alone refuses a name that exists there, a
+        # planted link included.
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o644)
         made.append(path)
         with os.fdopen(fd, "wb") as fh:
             fh.write(data if isinstance(data, bytes) else data.encode("utf-8", "surrogateescape"))

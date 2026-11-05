@@ -14360,8 +14360,14 @@ def test_runner(tmp):
           body[-1] == "FAIL \u2014 unexpected state" and failed == ["section s exited 1"], (body, failed))
 
     # run_in_parallel itself: a child's failure reaches this process's FAILURES and its output is printed
-    real_run, before = subprocess.run, len(FAILURES)
-    subprocess.run = lambda *a, **k: proc("s\n  FAIL child-check detail\n\nFAIL \u2014 1 test(s) failed\n", 1)
+    real_run, before, asked = subprocess.run, len(FAILURES), []
+
+    def child(argv, **kw):                    # each section answers for itself: "s" fails, "t" passes
+        asked.append(argv[-1])
+        if argv[-1] == "s":
+            return proc("s\n  FAIL s-check detail\n\nFAIL \u2014 1 test(s) failed\n", 1)
+        return proc("t\n  ok  t-check\n\ntest_scripts: all passed\n", 0)
+    subprocess.run = child
     out = io.StringIO()
     try:
         with contextlib.redirect_stdout(out):
@@ -14369,10 +14375,115 @@ def test_runner(tmp):
     finally:
         subprocess.run = real_run
         got = FAILURES[before:]
-        del FAILURES[before:]                 # the planted failures are not this run's
-    check("runner: run_in_parallel adds each child's failures to the parent's and prints its output",
-          got == ["child-check detail", "child-check detail"] and out.getvalue().count("  FAIL child-check") == 2,
-          (got, out.getvalue()[-300:]))
+        del FAILURES[before:]                 # the planted failure is not this run's
+    check("runner: run_in_parallel runs each selected section once, adds a child's failures to the "
+          "parent's and prints every child's output in order",
+          sorted(asked) == ["s", "t"] and got == ["s-check detail"]
+          and out.getvalue().index("  FAIL s-check") < out.getvalue().index("  ok  t-check"),
+          (asked, got, out.getvalue()[-300:]))
+
+
+def _git_bash():
+    """bash for this suite's .sh helpers: Git Bash on native Windows (the bare name there is the WSL
+    launcher), plain bash elsewhere -- the same resolution triage.py uses."""
+    if os.name != "nt":
+        return "bash"
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("triage_bash_native", SCRIPTS / "triage.py")
+    triage = importlib.util.module_from_spec(spec)
+    sys.path.insert(0, str(SCRIPTS))
+    try:
+        spec.loader.exec_module(triage)
+    finally:
+        sys.path.remove(str(SCRIPTS))
+    return triage._bash_argv("x.sh")[0]
+
+
+def test_native(tmp):
+    """Each script run the way a lead on this platform runs it: Python scripts through this
+    interpreter, .sh helpers through _git_bash(). On Linux and macOS this repeats what other sections
+    cover; on native Windows (the CI windows job) it is the only section that runs the real code
+    rather than a simulation of it."""
+    def py(script, *args, **kw):
+        return run(sys.executable, SCRIPTS / script, *args, **kw)
+    repo = tmp / "repo"
+    shas = make_repo(repo, commits=2)
+    home = tmp / "home"
+    home.mkdir()
+    roster = tmp / "roster.json"
+    roster.write_bytes((SCRIPTS.parent / "templates" / "roster.example.json").read_bytes())
+    rules = tmp / "triage.json"
+    rules.write_bytes((SCRIPTS.parent / "templates" / "triage.example.json").read_bytes())
+    env = _roster_env(home, DEV_LEAD_ROSTER=roster, DEV_LEAD_TRIAGE=rules,
+                      USERPROFILE=home, LOCALAPPDATA=home / "AppData" / "Local")
+
+    # review-prompt: a codex frame, and an agy frame whose evidence is written to a new directory
+    # (on Windows that write once died on os.O_NOFOLLOW, which Windows does not have)
+    r = py("review-prompt.py", "--adapter", "codex", "--base", shas[0], "--target", repo,
+           input="Review it.\n", env=env)
+    check("native: review-prompt builds a codex frame", r.returncode == 0 and "Review it." in r.stdout,
+          r.stderr[-400:])
+    ev = tmp / "evidence"
+    r = py("review-prompt.py", "--adapter", "agy", "--base", shas[0], "--target", repo, "--evidence", ev,
+           input="Review it.\n", env=env)
+    diff = ev / "DIFF.patch"
+    check("native: review-prompt writes an agy leg's evidence (DIFF.patch holds the range)",
+          r.returncode == 0 and diff.is_file() and b"f1.txt" in diff.read_bytes(), r.stderr[-400:])
+    # and with no os.O_NOFOLLOW, as on Windows, whatever platform this is
+    ev2 = tmp / "evidence-no-nofollow"
+    shim = ("import os, runpy, sys\n"
+            "if hasattr(os, 'O_NOFOLLOW'):\n    del os.O_NOFOLLOW\n"
+            "sys.argv = sys.argv[1:]\n"
+            "sys.path.insert(0, os.path.dirname(sys.argv[0]))\n"
+            "runpy.run_path(sys.argv[0], run_name='__main__')\n")
+    r = run(sys.executable, "-c", shim, SCRIPTS / "review-prompt.py", "--adapter", "agy", "--base", shas[0],
+            "--target", repo, "--evidence", ev2, input="Review it.\n", env=env)
+    check("native: review-prompt writes the evidence where os has no O_NOFOLLOW (native Windows)",
+          r.returncode == 0 and (ev2 / "DIFF.patch").is_file(), r.stderr[-400:])
+
+    # triage: a committed range, which runs renorm-only.sh through bash (Git Bash on Windows)
+    r = py("triage.py", "scope", "--base", shas[0], "--target", repo, env=env)
+    try:
+        scoped = json.loads(r.stdout)
+    except ValueError:
+        scoped = {}
+    check("native: triage scope sizes a committed range", r.returncode == 0 and scoped.get("files") == ["f1.txt"]
+          and isinstance(scoped.get("min_review_legs"), int), (r.stdout[-300:], r.stderr[-400:]))
+
+    # roster: the shipped example passes its own check
+    r = py("roster.py", "check", env=env)
+    check("native: roster.py check passes the example roster", r.returncode == 0, (r.stdout[-300:], r.stderr[-400:]))
+
+    # quota-snapshot: one JSON document; on Windows from the Windows sources file
+    r = py("quota-snapshot.py", "--timeout", "5", env=env)
+    try:
+        doc = json.loads(r.stdout)
+    except ValueError:
+        doc = None
+    check("native: quota-snapshot prints one JSON document", r.returncode == 0 and isinstance(doc, (dict, list)),
+          (r.stdout[-300:], r.stderr[-400:]))
+
+    # leg-cmd.sh through bash: a codex review command is emitted, nothing launched
+    bash = _git_bash()
+    (tmp / "run").mkdir()
+    r = run(bash, str(SCRIPTS / "leg-cmd.sh").replace("\\", "/"), "codex", "review", "--model", "gpt-test", "--effort", "medium",
+            "--target", str(repo).replace("\\", "/"), "--base", shas[0], "--run-dir",
+            str(tmp / "run").replace("\\", "/"), "--no-triage", "native test", env=env, cwd=str(repo))
+    check("native: leg-cmd.sh emits a codex review command through %s" % os.path.basename(bash),
+          r.returncode == 0 and "codex exec" in r.stdout, (r.stdout[-300:], r.stderr[-400:]))
+
+    # the panel's legs.py: a JSON list of the legs running now
+    r = run(sys.executable, SCRIPTS.parent / "plugins" / "dev-lead-panel" / "scripts" / "legs.py", env=env)
+    try:
+        legs = json.loads(r.stdout)
+    except ValueError:
+        legs = None
+    check("native: the panel's legs.py prints its legs document",
+          r.returncode == 0 and isinstance(legs, dict) and isinstance(legs.get("legs"), list),
+          (r.stdout[-300:], r.stderr[-400:]))
+    if os.name == "nt":
+        check("native: on Windows .sh helpers run through Git Bash, not System32's WSL launcher",
+              "system32" not in bash.lower() and os.path.isfile(os.path.join(os.path.dirname(bash), "git.exe")), bash)
 
 
 def _in_tmp(fn, *, cleanup=None, env=None):
@@ -14491,6 +14602,7 @@ def sections():
         ("quota-tui", _titled(("quota-snapshot.py --refresh (private tmux server)",
                                _in_tmp(test_quota_snapshot_tui_refresh, cleanup=_unlock)))),
         ("runner", _titled(("test_scripts.py command line and parallel results", _in_tmp(test_runner)))),
+        ("native", _titled(("each script run as a lead on this platform runs it", _in_tmp(test_native)))),
     ]
 
 
@@ -14598,6 +14710,15 @@ def run_in_parallel(selected, jobs):
             SKIPS.extend(skips)
 
 
+def _is_executable(p):
+    """The execute bit, or on native Windows (which has none) the mode git tracks for the file:
+    what a POSIX checkout of this commit gets."""
+    if os.name != "nt":
+        return bool(p.stat().st_mode & 0o111)
+    r = run("git", "-C", str(p.parent), "ls-files", "-s", "--", p.name)
+    return r.returncode == 0 and r.stdout.startswith("100755 ")
+
+
 def main():
     # the arguments first: --list, --help and a wrong name or --jobs answer without needing
     # the helpers the sections test
@@ -14611,7 +14732,7 @@ def main():
         if not p.is_file():
             print(f"  FAIL missing script: {script}")
             FAILURES.append(script)
-        elif not p.stat().st_mode & 0o111:
+        elif not _is_executable(p):
             print(f"  FAIL not executable: {script}")
             FAILURES.append(script)
     if FAILURES:

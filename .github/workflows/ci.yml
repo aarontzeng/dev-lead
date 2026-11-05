@@ -42,6 +42,22 @@ jobs:
       - name: Static check (ruff F, E9)
         run: pipx run ruff==0.16.9 check --select F,E9 --output-format concise scripts plugins opencode-plugin
 
+  # Native Windows: the scripts a lead there runs, run for real (test_scripts.py's `native`
+  # section), and the suite's own command line (`runner`). The other sections build POSIX
+  # fixtures (executable .sh files, fcntl, uids) and simulate Windows on Linux instead.
+  windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash                              # Git Bash, which is what triage.py uses there
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Native sections
+        run: python scripts/test_scripts.py native runner
+
   # The dev-lead-panel plugin: its manifest, its 18 UI tests (they need the Claude Code CLI, which
   # runs them without a login) and legs.py's tests. Pinned so a CLI release cannot turn CI red
   # on its own: move the pin when the panel is changed for a newer CLI. Its TypeScript is not
