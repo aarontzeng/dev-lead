@@ -38,6 +38,14 @@ def _rm_locked(*paths):
 SCRIPTS = Path(__file__).resolve().parent
 FAILURES = []
 
+# Every fixture repository here is made with plain `git`; a caller's repository variables (a hook
+# running this suite sets GIT_DIR and GIT_INDEX_FILE) would point those commands at the caller's
+# own repository and index. They are dropped for the whole run, before any fixture is made.
+GIT_REPO_ENV = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY",
+                "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_COMMON_DIR", "GIT_NAMESPACE", "GIT_PREFIX")
+for _k in GIT_REPO_ENV:
+    os.environ.pop(_k, None)
+
 
 def run(*args, **kw):
     return subprocess.run([str(a) for a in args], capture_output=True, text=True, **kw)
@@ -14333,6 +14341,17 @@ def test_runner(tmp):
     check("runner: --jobs given twice exits 2 (the second value is not taken as a section or ignored)",
           r.returncode == 2 and "usage:" in r.stdout and "missing script" not in r.stdout,
           (r.returncode, r.stdout[-300:]))
+    # a caller's repository variables are gone before any fixture is made
+    probe = ("import importlib.util, os, sys\n"
+             "spec = importlib.util.spec_from_file_location('ts_env_probe', sys.argv[1])\n"
+             "spec.loader.exec_module(importlib.util.module_from_spec(spec))\n"
+             "print(sorted(k for k in ('GIT_DIR', 'GIT_INDEX_FILE', 'GIT_WORK_TREE') if k in os.environ))\n")
+    r = run(sys.executable, "-c", probe, SCRIPTS / "test_scripts.py",
+            env=dict(os.environ, GIT_DIR=str(tmp / "decoy.git"), GIT_INDEX_FILE=str(tmp / "decoy-index"),
+                     GIT_WORK_TREE=str(tmp)))
+    check("runner: GIT_DIR, GIT_INDEX_FILE and GIT_WORK_TREE from the caller are dropped when the suite loads",
+          r.returncode == 0 and r.stdout.strip() == "[]", (r.stdout[-200:], r.stderr[-300:]))
+
     # a copy outside any git checkout, as the plugin cache is: the helpers beside it pass the check
     # (on Windows there is no execute bit and no tracked mode to read there)
     helpers = ("freeze-target.sh", "verify-target.sh", "snapshot-refs.sh", "await-codex-job.sh",
@@ -14361,6 +14380,10 @@ def test_runner(tmp):
         check("runner: on Windows a helper tracked 100644 in a checkout is refused as not executable",
               "not executable: freeze-target.sh" in r.stdout and "not executable: verify-target.sh" not in r.stdout,
               r.stdout[-300:])
+        git(top, "update-index", "--chmod=+x", "scripts/freeze-target.sh")
+        r = run(*tracked, "lint", env=no_repo)
+        check("runner: on Windows ...still refused while only the index says 100755 (the commit says 100644)",
+              "not executable: freeze-target.sh" in r.stdout, r.stdout[-300:])
         (top / ".git" / "index").unlink()
         r = run(*tracked, "lint", env=no_repo)
         check("runner: on Windows ...still refused with the index gone (the committed mode is read)",
@@ -14824,16 +14847,18 @@ def _is_executable(p):
         # not a checkout (the plugin cache): no mode anywhere. Any other refusal (safe.directory, a
         # broken repository) is a checkout whose modes cannot be read, and fails.
         return "not a git repository" in inside.stderr
+    # the committed mode first: that is what a checkout of this commit gets, whatever is staged
+    if run("git", "-C", str(p.parent), "rev-parse", "--verify", "-q", "HEAD^{commit}").returncode == 0:
+        r = run("git", "-C", str(p.parent), "ls-tree", "HEAD", "--", p.name)
+        if r.returncode != 0:
+            return False                           # a HEAD whose tree cannot be read
+        if r.stdout.strip():
+            return r.stdout.startswith("100755 ")
+    # not committed: a file only staged has its staged mode; an untracked one has none to hold it to
     r = run("git", "-C", str(p.parent), "ls-files", "-s", "--", p.name)
     if r.returncode != 0:
         return False
-    if not r.stdout.strip():
-        # not in the index: untracked (no mode to hold it to) -- or the index itself is gone, so the
-        # committed tree is asked too
-        r = run("git", "-C", str(p.parent), "ls-tree", "HEAD", "--", p.name)
-        if r.returncode != 0 or not r.stdout.strip():
-            return True
-    return r.stdout.startswith("100755 ")
+    return not r.stdout.strip() or r.stdout.startswith("100755 ")
 
 
 def main():
