@@ -14352,6 +14352,10 @@ def test_runner(tmp):
     r = run(sys.executable, "-c", "import sys; sys.stdout.buffer.write(b'ok \\xe2\\x80\\x94 \\xff')")
     check("runner: run() reads a child's output as UTF-8 and replaces a byte that is not",
           r.returncode == 0 and r.stdout == "ok \u2014 \ufffd", repr(r.stdout))
+    # and a child Python's own text stream is UTF-8 too (PYTHONIOENCODING), whatever the code page
+    r = run(sys.executable, "-c", "print('\\u2014 \\u5be9')")
+    check("runner: a child Python's print() reaches run() as UTF-8 (em dash, CJK)",
+          r.returncode == 0 and r.stdout.strip() == "\u2014 \u5be9", repr(r.stdout))
 
     # a caller's repository variables are gone before any fixture is made
     probe = ("import importlib.util, os, sys\n"
@@ -14516,6 +14520,14 @@ def test_native(tmp):
     diff = ev / "DIFF.patch"
     check("native: review-prompt writes an agy leg's evidence (DIFF.patch holds the range)",
           r.returncode == 0 and diff.is_file() and b"f1.txt" in diff.read_bytes(), r.stderr[-400:])
+    # a non-ASCII brief through review-prompt where the streams' own encoding cannot carry it (as a
+    # cp950 pipe cannot carry an emoji): the prompt still comes out whole, as UTF-8
+    brief = "Review \u5be9\u67e5 \u2014 \u2713 \U0001f600\n"
+    r = py("review-prompt.py", "--adapter", "codex", "--base", shas[0], "--target", repo,
+           input=brief, env=dict(env, PYTHONIOENCODING="ascii:strict"))
+    check("native: review-prompt reads and writes the brief as UTF-8 whatever the streams' encoding",
+          r.returncode == 0 and brief.strip() in r.stdout, (r.stderr[-400:],))
+
     # and with no os.O_NOFOLLOW, as on Windows, whatever platform this is
     ev2 = tmp / "evidence-no-nofollow"
     shim = ("import os, runpy, sys\n"

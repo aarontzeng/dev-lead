@@ -186,6 +186,13 @@ def main(argv=None, prog="review-prompt"):
     ap.add_argument("--lens-file", help="read the lens from this file instead of stdin")
     ap.add_argument("--rebutted", help="file of points settled in earlier rounds; ignored when absent")
     args = ap.parse_args(argv)
+    # The lens arrives, and the framed prompt leaves, as UTF-8 whatever the locale: on a Windows
+    # with a legacy code page (cp950) a pipe would otherwise decode the lead's UTF-8 brief wrongly
+    # and fail to encode a character the code page lacks. An injected stream without reconfigure
+    # (a unit caller's StringIO) is text already.
+    for stream in (sys.stdin, sys.stdout):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8")
     if args.lens_file:
         try:
             lens = Path(args.lens_file).read_text(encoding="utf-8")
