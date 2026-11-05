@@ -14414,8 +14414,15 @@ def test_native(tmp):
     roster.write_bytes((SCRIPTS.parent / "templates" / "roster.example.json").read_bytes())
     rules = tmp / "triage.json"
     rules.write_bytes((SCRIPTS.parent / "templates" / "triage.example.json").read_bytes())
+    temp, xdg = tmp / "temp", tmp / "xdg"
+    temp.mkdir()
+    xdg.mkdir()
     env = _roster_env(home, DEV_LEAD_ROSTER=roster, DEV_LEAD_TRIAGE=rules,
-                      USERPROFILE=home, LOCALAPPDATA=home / "AppData" / "Local")
+                      USERPROFILE=home, LOCALAPPDATA=home / "AppData" / "Local",
+                      TEMP=temp, TMP=temp, TMPDIR=temp, XDG_CACHE_HOME=xdg, XDG_CONFIG_HOME=xdg)
+    for k in [k for k in env if k.startswith("DEV_LEAD_") and k not in ("DEV_LEAD_ROSTER", "DEV_LEAD_TRIAGE")]:
+        del env[k]                                 # a developer's own overrides (quota sources, seams)
+    env.pop("CODEX_HOME", None)
 
     # review-prompt: a codex frame, and an agy frame whose evidence is written to a new directory
     # (on Windows that write once died on os.O_NOFOLLOW, which Windows does not have)
@@ -14454,14 +14461,37 @@ def test_native(tmp):
     r = py("roster.py", "check", env=env)
     check("native: roster.py check passes the example roster", r.returncode == 0, (r.stdout[-300:], r.stderr[-400:]))
 
-    # quota-snapshot: one JSON document; on Windows from the Windows sources file
-    r = py("quota-snapshot.py", "--timeout", "5", env=env)
-    try:
-        doc = json.loads(r.stdout)
-    except ValueError:
-        doc = None
-    check("native: quota-snapshot prints one JSON document", r.returncode == 0 and isinstance(doc, (dict, list)),
-          (r.stdout[-300:], r.stderr[-400:]))
+    # quota-snapshot from this platform's shipped sources file (the Windows one on Windows), one cache
+    # source whose path is under XDG_CACHE_HOME, so nothing of the host's is read and no CLI is started
+    cache = xdg / "opencode-go" / "usage.json"
+    cache.parent.mkdir()
+    now_ts = _qs_epoch(QS_NOW)
+
+    def entry(pct, reset):
+        return {"status": "ok", "percent": pct, "resetsAt": reset}
+
+    def quota():
+        r = py("quota-snapshot.py", "--source", "opencode-go", "--now", QS_NOW, env=env)
+        try:
+            recs = json.loads(r.stdout).get("records") or []
+        except (ValueError, AttributeError):
+            recs = []
+        return r, (recs[0] if len(recs) == 1 else {})
+    cache.write_text(json.dumps({"schema": 1, "fetched_at": _qs_iso(now_ts - 100), "attempted_at": QS_NOW,
+                                 "error": None, "http_status": None,
+                                 "usage": {"rolling": entry(4, QS_RESET), "weekly": entry(1, QS_WEEK),
+                                           "monthly": entry(69, "2026-11-08T08:38:38Z")}}))
+    r, rec = quota()
+    check("native: quota-snapshot reads a cache source through the shipped sources file (ok, three windows)",
+          r.returncode == 0 and rec.get("source") == "opencode-go" and rec.get("read_status") == "ok"
+          and rec.get("freshness") == "fresh"
+          and [(w.get("kind"), w.get("used_pct")) for w in rec.get("windows", [])]
+          == [("five_hour", 4), ("weekly", 1), ("monthly", 69)], (r.stdout[-400:], r.stderr[-400:]))
+    cache.write_text("{not json")
+    r, rec = quota()
+    check("native: ...and a corrupt cache is a record that says so, not an ok one",
+          r.returncode == 0 and rec.get("source") == "opencode-go" and rec.get("read_status") not in (None, "ok"),
+          (r.stdout[-400:], r.stderr[-400:]))
 
     # leg-cmd.sh through bash: a codex review command is emitted, nothing launched
     bash = _git_bash()
@@ -14484,6 +14514,22 @@ def test_native(tmp):
     if os.name == "nt":
         check("native: on Windows .sh helpers run through Git Bash, not System32's WSL launcher",
               "system32" not in bash.lower() and os.path.isfile(os.path.join(os.path.dirname(bash), "git.exe")), bash)
+        # an argv-delivered prompt (cursor) through an npm-style .cmd shim: cmd.exe would cut it at its first
+        # newline, so leg-cmd refuses it, and with the .ps1 beside it emits pwsh (0.6.96), detected natively
+        fake = tmp / "fakebin"
+        fake.mkdir()
+        (fake / "cursor-agent.cmd").write_text("@echo off\r\n")
+        wenv = dict(env, PATH=str(fake) + os.pathsep + env.get("PATH", ""))
+        argv = [bash, str(SCRIPTS / "leg-cmd.sh").replace("\\", "/"), "cursor", "review", "--model", "composer-2.5",
+                "--run-dir", str(tmp / "run").replace("\\", "/"), "--no-triage", "native test"]
+        r = run(*argv, env=wenv, cwd=str(repo))
+        check("native: on Windows a cursor .cmd shim with no .ps1 is refused, naming the newline cut",
+              r.returncode != 0 and "first newline" in r.stderr and no_launch(r.stdout), (r.stdout[-300:], r.stderr[-400:]))
+        (fake / "cursor-agent.ps1").write_text("# shim\n")
+        r = run(*argv, env=wenv, cwd=str(repo))
+        check("native: on Windows the .ps1 beside it is run by pwsh instead",
+              r.returncode == 0 and "pwsh -NoProfile -NonInteractive -File" in r.stdout and "cursor-agent.ps1" in r.stdout,
+              (r.stdout[-300:], r.stderr[-400:]))
 
 
 def _in_tmp(fn, *, cleanup=None, env=None):

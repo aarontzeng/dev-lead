@@ -83,7 +83,7 @@ jobs:
   # v0.2.0's tag landed on origin while the sidebar still read
   # "dev-lead v0.1.0 (Latest)" -- the tag was there, the Release object was not.
   release:
-    needs: lint                                  # no Release for a tag that fails its own invariants
+    needs: [lint, panel, windows]               # no Release for a tag that fails its own invariants or a job
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     # this repo's default GITHUB_TOKEN is read-only, so the write scope has to
