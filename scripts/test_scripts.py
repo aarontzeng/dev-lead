@@ -14309,15 +14309,29 @@ def test_runner(tmp):
     me = [sys.executable, str(lone / "test_scripts.py")]
     r = run(*me, "--list")
     names = r.stdout.split()
-    check("runner: --list prints every section name and exits 0, even with the helpers missing",
-          r.returncode == 0 and "triage" in names and "quota-tui" in names and "runner" in names
-          and "missing script" not in r.stdout, (r.returncode, r.stdout[-300:]))
+    check("runner: --list prints every section name, in order, and exits 0, even with the helpers missing",
+          r.returncode == 0 and names == [n for n, _ in sections()], (r.returncode, r.stdout[-300:]))
     r = run(*me, "no-such-section")
     check("runner: an unknown section exits 2 and runs nothing, even with the helpers missing",
           r.returncode == 2 and "no section named no-such-section" in r.stdout
           and "missing script" not in r.stdout, (r.returncode, r.stdout[-300:]))
     r = run(*me, "--jobs", "x", "lint")
     check("runner: a --jobs that is not a number exits 2", r.returncode == 2 and "usage:" in r.stdout,
+          (r.returncode, r.stdout[-300:]))
+    r = run(*me, "--help")
+    check("runner: --help prints the usage and exits 0, even with the helpers missing",
+          r.returncode == 0 and "usage:" in r.stdout and "missing script" not in r.stdout,
+          (r.returncode, r.stdout[-300:]))
+    r = run(*me, "-x")
+    check("runner: an unknown option exits 2, even with the helpers missing",
+          r.returncode == 2 and "usage:" in r.stdout and "missing script" not in r.stdout,
+          (r.returncode, r.stdout[-300:]))
+    r = run(*me, "--jobs", "x", "--list")
+    check("runner: a bad --jobs is refused before --list answers", r.returncode == 2 and "usage:" in r.stdout,
+          (r.returncode, r.stdout[-300:]))
+    r = run(*me, "--jobs", "2", "--jobs", "lint")
+    check("runner: --jobs given twice exits 2 (the second value is not taken as a section or ignored)",
+          r.returncode == 2 and "usage:" in r.stdout and "missing script" not in r.stdout,
           (r.returncode, r.stdout[-300:]))
     r = run(*me, "lint")
     check("runner: running a section with the helpers missing still fails on them",
@@ -14341,6 +14355,24 @@ def test_runner(tmp):
         "s\n  skip x (as root: why)\n  ok a\n\ntest_scripts: all passed (1 skipped as root: x)\n", 0))
     check("runner: a passing section has no failures; its as-root skips are read back",
           failed == [] and skips == ["x"] and body == ["s", "  skip x (as root: why)", "  ok a"], (body, failed, skips))
+    body, failed, _ = _section_result("s", proc("s\n  ok a\nFAIL \u2014 unexpected state\n", 1))
+    check("runner: a last line that only starts like a summary is kept",
+          body[-1] == "FAIL \u2014 unexpected state" and failed == ["section s exited 1"], (body, failed))
+
+    # run_in_parallel itself: a child's failure reaches this process's FAILURES and its output is printed
+    real_run, before = subprocess.run, len(FAILURES)
+    subprocess.run = lambda *a, **k: proc("s\n  FAIL child-check detail\n\nFAIL \u2014 1 test(s) failed\n", 1)
+    out = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(out):
+            run_in_parallel([("s", None), ("t", None)], 2)
+    finally:
+        subprocess.run = real_run
+        got = FAILURES[before:]
+        del FAILURES[before:]                 # the planted failures are not this run's
+    check("runner: run_in_parallel adds each child's failures to the parent's and prints its output",
+          got == ["child-check detail", "child-check detail"] and out.getvalue().count("  FAIL child-check") == 2,
+          (got, out.getvalue()[-300:]))
 
 
 def _in_tmp(fn, *, cleanup=None, env=None):
@@ -14475,6 +14507,9 @@ USAGE = """usage: test_scripts.py [--list] [--jobs N] [SECTION...]
 def _jobs_arg(argv):
     if "--jobs" not in argv:
         return 1
+    if argv.count("--jobs") > 1:          # select_sections skips a value after each one: say which counts
+        print(USAGE)
+        sys.exit(2)
     i = argv.index("--jobs")
     try:
         return max(1, int(argv[i + 1]))
@@ -14519,13 +14554,18 @@ def select_sections(argv):
     return picked
 
 
+# the two summary lines main() prints; any other last line is the section's own output
+_SUMMARY = __import__("re").compile(r"test_scripts: all passed( \(\d+ skipped as root: .*\))?$"
+                                    r"|FAIL \u2014 \d+ test\(s\) failed( \(\d+ skipped as root: .*\))?$")
+
+
 def _section_result(name, r):
     """What one section's process reported: its output without the summary line, its failures,
     its as-root skips. A FAIL line counts whatever the exit status, and a non-zero exit with no
     FAIL line still counts, so neither half can hide the other. Only a real summary line is
     dropped: a section that died before printing one keeps its last line."""
     body = r.stdout.rstrip("\n").split("\n") if r.stdout.strip() else []
-    if body and (body[-1].startswith("test_scripts: all passed") or body[-1].startswith("FAIL \u2014 ")):
+    if body and _SUMMARY.match(body[-1]):
         body.pop()
     while body and not body[-1].strip():
         body.pop()
@@ -14561,10 +14601,10 @@ def run_in_parallel(selected, jobs):
 def main():
     # the arguments first: --list, --help and a wrong name or --jobs answer without needing
     # the helpers the sections test
+    jobs = _jobs_arg(sys.argv[1:])
     selected = select_sections(sys.argv[1:])
     if selected is None:
         return
-    jobs = _jobs_arg(sys.argv[1:])
     for script in ("freeze-target.sh", "verify-target.sh", "snapshot-refs.sh",
                    "await-codex-job.sh", "renorm-only.sh", "leg-log-check.sh", "clear-host-residue.sh"):
         p = SCRIPTS / script
