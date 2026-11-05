@@ -14333,6 +14333,18 @@ def test_runner(tmp):
     check("runner: --jobs given twice exits 2 (the second value is not taken as a section or ignored)",
           r.returncode == 2 and "usage:" in r.stdout and "missing script" not in r.stdout,
           (r.returncode, r.stdout[-300:]))
+    # a copy outside any git checkout, as the plugin cache is: the helpers beside it pass the check
+    # (on Windows there is no execute bit and no tracked mode to read there)
+    for script in ("freeze-target.sh", "verify-target.sh", "snapshot-refs.sh", "await-codex-job.sh",
+                   "renorm-only.sh", "leg-log-check.sh", "clear-host-residue.sh"):
+        shutil.copy2(SCRIPTS / script, lone / script)
+    r = run(*me, "lint")                       # the section then fails for want of lint.py: not checked here
+    check("runner: a copy outside a git checkout with its helpers present gets past the helper check",
+          "lint.py check_paths" in r.stdout and "missing script" not in r.stdout
+          and "not executable" not in r.stdout, (r.returncode, r.stdout[-300:]))
+    for script in ("freeze-target.sh", "verify-target.sh", "snapshot-refs.sh", "await-codex-job.sh",
+                   "renorm-only.sh", "leg-log-check.sh", "clear-host-residue.sh"):
+        (lone / script).unlink()
     r = run(*me, "lint")
     check("runner: running a section with the helpers missing still fails on them",
           r.returncode == 1 and "missing script: freeze-target.sh" in r.stdout, (r.returncode, r.stdout[-300:]))
@@ -14768,11 +14780,17 @@ def run_in_parallel(selected, jobs):
 
 def _is_executable(p):
     """The execute bit, or on native Windows (which has none) the mode git tracks for the file:
-    what a POSIX checkout of this commit gets."""
+    what a POSIX checkout of this commit gets. Where git tracks nothing for it -- an installed copy
+    such as the plugin cache, which is no checkout -- Windows has no mode to read, so it passes."""
     if os.name != "nt":
         return bool(p.stat().st_mode & 0o111)
-    r = run("git", "-C", str(p.parent), "ls-files", "-s", "--", p.name)
-    return r.returncode == 0 and r.stdout.startswith("100755 ")
+    try:
+        r = run("git", "-C", str(p.parent), "ls-files", "-s", "--", p.name)
+    except OSError:                                # no git at all: nothing to read either
+        return True
+    if r.returncode != 0 or not r.stdout.strip():
+        return True
+    return r.stdout.startswith("100755 ")
 
 
 def main():
