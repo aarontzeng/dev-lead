@@ -190,12 +190,15 @@ def main(argv=None, prog="review-prompt"):
     # with a legacy code page (cp950) a pipe would otherwise decode the lead's UTF-8 brief wrongly
     # and fail to encode a character the code page lacks. An injected stream without reconfigure
     # (a unit caller's StringIO) is text already.
-    for stream in (sys.stdin, sys.stdout):
-        if hasattr(stream, "reconfigure"):
-            stream.reconfigure(encoding="utf-8")
+    # utf-8-sig on the way in: a brief saved with a BOM (Notepad, PowerShell's utf8) reads without it,
+    # so a BOM-only brief is still refused as empty
+    if hasattr(sys.stdin, "reconfigure"):
+        sys.stdin.reconfigure(encoding="utf-8-sig")
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")
     if args.lens_file:
         try:
-            lens = Path(args.lens_file).read_text(encoding="utf-8")
+            lens = Path(args.lens_file).read_text(encoding="utf-8-sig")
         except (OSError, UnicodeDecodeError) as exc:
             sys.exit("%s: cannot read --lens-file %s: %s" % (prog, args.lens_file, exc))
     else:
@@ -209,15 +212,18 @@ def main(argv=None, prog="review-prompt"):
         except ValueError:
             sys.exit("%s: DEV_LEAD_LENS_WAIT must be a non-negative number of seconds" % prog)
         try:
-            readable, _writeable, _errors = select.select([sys.stdin], [], [], wait)
-        except (OSError, ValueError):
-            # Unit callers sometimes inject an in-memory stdin, which has no
-            # file descriptor to poll but is already readable by definition.
-            lens = sys.stdin.read()
-        else:
-            if not readable:
-                sys.exit("%s: no lens arrived on stdin within %ss" % (prog, raw_wait))
-            lens = sys.stdin.read()
+            try:
+                readable, _writeable, _errors = select.select([sys.stdin], [], [], wait)
+            except (OSError, ValueError):
+                # Unit callers sometimes inject an in-memory stdin, which has no
+                # file descriptor to poll but is already readable by definition.
+                lens = sys.stdin.read()
+            else:
+                if not readable:
+                    sys.exit("%s: no lens arrived on stdin within %ss" % (prog, raw_wait))
+                lens = sys.stdin.read()
+        except UnicodeDecodeError as exc:
+            sys.exit("%s: the lens on stdin is not UTF-8 (%s); save the brief as UTF-8" % (prog, exc))
     if not lens.strip():
         if args.lens_file:
             sys.exit("%s: empty lens from --lens-file %s -- refusing to build a prompt with no brief"

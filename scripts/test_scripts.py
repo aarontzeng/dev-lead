@@ -14528,6 +14528,22 @@ def test_native(tmp):
     check("native: review-prompt reads and writes the brief as UTF-8 whatever the streams' encoding",
           r.returncode == 0 and brief.strip() in r.stdout, (r.stderr[-400:],))
 
+    # a brief saved with a BOM reads without it; a BOM-only one is still empty; one that is not UTF-8 is
+    # refused by name, not with a traceback
+    r = py("review-prompt.py", "--adapter", "codex", "--base", shas[0], "--target", repo,
+           input="\ufeffReview it.\n", env=env)
+    check("native: review-prompt drops a brief's UTF-8 BOM", r.returncode == 0 and "\ufeff" not in r.stdout
+          and "Review it." in r.stdout, r.stderr[-300:])
+    r = py("review-prompt.py", "--adapter", "codex", "--base", shas[0], "--target", repo,
+           input="\ufeff \n", env=env)
+    check("native: ...and refuses a brief that is only a BOM as empty",
+          r.returncode != 0 and "empty lens" in r.stderr and not r.stdout, (r.stdout[-200:], r.stderr[-300:]))
+    r = subprocess.run([sys.executable, str(SCRIPTS / "review-prompt.py"), "--adapter", "codex", "--base", shas[0],
+                        "--target", str(repo)], input="審查".encode("cp950"), capture_output=True, env=env)
+    check("native: ...and refuses a brief that is not UTF-8 (a cp950 one) by name",
+          r.returncode != 0 and b"is not UTF-8" in r.stderr and b"Traceback" not in r.stderr and not r.stdout,
+          r.stderr[-300:])
+
     # and with no os.O_NOFOLLOW, as on Windows, whatever platform this is
     ev2 = tmp / "evidence-no-nofollow"
     shim = ("import os, runpy, sys\n"
