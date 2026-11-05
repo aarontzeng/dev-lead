@@ -1,8 +1,12 @@
 # Optimization plan, 2026-11 (at 0.6.107, 4fb7ac9)
 
 A review of the repository as it stands, with what was measured, what each item would
-change, and in what order. Nothing here is done yet; each item is its own change with its
-own version bump, tests and review round, as every change to master is.
+change, and in what order. Each item is its own change with its own version bump, tests and
+review round, as every change to master is. The measurements below are the state at 0.6.107,
+before any item.
+
+Status (0.6.113): items 1-3 are done (0.6.109-0.6.112, with fixes from their review in
+0.6.113). Items 4-6 are open; item 7 waits for the next change to one of its scripts.
 
 ## What was measured
 

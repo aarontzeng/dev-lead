@@ -6202,6 +6202,7 @@ def test_quota_snapshot_tui_refresh(tmp):
     # two sources refresh in one process: a tree the first could not delete must not block the second
     two = tmp / "two-resets"
     two.mkdir()
+    fresh_each = []                               # after EACH reset, not only the last
     for _round in (1, 2):
         wd = two / "quota-tui"
         wd.mkdir(mode=0o700, exist_ok=True)
@@ -6216,13 +6217,14 @@ def test_quota_snapshot_tui_refresh(tmp):
             os.close(here_fd)
         _lock_dir(wd / "locked")                  # undeletable on Python 3.13+ as well
         qs._reset_workdir(str(wd), (wd.stat().st_dev, wd.stat().st_ino))
+        fresh_each.append(wd.is_dir() and list(wd.iterdir()) == [])
     left = sorted(p.name for p in two.iterdir())
-    fresh = (two / "quota-tui").is_dir() and list((two / "quota-tui").iterdir()) == []
+    fresh = all(fresh_each)
     if sys.version_info >= (3, 13) and skip_as_root(
             "tui refresh: a second reset in the same process works even though the first left a tree it "
             "could not delete", "on Python 3.13+ neither the deep chain nor the locked directory stops "
             "root deleting the tree, so no leftover is made; the fresh working directory is still checked"):
-        check("tui refresh: ...as root, each reset still leaves a fresh, empty working directory", fresh, left)
+        check("tui refresh: ...as root, each reset still leaves a fresh, empty working directory", fresh, (fresh_each, left))
     else:
         check("tui refresh: a second reset in the same process works even though the first left a tree it could "
               "not delete (the working directory is fresh and empty, each leftover has its own name)",
@@ -14298,6 +14300,49 @@ def test_clear_host_residue(tmp):
 
 
 
+def test_runner(tmp):
+    # the suite's own command line, from a copy that has none of the helpers beside it: what
+    # only reads the arguments must answer anyway, and running a section must still refuse
+    lone = tmp / "lone" / "scripts"
+    lone.mkdir(parents=True)
+    shutil.copy2(SCRIPTS / "test_scripts.py", lone / "test_scripts.py")
+    me = [sys.executable, str(lone / "test_scripts.py")]
+    r = run(*me, "--list")
+    names = r.stdout.split()
+    check("runner: --list prints every section name and exits 0, even with the helpers missing",
+          r.returncode == 0 and "triage" in names and "quota-tui" in names and "runner" in names
+          and "missing script" not in r.stdout, (r.returncode, r.stdout[-300:]))
+    r = run(*me, "no-such-section")
+    check("runner: an unknown section exits 2 and runs nothing, even with the helpers missing",
+          r.returncode == 2 and "no section named no-such-section" in r.stdout
+          and "missing script" not in r.stdout, (r.returncode, r.stdout[-300:]))
+    r = run(*me, "--jobs", "x", "lint")
+    check("runner: a --jobs that is not a number exits 2", r.returncode == 2 and "usage:" in r.stdout,
+          (r.returncode, r.stdout[-300:]))
+    r = run(*me, "lint")
+    check("runner: running a section with the helpers missing still fails on them",
+          r.returncode == 1 and "missing script: freeze-target.sh" in r.stdout, (r.returncode, r.stdout[-300:]))
+
+    # what a parallel run makes of one section's process
+    def proc(stdout, rc):
+        return subprocess.CompletedProcess([], rc, stdout=stdout, stderr="")
+    body, failed, _ = _section_result("s", proc("s\n  ok a\n  FAIL b detail\n\nFAIL \u2014 1 test(s) failed\n", 1))
+    check("runner: a failed section's FAIL lines are its failures, its summary is dropped",
+          failed == ["b detail"] and body == ["s", "  ok a", "  FAIL b detail"], (body, failed))
+    body, failed, _ = _section_result("s", proc("s\n  FAIL a x\n  FAIL b y\n", 1))
+    check("runner: a section that died before its summary keeps its last FAIL line",
+          failed == ["a x", "b y"] and body[-1] == "  FAIL b y", (body, failed))
+    _, failed, _ = _section_result("s", proc("s\n  ok a\n  FAIL b y\n", 0))
+    check("runner: a FAIL line counts even when the section exited 0", failed == ["b y"], failed)
+    _, failed, _ = _section_result("s", proc("s\n  ok a\n", -9))
+    check("runner: a section killed with no FAIL line is a failure by its exit status",
+          failed == ["section s exited -9"], failed)
+    body, failed, skips = _section_result("s", proc(
+        "s\n  skip x (as root: why)\n  ok a\n\ntest_scripts: all passed (1 skipped as root: x)\n", 0))
+    check("runner: a passing section has no failures; its as-root skips are read back",
+          failed == [] and skips == ["x"] and body == ["s", "  skip x (as root: why)", "  ok a"], (body, failed, skips))
+
+
 def _in_tmp(fn, *, cleanup=None, env=None):
     """A section body that gets its own temporary directory."""
     def run():
@@ -14413,6 +14458,7 @@ def sections():
              _in_tmp(test_quota_snapshot_statusline_refresh_windows)))),
         ("quota-tui", _titled(("quota-snapshot.py --refresh (private tmux server)",
                                _in_tmp(test_quota_snapshot_tui_refresh, cleanup=_unlock)))),
+        ("runner", _titled(("test_scripts.py command line and parallel results", _in_tmp(test_runner)))),
     ]
 
 
@@ -14473,10 +14519,28 @@ def select_sections(argv):
     return picked
 
 
+def _section_result(name, r):
+    """What one section's process reported: its output without the summary line, its failures,
+    its as-root skips. A FAIL line counts whatever the exit status, and a non-zero exit with no
+    FAIL line still counts, so neither half can hide the other. Only a real summary line is
+    dropped: a section that died before printing one keeps its last line."""
+    body = r.stdout.rstrip("\n").split("\n") if r.stdout.strip() else []
+    if body and (body[-1].startswith("test_scripts: all passed") or body[-1].startswith("FAIL \u2014 ")):
+        body.pop()
+    while body and not body[-1].strip():
+        body.pop()
+    failed = [l[len("  FAIL "):] for l in body if l.startswith("  FAIL ")]
+    if r.returncode != 0 and not failed:
+        failed = ["section %s exited %d" % (name, r.returncode)]
+    skips = [l[len("  skip "):].split(" (as root:")[0] for l in body
+             if l.startswith("  skip ") and " (as root:" in l]
+    return body, failed, skips
+
+
 def run_in_parallel(selected, jobs):
     """Each section in its own `test_scripts.py <name>` process, at most `jobs` at a time. Its
     output is printed whole once it ends, in the usual order; its failures and skips are read
-    back from the summary line it prints."""
+    back from its output and exit status (_section_result)."""
     import concurrent.futures
 
     def one(name):
@@ -14486,20 +14550,21 @@ def run_in_parallel(selected, jobs):
         futures = [(name, pool.submit(one, name)) for name, _ in selected]
         for name, fut in futures:
             r = fut.result()
-            body = r.stdout.rstrip("\n").split("\n")
-            summary = body[-1] if body else ""
-            while body and (not body[-1].strip() or body[-1] == summary):
-                body.pop()
+            body, failed, skips = _section_result(name, r)
             print("\n".join(body))
             if r.stderr.strip():
                 print(r.stderr.rstrip("\n"))
-            if r.returncode != 0:
-                failed = [l[len("  FAIL "):] for l in body if l.startswith("  FAIL ")]
-                FAILURES.extend(failed or ["section %s exited %d" % (name, r.returncode)])
-            SKIPS.extend(l[len("  skip "):].split(" (as root:")[0] for l in body
-                         if l.startswith("  skip ") and " (as root:" in l)
+            FAILURES.extend(failed)
+            SKIPS.extend(skips)
+
 
 def main():
+    # the arguments first: --list, --help and a wrong name or --jobs answer without needing
+    # the helpers the sections test
+    selected = select_sections(sys.argv[1:])
+    if selected is None:
+        return
+    jobs = _jobs_arg(sys.argv[1:])
     for script in ("freeze-target.sh", "verify-target.sh", "snapshot-refs.sh",
                    "await-codex-job.sh", "renorm-only.sh", "leg-log-check.sh", "clear-host-residue.sh"):
         p = SCRIPTS / script
@@ -14513,10 +14578,6 @@ def main():
         print("\nFAIL — scripts missing or not executable")
         sys.exit(1)
 
-    selected = select_sections(sys.argv[1:])
-    if selected is None:
-        return
-    jobs = _jobs_arg(sys.argv[1:])
     if jobs > 1 and len(selected) > 1:
         run_in_parallel(selected, jobs)
     else:
