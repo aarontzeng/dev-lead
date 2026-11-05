@@ -14335,13 +14335,36 @@ def test_runner(tmp):
           (r.returncode, r.stdout[-300:]))
     # a copy outside any git checkout, as the plugin cache is: the helpers beside it pass the check
     # (on Windows there is no execute bit and no tracked mode to read there)
-    for script in ("freeze-target.sh", "verify-target.sh", "snapshot-refs.sh", "await-codex-job.sh",
-                   "renorm-only.sh", "leg-log-check.sh", "clear-host-residue.sh"):
+    helpers = ("freeze-target.sh", "verify-target.sh", "snapshot-refs.sh", "await-codex-job.sh",
+               "renorm-only.sh", "leg-log-check.sh", "clear-host-residue.sh")
+    for script in helpers:
         shutil.copy2(SCRIPTS / script, lone / script)
-    r = run(*me, "lint")                       # the section then fails for want of lint.py: not checked here
+    # GIT_CEILING_DIRECTORIES: a temporary directory inside some checkout must not make this one
+    no_repo = dict(os.environ, GIT_CEILING_DIRECTORIES=str(tmp))
+    seen = run("git", "-C", str(lone), "rev-parse", "--is-inside-work-tree", env=no_repo)
+    r = run(*me, "lint", env=no_repo)          # the section then fails for want of lint.py: not checked here
     check("runner: a copy outside a git checkout with its helpers present gets past the helper check",
-          "lint.py check_paths" in r.stdout and "missing script" not in r.stdout
-          and "not executable" not in r.stdout, (r.returncode, r.stdout[-300:]))
+          seen.returncode != 0 and "lint.py check_paths" in r.stdout and "missing script" not in r.stdout
+          and "not executable" not in r.stdout, (seen.stderr[-200:], r.returncode, r.stdout[-300:]))
+    if os.name == "nt":
+        # in a checkout, Windows holds a helper to the mode git tracks: 100644 is refused, 100755 passes
+        repo_copy = tmp / "tracked" / "scripts"
+        shutil.copytree(lone, repo_copy)
+        top = repo_copy.parent
+        for args in (("init", "-q"), ("config", "user.email", "t@example.invalid"), ("config", "user.name", "T"),
+                     ("add", "-A"), ("update-index", "--chmod=+x", *["scripts/" + h for h in helpers]),
+                     ("update-index", "--chmod=-x", "scripts/freeze-target.sh"), ("commit", "-qm", "fixture")):
+            git(top, *args)
+        tracked = [sys.executable, str(repo_copy / "test_scripts.py")]
+        r = run(*tracked, "lint", env=no_repo)
+        check("runner: on Windows a helper tracked 100644 in a checkout is refused as not executable",
+              "not executable: freeze-target.sh" in r.stdout and "not executable: verify-target.sh" not in r.stdout,
+              r.stdout[-300:])
+        git(top, "update-index", "--chmod=+x", "scripts/freeze-target.sh")
+        git(top, "commit", "-qm", "executable")
+        r = run(*tracked, "lint", env=no_repo)
+        check("runner: ...and passes once it is tracked 100755",
+              "lint.py check_paths" in r.stdout and "not executable" not in r.stdout, r.stdout[-300:])
     for script in ("freeze-target.sh", "verify-target.sh", "snapshot-refs.sh", "await-codex-job.sh",
                    "renorm-only.sh", "leg-log-check.sh", "clear-host-residue.sh"):
         (lone / script).unlink()
@@ -14785,12 +14808,19 @@ def _is_executable(p):
     if os.name != "nt":
         return bool(p.stat().st_mode & 0o111)
     try:
-        r = run("git", "-C", str(p.parent), "ls-files", "-s", "--", p.name)
+        # LC_ALL/LANGUAGE=C: the message below is matched, and a localized git translates it
+        inside = run("git", "-C", str(p.parent), "rev-parse", "--is-inside-work-tree",
+                     env=dict(os.environ, LC_ALL="C", LANGUAGE="C"))
     except OSError:                                # no git at all: nothing to read either
         return True
-    if r.returncode != 0 or not r.stdout.strip():
-        return True
-    return r.stdout.startswith("100755 ")
+    if inside.returncode != 0:
+        # not a checkout (the plugin cache): no mode anywhere. Any other refusal (safe.directory, a
+        # broken repository) is a checkout whose modes cannot be read, and fails.
+        return "not a git repository" in inside.stderr
+    r = run("git", "-C", str(p.parent), "ls-files", "-s", "--", p.name)
+    if r.returncode != 0:
+        return False
+    return not r.stdout.strip() or r.stdout.startswith("100755 ")   # untracked: no mode to hold it to
 
 
 def main():
