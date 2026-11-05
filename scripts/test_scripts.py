@@ -45,10 +45,17 @@ GIT_REPO_ENV = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECT
                 "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_COMMON_DIR", "GIT_NAMESPACE", "GIT_PREFIX")
 for _k in GIT_REPO_ENV:
     os.environ.pop(_k, None)
+# every Python this suite starts writes its standard streams as UTF-8, which run() reads
+os.environ["PYTHONIOENCODING"] = "utf-8"
 
 
 def run(*args, **kw):
-    return subprocess.run([str(a) for a in args], capture_output=True, text=True, **kw)
+    # UTF-8 whatever the console's code page (cp950 on a Traditional Chinese Windows could not decode
+    # a child's em dash, and the reader thread's error left stdout None); a byte that is not UTF-8
+    # becomes U+FFFD rather than an exception
+    kw.setdefault("encoding", "utf-8")
+    kw.setdefault("errors", "replace")
+    return subprocess.run([str(a) for a in args], capture_output=True, **kw)
 
 
 # What leg-cmd.sh prints for a refused launch since 0.6.95: a command that fails
@@ -14341,6 +14348,11 @@ def test_runner(tmp):
     check("runner: --jobs given twice exits 2 (the second value is not taken as a section or ignored)",
           r.returncode == 2 and "usage:" in r.stdout and "missing script" not in r.stdout,
           (r.returncode, r.stdout[-300:]))
+    # a child's output is read as UTF-8, and a byte that is not UTF-8 does not raise
+    r = run(sys.executable, "-c", "import sys; sys.stdout.buffer.write(b'ok \\xe2\\x80\\x94 \\xff')")
+    check("runner: run() reads a child's output as UTF-8 and replaces a byte that is not",
+          r.returncode == 0 and r.stdout == "ok \u2014 \ufffd", repr(r.stdout))
+
     # a caller's repository variables are gone before any fixture is made
     probe = ("import importlib.util, os, sys\n"
              "spec = importlib.util.spec_from_file_location('ts_env_probe', sys.argv[1])\n"
@@ -14478,7 +14490,10 @@ def test_native(tmp):
     roster = tmp / "roster.json"
     roster.write_bytes((SCRIPTS.parent / "templates" / "roster.example.json").read_bytes())
     rules = tmp / "triage.json"
-    rules.write_bytes((SCRIPTS.parent / "templates" / "triage.example.json").read_bytes())
+    doc = json.loads((SCRIPTS.parent / "templates" / "triage.example.json").read_text(encoding="utf-8"))
+    # the template's clone path is a POSIX placeholder; Python 3.13+ on Windows does not call "/x" absolute
+    doc["clones"] = {name: str(tmp / name) for name in doc.get("clones", {})}
+    rules.write_text(json.dumps(doc), encoding="utf-8")
     temp, xdg = tmp / "temp", tmp / "xdg"
     temp.mkdir()
     xdg.mkdir()
@@ -14817,7 +14832,8 @@ def run_in_parallel(selected, jobs):
     import concurrent.futures
 
     def one(name):
-        r = subprocess.run([sys.executable, str(Path(__file__).resolve()), name], capture_output=True, text=True)
+        r = subprocess.run([sys.executable, str(Path(__file__).resolve()), name], capture_output=True,
+                           encoding="utf-8", errors="replace")
         return r
     with concurrent.futures.ThreadPoolExecutor(max_workers=jobs) as pool:
         futures = [(name, pool.submit(one, name)) for name, _ in selected]

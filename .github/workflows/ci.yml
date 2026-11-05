@@ -47,6 +47,11 @@ jobs:
   # fixtures (executable .sh files, fcntl, uids) and simulate Windows on Linux instead.
   windows:
     runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.13 changed os.path.isabs on Windows ("/x" is no longer absolute): both sides of it
+        python: ["3.12", "3.14"]
     defaults:
       run:
         shell: bash                              # Git Bash, which is what triage.py uses there
@@ -54,7 +59,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: ${{ matrix.python }}
       - name: Native sections
         run: python scripts/test_scripts.py native runner
 
