@@ -14351,17 +14351,24 @@ def test_runner(tmp):
         repo_copy = tmp / "tracked" / "scripts"
         shutil.copytree(lone, repo_copy)
         top = repo_copy.parent
+        quiet = ("-c", "core.hooksPath=", "-c", "commit.gpgsign=false")   # the developer's hooks and signing
         for args in (("init", "-q"), ("config", "user.email", "t@example.invalid"), ("config", "user.name", "T"),
                      ("add", "-A"), ("update-index", "--chmod=+x", *["scripts/" + h for h in helpers]),
-                     ("update-index", "--chmod=-x", "scripts/freeze-target.sh"), ("commit", "-qm", "fixture")):
+                     ("update-index", "--chmod=-x", "scripts/freeze-target.sh"), (*quiet, "commit", "-qm", "fixture")):
             git(top, *args)
         tracked = [sys.executable, str(repo_copy / "test_scripts.py")]
         r = run(*tracked, "lint", env=no_repo)
         check("runner: on Windows a helper tracked 100644 in a checkout is refused as not executable",
               "not executable: freeze-target.sh" in r.stdout and "not executable: verify-target.sh" not in r.stdout,
               r.stdout[-300:])
+        (top / ".git" / "index").unlink()
+        r = run(*tracked, "lint", env=no_repo)
+        check("runner: on Windows ...still refused with the index gone (the committed mode is read)",
+              "not executable: freeze-target.sh" in r.stdout and "not executable: verify-target.sh" not in r.stdout,
+              r.stdout[-300:])
+        git(top, "reset", "-q")                   # the index back, from HEAD
         git(top, "update-index", "--chmod=+x", "scripts/freeze-target.sh")
-        git(top, "commit", "-qm", "executable")
+        git(top, *quiet, "commit", "-qm", "executable")
         r = run(*tracked, "lint", env=no_repo)
         check("runner: ...and passes once it is tracked 100755",
               "lint.py check_paths" in r.stdout and "not executable" not in r.stdout, r.stdout[-300:])
@@ -14820,7 +14827,13 @@ def _is_executable(p):
     r = run("git", "-C", str(p.parent), "ls-files", "-s", "--", p.name)
     if r.returncode != 0:
         return False
-    return not r.stdout.strip() or r.stdout.startswith("100755 ")   # untracked: no mode to hold it to
+    if not r.stdout.strip():
+        # not in the index: untracked (no mode to hold it to) -- or the index itself is gone, so the
+        # committed tree is asked too
+        r = run("git", "-C", str(p.parent), "ls-tree", "HEAD", "--", p.name)
+        if r.returncode != 0 or not r.stdout.strip():
+            return True
+    return r.stdout.startswith("100755 ")
 
 
 def main():
