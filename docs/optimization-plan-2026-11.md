@@ -13,6 +13,7 @@ on windows-latest, every section of the suite builds POSIX fixtures (it executes
 directly, its bare `bash` is the WSL launcher there, it uses fcntl and uids), so the Windows
 job runs a new `native` section that runs each script as a lead on Windows does, plus
 `runner`. Item 6 is open; item 7 waits for the next change to one of its scripts.
+step 1 (guard) done: data/skill-rules.json + lint check_skill_rules (review fix: whole clauses, a lead-skill floor, base ids and budget; round 3: a changed saying must contain the base wording or be listed in reworded, a retired id needs a reason, fences/comments/strikethrough/hidden details do not count, anchors are at least 24 characters)
 
 ## What was measured
 

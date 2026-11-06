@@ -45,6 +45,14 @@ Every check here guards against a failure this repo has ACTUALLY shipped
                 disk, and a multi-family adapter must SAY so where a lead
                 reads it (agy serving both Gemini and Claude is exactly the
                 fact that makes adapter != family)
+  skill-rules   the lead skill's rule sentences (data/skill-rules.json) stay
+                in the file, and the file stays within the byte budget
+                recorded there. A text guard is a tripwire for a reviewer,
+                not a proof that a rule's meaning survived: read the diff.
+                A changed must_contain must still contain the base wording,
+                or the id is listed as reworded; a removed id must be listed
+                as retired. Fences, comments, strikethrough and hidden
+                details do not count as the rule.
 """
 import json
 import os
@@ -1301,6 +1309,582 @@ def check_families():
                 "a lead reading only this file cannot account the family correctly")
 
 
+# ---- skill-rules: a trim must not drop a rule or grow the lead skill ----
+#
+# A text guard is a tripwire for a reviewer, not a proof that a rule's meaning
+# survived. Read the diff. Collapsing whitespace lets a wrapped clause be
+# anchored whole, but only runs of ASCII space, tab, CR and LF — a
+# non-breaking space does not stand in for an ordinary one. The match ignores
+# fenced code, HTML comments, strikethrough and `<details hidden>`, so a rule
+# quoted as an example is not the rule. `in_fence: true` is the opposite: the
+# needle is a command that lives in a fence, and it is matched there only.
+#
+# Against the base revision, an id's must_contain may change only when the new
+# wording still contains the old, or the id is listed in that skill's
+# `reworded` map with a non-empty reason. An id may disappear only when it is
+# listed in `retired` with a non-empty reason. max_bytes may not rise. A
+# reworded or retired id that is not in the base is an error, and a retired
+# id that is still present is an error. Neither map makes a hollowed sentence
+# honest by itself; it makes the change visible in the manifest diff.
+#
+# MIN_LEAD_SKILL_RULES is a floor, not the inventory. The guard was added with
+# 120 clauses and the review fixes took it well past that, so 100 is the line
+# below which the manifest has been hollowed out: one surviving rule, or the
+# lead entry swapped for another file, would otherwise still be a nonempty
+# list. The exact ids live in data/skill-rules.json and may grow; retiring
+# one does not lower this floor. MIN_MUST_CONTAIN is the same kind of line
+# for a single anchor: below it the needle is a prefix, not a clause.
+LEAD_SKILL_RULES = "skills/dev-lead/SKILL.md"
+MIN_LEAD_SKILL_RULES = 100
+MUST_CONTAIN_MAX = 400
+MIN_MUST_CONTAIN = 24
+# Not `\s`: that matches a non-breaking space and the other Unicode spaces,
+# so a command whose gaps were swapped for U+00A0 still looked intact.
+_RULE_WS = re.compile(r"[ \t\r\n]+")
+# `C:\x` and `C:/x` are absolute on Windows. On Linux Path does not treat a
+# drive prefix as absolute, so the prefix is rejected by name.
+_DRIVE_ABS = re.compile(r"^[A-Za-z]:")
+_DETAILS_OPEN = re.compile(r"<details\b[^>]*\bhidden\b[^>]*>", re.IGNORECASE)
+_DETAILS_CLOSE = re.compile(r"</details\s*>", re.IGNORECASE)
+
+
+def _norm_rule_text(text):
+    """Collapse runs of space, tab, CR and LF to one space.
+
+    Wrapped indentation and a CRLF checkout still match the same clause.
+    A non-breaking space is not in the class, so it does not match an ASCII
+    space. Uniqueness is counted on this text, not on the raw file.
+    """
+    return _RULE_WS.sub(" ", text).strip()
+
+
+def _lf_bytes(blob):
+    """The budget is the LF file. A Windows autocrlf checkout must not fail it."""
+    return blob.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+
+
+def _relative_skill_path(name):
+    """False for a non-string, an empty path, an absolute path, or `..`."""
+    if not isinstance(name, str) or not name:
+        return False
+    if name.startswith(("/", "\\")) or _DRIVE_ABS.match(name):
+        return False
+    if ".." in Path(name).parts:
+        return False
+    return True
+
+
+def _fence_mark(line):
+    """(char, length, rest) when `line` is a ``` or ~~~ fence line, else None.
+
+    CommonMark: up to three leading spaces, then a run of at least three
+    backticks or tildes. A tab is not that indent.
+    """
+    if line.startswith("\t"):
+        return None
+    indent = 0
+    while indent < len(line) and line[indent] == " ":
+        indent += 1
+        if indent > 3:
+            return None
+    if indent >= len(line) or line[indent] not in "`~":
+        return None
+    ch = line[indent]
+    end = indent
+    while end < len(line) and line[end] == ch:
+        end += 1
+    if end - indent < 3:
+        return None
+    return ch, end - indent, line[end:]
+
+
+def _mask_skill_regions(text):
+    """(visible, fenced, problems) for one skill file.
+
+    `visible` is the file with fenced blocks, HTML comments, `<details hidden>`
+    and `~~strikethrough~~` replaced by a NUL, so a needle cannot join across
+    a region that was masked out. `fenced` is only the inside of the fences.
+    An unclosed `<!--` masks through EOF and is an error. An unclosed fence
+    is an error. An unclosed strikethrough or `<details hidden>` masks through
+    EOF: the hidden rules then fail as missing, which is the tripwire.
+    """
+    visible = []
+    fenced = []
+    problems = []
+
+    def emit_visible(chunk):
+        if not chunk:
+            return
+        visible.append(chunk)
+        if not fenced or fenced[-1] != "\x00":
+            fenced.append("\x00")
+
+    def emit_mask():
+        if not visible or visible[-1] != "\x00":
+            visible.append("\x00")
+        if not fenced or fenced[-1] != "\x00":
+            fenced.append("\x00")
+
+    def emit_fence(chunk):
+        if not chunk:
+            return
+        fenced.append(chunk)
+        if not visible or visible[-1] != "\x00":
+            visible.append("\x00")
+
+    state = "prose"
+    fence_ch, fence_len = "", 0
+    i, n = 0, len(text)
+    while i < n:
+        if state == "fence":
+            nl = text.find("\n", i)
+            line = text[i:] if nl == -1 else text[i:nl]
+            marker_line = line[:-1] if line.endswith("\r") else line
+            mark = _fence_mark(marker_line)
+            if (mark and mark[0] == fence_ch and mark[1] >= fence_len
+                    and mark[2].strip() == ""):
+                emit_mask()
+                state = "prose"
+            else:
+                emit_fence(line)
+                if nl != -1:
+                    emit_fence("\n")
+            i = n if nl == -1 else nl + 1
+            continue
+        if state == "comment":
+            end = text.find("-->", i)
+            if end == -1:
+                emit_mask()
+                i = n
+                continue
+            emit_mask()
+            i = end + 3
+            state = "prose"
+            continue
+        if state == "details":
+            close = _DETAILS_CLOSE.search(text, i)
+            if not close:
+                emit_mask()
+                i = n
+                continue
+            emit_mask()
+            i = close.end()
+            state = "prose"
+            continue
+        if state == "strike":
+            end = text.find("~~", i)
+            if end == -1:
+                emit_mask()
+                i = n
+                continue
+            emit_mask()
+            i = end + 2
+            state = "prose"
+            continue
+
+        line_start = i == 0 or text[i - 1] == "\n"
+        nl = text.find("\n", i)
+        limit = n if nl == -1 else nl
+        if line_start:
+            line = text[i:] if nl == -1 else text[i:nl]
+            marker_line = line[:-1] if line.endswith("\r") else line
+            mark = _fence_mark(marker_line)
+            if mark:
+                fence_ch, fence_len = mark[0], mark[1]
+                state = "fence"
+                emit_mask()
+                i = n if nl == -1 else nl + 1
+                continue
+
+        comment_at = text.find("<!--", i, limit)
+        strike_at = text.find("~~", i, limit)
+        details = _DETAILS_OPEN.search(text, i, limit)
+        candidates = []
+        if comment_at != -1:
+            candidates.append((comment_at, "comment"))
+        if strike_at != -1:
+            candidates.append((strike_at, "strike"))
+        if details:
+            candidates.append((details.start(), "details"))
+        if not candidates:
+            emit_visible(text[i:limit])
+            if nl == -1:
+                i = n
+            else:
+                emit_visible("\n")
+                i = nl + 1
+            continue
+        pos, kind = min(candidates)
+        emit_visible(text[i:pos])
+        if kind == "comment":
+            i = pos + 4
+            state = "comment"
+        elif kind == "strike":
+            i = pos + 2
+            state = "strike"
+        else:
+            i = details.end()
+            state = "details"
+    if state == "comment":
+        problems.append("unclosed HTML comment masks the rest of the file")
+    if state == "fence":
+        problems.append("unbalanced fence")
+    return "".join(visible), "".join(fenced), problems
+
+
+def _skill_rules_skip(why):
+    note(f"skill-rules baseline comparison skipped: {why}")
+
+
+def _skill_rules_base():
+    """(label, skills) from the base revision, or None when comparison does not run.
+
+    The base is the one check_version_moves_with_content uses. LINT_BASE set
+    to the all-zero sha is the push that creates master: a note, there is no
+    earlier tree. Any other LINT_BASE that does not resolve is an error — CI
+    named a base and it is gone. The default origin/master being unavailable,
+    or a resolved base that has no data/skill-rules.json, is a note, never
+    silence. The file is new in the commit that adds the guard, and a run
+    that guarded nothing has to say so.
+    """
+    base = os.environ.get(LINT_BASE_ENV, "").strip()
+    if base and set(base) == {"0"}:
+        _skill_rules_skip(
+            f"{LINT_BASE_ENV} is the all-zero sha (the push that creates master)")
+        return None
+    label = base or "origin/master"
+    try:
+        base_sha = _git("rev-parse", "--verify", "--quiet", f"{label}^{{commit}}")
+        blob = _git("show", f"{base_sha}:data/skill-rules.json") if base_sha else None
+    except OSError as e:
+        why = f"git failed ({e})"
+        if base:
+            err("data/skill-rules.json",
+                f"{LINT_BASE_ENV}='{base}' does not resolve, so the skill-rules "
+                f"baseline comparison was NOT checked -- {why}")
+        else:
+            _skill_rules_skip(why)
+        return None
+    if not base_sha:
+        why = f"cannot resolve '{label}'"
+        if base:
+            err("data/skill-rules.json",
+                f"{LINT_BASE_ENV}='{base}' does not resolve, so the skill-rules "
+                f"baseline comparison was NOT checked -- {why}")
+        else:
+            _skill_rules_skip(why)
+        return None
+    if not blob:
+        _skill_rules_skip(f"{label} has no data/skill-rules.json")
+        return None
+    try:
+        data = json.loads(blob)
+    except RecursionError:
+        err("data/skill-rules.json",
+            "base skill-rules.json is invalid JSON: nested too deeply")
+        return None
+    except json.JSONDecodeError as e:
+        err("data/skill-rules.json", f"base skill-rules.json is invalid JSON: {e}")
+        return None
+    except ValueError as e:
+        err("data/skill-rules.json", f"base skill-rules.json is invalid JSON: {e}")
+        return None
+    skills = data.get("skills") if isinstance(data, dict) else None
+    if not isinstance(skills, dict):
+        err("data/skill-rules.json", 'base skill-rules.json has no "skills" object')
+        return None
+    return label, skills
+
+
+def _reason_map(spec, key, name):
+    """`reworded` or `retired`: id to a non-empty reason. Shape errors are reported."""
+    if not isinstance(spec, dict) or key not in spec:
+        return {}
+    raw = spec.get(key)
+    if not isinstance(raw, dict):
+        err(name, f"{key} is not an object")
+        return {}
+    out = {}
+    for rid, reason in raw.items():
+        if not isinstance(rid, str) or not rid:
+            err(name, f"{key} has a key that is not a rule id")
+            continue
+        if not isinstance(reason, str) or reason.strip() == "":
+            err(name, f"{key} {rid}: reason is empty")
+            continue
+        out[rid] = reason.strip()
+    return out
+
+
+def _index_rules(rules):
+    """(ids, id -> normalised must_contain) for the well-formed rules in the list."""
+    ids, needles = set(), {}
+    if not isinstance(rules, list):
+        return ids, needles
+    for rule in rules:
+        if not isinstance(rule, dict):
+            continue
+        rid = rule.get("id")
+        if not isinstance(rid, str) or not rid or rid in ids:
+            continue
+        ids.add(rid)
+        needle = rule.get("must_contain")
+        if isinstance(needle, str):
+            needles[rid] = _norm_rule_text(needle)
+    return ids, needles
+
+
+def _hold_skill_rules_to_base(skills):
+    """Ids, their wording, and max_bytes, against the base.
+
+    A missing id is a drop unless `retired` names it with a reason. A changed
+    must_contain must still contain the base wording unless `reworded` names
+    it with a reason. An id in either map that the base does not have is an
+    error, and so is a retired id that is still in the rules. The shape of
+    both maps, and a retired id that is still present, are checked even when
+    the base comparison itself is skipped.
+    """
+    found = _skill_rules_base()
+    label, base_skills = found if found else (None, {})
+    current = {}
+    for name, spec in skills.items():
+        if not isinstance(name, str) or not isinstance(spec, dict):
+            continue
+        reworded = _reason_map(spec, "reworded", name)
+        retired = _reason_map(spec, "retired", name)
+        cur_ids, cur_needles = _index_rules(spec.get("rules"))
+        for rid in retired:
+            if rid in cur_ids:
+                err(name, f"retired {rid}: still present")
+        current[name] = (reworded, retired, cur_ids, cur_needles)
+    if label is None:
+        return
+    seen_base = set()
+    for name, base_spec in base_skills.items():
+        if not isinstance(name, str) or not isinstance(base_spec, dict):
+            continue
+        seen_base.add(name)
+        base_ids, base_needles = _index_rules(base_spec.get("rules"))
+        base_reworded = _reason_map(base_spec, "reworded", name)
+        base_retired = _reason_map(base_spec, "retired", name)
+        reworded, retired, cur_ids, cur_needles = current.get(
+            name, ({}, {}, set(), {}))
+        # A transition record is valid for the change that makes it AND stays valid, unchanged, in the commits after it
+        # (the committed tree is its own next base: a landed retirement must not turn the next lint red). It never
+        # licenses a second change: an id retired in the base may be listed again with the same reason; a reworded id
+        # whose wording changed AGAIN needs a NEW reason.
+        for rid in reworded:
+            if rid not in base_ids:
+                err(name, f"reworded {rid}: not a rule id in {label}")
+            elif (cur_needles.get(rid) == base_needles.get(rid)
+                    and reworded[rid] != base_reworded.get(rid)):
+                err(name, f"reworded {rid}: the wording is unchanged from {label}; remove the entry")
+            elif (cur_needles.get(rid) != base_needles.get(rid)
+                    and reworded[rid] == base_reworded.get(rid)):
+                err(name, f"reworded {rid}: the wording changed again; give a NEW reason (the reason in {label} was for the earlier change)")
+        for rid in retired:
+            if rid not in base_ids and rid not in base_retired:
+                err(name, f"retired {rid}: not a rule id in {label}")
+        for rid in base_ids:
+            if rid not in cur_ids:
+                if rid not in retired:
+                    err(name, f"rule {rid}: dropped compared with {label}")
+                continue
+            old = base_needles.get(rid)
+            new = cur_needles.get(rid)
+            if not isinstance(old, str) or old == "" or not isinstance(new, str):
+                continue
+            if new != old and old not in new and rid not in reworded:
+                err(name, f"rule {rid}: must_contain no longer contains the "
+                          f"wording in {label}; list it in \"reworded\" with a reason")
+        cur = skills.get(name)
+        base_max = base_spec.get("max_bytes")
+        if isinstance(base_max, bool) or not isinstance(base_max, int):
+            continue
+        cur_max = cur.get("max_bytes") if isinstance(cur, dict) else None
+        if isinstance(cur_max, bool) or not isinstance(cur_max, int):
+            continue
+        if cur_max > base_max:
+            err(name, f"max_bytes {cur_max} is above the {base_max} in {label}")
+    for name, (reworded, retired, _ids, _needles) in current.items():
+        if name in seen_base:
+            continue
+        for rid in reworded:
+            err(name, f"reworded {rid}: not a rule id in {label}")
+        for rid in retired:
+            err(name, f"retired {rid}: not a rule id in {label}")
+
+
+def check_skill_rules():
+    """The sentences in data/skill-rules.json stay, and the file does not grow.
+
+    Item 6 moves incident narrative out of the lead skill. A rule that moves
+    with it is a rule the lead may not read. Each must_contain is a clause of
+    at least 24 characters, compared after space/tab/CR/LF are collapsed,
+    unique outside fences, comments, strikethrough and hidden details — or,
+    with in_fence, unique inside the fences. max_bytes is a budget a later
+    trim lowers, so the file may only shrink.
+
+    A text guard is a tripwire for a reviewer, not a proof that a rule's
+    meaning survived.
+    """
+    try:
+        _check_skill_rules()
+    except RecursionError:
+        err("data/skill-rules.json", "invalid JSON: nested too deeply")
+    except ValueError as e:
+        err("data/skill-rules.json", f"invalid JSON: {e}")
+    except OSError as e:
+        err("data/skill-rules.json", f"unreadable: {e}")
+
+
+def _check_skill_rules():
+    path = ROOT / "data" / "skill-rules.json"
+    if not path.is_file():
+        err("data/skill-rules.json", "missing (rule sentences a trim must not drop)")
+        return
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except UnicodeDecodeError as e:
+        err(rel(path), f"invalid JSON: {e}")
+        return
+    except OSError as e:
+        err(rel(path), f"unreadable: {e}")
+        return
+    try:
+        data = json.loads(raw)
+    except RecursionError:
+        err(rel(path), "invalid JSON: nested too deeply")
+        return
+    except json.JSONDecodeError as e:
+        err(rel(path), f"invalid JSON: {e}")
+        return
+    except ValueError as e:
+        # A multi-thousand-digit integer trips the int-string limit inside the
+        # decoder and raises ValueError, not JSONDecodeError. It is still a
+        # bad manifest, and it must not take the rest of the run down with it.
+        err(rel(path), f"invalid JSON: {e}")
+        return
+    skills = data.get("skills") if isinstance(data, dict) else None
+    if not isinstance(skills, dict) or not skills:
+        err(rel(path), 'has no "skills" object')
+        return
+    if LEAD_SKILL_RULES not in skills:
+        err(LEAD_SKILL_RULES, "required (the lead skill's rules)")
+    _hold_skill_rules_to_base(skills)
+
+    for name, spec in skills.items():
+        if not _relative_skill_path(name):
+            err(rel(path), f"{name!r} is not a path inside the repo")
+            continue
+        if not isinstance(spec, dict):
+            err(rel(path), f"{name}: skill entry is not an object")
+            continue
+        rules = spec.get("rules")
+        if not isinstance(rules, list):
+            err(rel(path), f"{name}: rules is not a list")
+            if name == LEAD_SKILL_RULES:
+                err(name, f"has 0 rules, fewer than the {MIN_LEAD_SKILL_RULES}-rule floor")
+            continue
+        if name == LEAD_SKILL_RULES and len(rules) < MIN_LEAD_SKILL_RULES:
+            err(name, f"has {len(rules)} rules, fewer than the "
+                      f"{MIN_LEAD_SKILL_RULES}-rule floor")
+        if not rules:
+            err(rel(path), f"{name}: rules is empty")
+            continue
+        max_bytes = spec.get("max_bytes")
+        if isinstance(max_bytes, bool) or not isinstance(max_bytes, int):
+            err(rel(path), f"{name}: max_bytes is missing or not an integer")
+            continue
+        skill = ROOT / name
+        # resolve() follows symlinks. A lexical path inside the repo can still
+        # name a file outside it; that file is not this skill.
+        try:
+            resolved = skill.resolve()
+            resolved.relative_to(ROOT.resolve())
+        except OSError as e:
+            err(name, f"unreadable: {e}")
+            continue
+        except ValueError:
+            err(name, "resolves outside the repo")
+            continue
+        try:
+            if not skill.is_file():
+                err(name, "missing (named in data/skill-rules.json)")
+                continue
+        except OSError as e:
+            err(name, f"unreadable: {e}")
+            continue
+        try:
+            blob = skill.read_bytes()
+        except OSError as e:
+            err(name, f"unreadable: {e}")
+            continue
+        size = len(_lf_bytes(blob))
+        if size > max_bytes:
+            err(name, f"is {size} bytes, over the {max_bytes}-byte budget")
+        try:
+            # Match the raw text. `\r` is whitespace in _norm_rule_text, so a
+            # CRLF checkout still contains the clause. Fences, comments,
+            # strikethrough and hidden details are masked first: a sentence
+            # that survives only as an example is not the rule.
+            text = blob.decode("utf-8")
+        except UnicodeDecodeError as e:
+            err(name, f"not utf-8: {e}")
+            continue
+        visible, fenced, problems = _mask_skill_regions(text)
+        for problem in problems:
+            err(name, problem)
+        norm_visible = _norm_rule_text(visible)
+        norm_fenced = _norm_rule_text(fenced)
+        seen = set()
+        seen_needles = {}
+        for rule in rules:
+            if not isinstance(rule, dict):
+                err(rel(path), f"{name}: a rule is not an object")
+                continue
+            rid = rule.get("id")
+            if not isinstance(rid, str) or not rid:
+                err(rel(path), f"{name}: a rule has no id")
+                continue
+            if rid in seen:
+                err(name, f"rule {rid}: duplicated id")
+                continue
+            seen.add(rid)
+            in_fence = False
+            if "in_fence" in rule:
+                in_fence = rule.get("in_fence")
+                if not isinstance(in_fence, bool):
+                    err(name, f"rule {rid}: in_fence is not a boolean")
+                    continue
+            needle = rule.get("must_contain")
+            if not isinstance(needle, str):
+                err(name, f"rule {rid}: must_contain is missing")
+                continue
+            needle = _norm_rule_text(needle)
+            if needle == "":
+                err(name, f"rule {rid}: must_contain is empty")
+                continue
+            if len(needle) < MIN_MUST_CONTAIN:
+                err(name, f"rule {rid}: must_contain is {len(needle)} characters, "
+                          f"under the {MIN_MUST_CONTAIN}-character minimum")
+                continue
+            if len(needle) > MUST_CONTAIN_MAX:
+                err(name, f"rule {rid}: must_contain is {len(needle)} characters, "
+                          f"over the {MUST_CONTAIN_MAX}-character limit")
+                continue
+            other = seen_needles.get(needle)
+            if other is not None:
+                err(name, f"rule {rid}: must_contain duplicates rule {other}")
+                continue
+            seen_needles[needle] = rid
+            count = (norm_fenced if in_fence else norm_visible).count(needle)
+            if count == 0:
+                err(name, f"rule {rid}: must_contain is missing")
+            elif count != 1:
+                err(name, f"rule {rid}: must_contain is not unique ({count} times)")
+
+
 #: Every check main() runs, as objects -- so a test can ask whether a check is
 #: RUN, not merely whether its name appears somewhere in main()'s source.
 CHECKS = (check_structure, check_frontmatter, check_manifest,
@@ -1312,7 +1896,7 @@ CHECKS = (check_structure, check_frontmatter, check_manifest,
           check_frozen_target,
           check_delegate_guardrails,
           check_delegate_audit_trails,
-          check_families, check_launch)
+          check_families, check_launch, check_skill_rules)
 
 
 def main():

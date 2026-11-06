@@ -970,6 +970,872 @@ def test_lint_launch():
           any("scopes its effort to role 'reveiw'" in str(e) for e in got), got)
 
 
+# --------------------------------------------------------- lint skill rules ----
+def test_lint_skill_rules():
+    """check_skill_rules(): the lead skill's sentences and its byte budget.
+
+    The sentences are what a later trim must not drop, and the budget is what
+    it must not grow. A guard that only passes the real tree is untested, so
+    each shape below is a tree the check has to reject by name.
+    """
+    sys.path.insert(0, str(SCRIPTS))
+    import lint
+
+    def against(files):
+        with tempfile.TemporaryDirectory() as td:
+            fake = Path(td)
+            for name, body in files.items():
+                path = fake / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                if isinstance(body, bytes):
+                    path.write_bytes(body)
+                else:
+                    path.write_text(body, encoding="utf-8")
+            real = (lint.ROOT, lint.ERRORS, lint.NOTES, os.environ.get("LINT_BASE"))
+            try:
+                # A fixture is not the repo's base. An ambient LINT_BASE would
+                # make every tree fail the "does not resolve" error.
+                lint.ROOT, lint.ERRORS, lint.NOTES = fake, [], []
+                os.environ.pop("LINT_BASE", None)
+                lint.check_skill_rules()
+                return list(lint.ERRORS)
+            finally:
+                lint.ROOT, lint.ERRORS, lint.NOTES = real[0], real[1], real[2]
+                if real[3] is None:
+                    os.environ.pop("LINT_BASE", None)
+                else:
+                    os.environ["LINT_BASE"] = real[3]
+
+    def rules_file(rules, max_bytes, key="skills/lead/SKILL.md"):
+        return json.dumps({"skills": {key: {"max_bytes": max_bytes, "rules": rules}}})
+
+    lead = lint.LEAD_SKILL_RULES
+
+    def padded(n):
+        """n distinct sentences, each the must_contain of its own rule."""
+        rules, lines = [], []
+        for i in range(n):
+            sentence = "Padded lead rule %d must stay." % i
+            lines.append(sentence)
+            rules.append({"id": "pad-%d" % i, "must_contain": sentence})
+        body = "\n".join(lines) + "\n"
+        return body, rules, len(body.encode("utf-8"))
+
+    # HEAD, not origin/master: the comparison has to run against a tree that
+    # has the manifest, whatever this clone has fetched.
+    real = (lint.ERRORS, lint.NOTES, os.environ.get("LINT_BASE"))
+    try:
+        lint.ERRORS, lint.NOTES = [], []
+        os.environ["LINT_BASE"] = "HEAD"
+        lint.check_skill_rules()
+        got, notes = list(lint.ERRORS), list(lint.NOTES)
+    finally:
+        lint.ERRORS, lint.NOTES = real[0], real[1]
+        if real[2] is None:
+            os.environ.pop("LINT_BASE", None)
+        else:
+            os.environ["LINT_BASE"] = real[2]
+    check("skill-rules: the repo's lead skill passes", got == [] and notes == [],
+          (got, notes))
+    check("skill-rules: check_skill_rules is run with the other checks",
+          lint.check_skill_rules in lint.CHECKS)
+
+    sentence = "The lead must never push."
+    body = sentence + "\n"
+    nbytes = len(body.encode("utf-8"))
+    one = [{"id": "no-push", "must_contain": sentence}]
+    pad_body, pad_rules, pad_n = padded(lint.MIN_LEAD_SKILL_RULES)
+    got = against({
+        lead: pad_body,
+        "data/skill-rules.json": rules_file(pad_rules, pad_n, key=lead),
+    })
+    check("skill-rules: a file at its budget, holding its sentences once, passes",
+          got == [], got)
+
+    # The budget is bytes. An em dash is one character and three bytes, so a
+    # ceiling equal to the character count is already over the file.
+    wide = "The lead must never push \u2014 ever.\n"
+    wide_bytes, wide_chars = len(wide.encode("utf-8")), len(wide)
+    got = against({
+        "skills/lead/SKILL.md": wide,
+        "data/skill-rules.json": rules_file(
+            [{"id": "no-push", "must_contain": "must never push \u2014 ever."}], wide_chars),
+    })
+    check("skill-rules: a file over its byte budget names both sizes",
+          any("skills/lead/SKILL.md" in e
+              and "is %d bytes, over the %d-byte budget" % (wide_bytes, wide_chars) in e
+              for e in got), got)
+
+    got = against({
+        "skills/lead/SKILL.md": "The lead must run the suite.\n",
+        "data/skill-rules.json": rules_file(one, 1000),
+    })
+    check("skill-rules: a missing sentence names the file and the rule id",
+          any(e.startswith("skills/lead/SKILL.md:") and "rule no-push:" in e
+              and "must_contain is missing" in e for e in got), got)
+
+    twice = sentence + "\n" + sentence + "\n"
+    got = against({
+        "skills/lead/SKILL.md": twice,
+        "data/skill-rules.json": rules_file(one, len(twice.encode("utf-8"))),
+    })
+    check("skill-rules: a sentence that appears twice is not unique",
+          any("skills/lead/SKILL.md" in e and "rule no-push:" in e
+              and "not unique (2 times)" in e for e in got), got)
+
+    wrapped, wrap_rules, wrap_n = padded(lint.MIN_LEAD_SKILL_RULES)
+    wrap_rules[0] = {"id": "pad-0", "must_contain": "Padded lead\nrule 0 must stay."}
+    wrapped = wrapped.replace("Padded lead rule 0 must stay.", "Padded lead\nrule 0 must stay.", 1)
+    wrap_n = len(wrapped.encode("utf-8"))
+    got = against({
+        lead: wrapped,
+        "data/skill-rules.json": rules_file(wrap_rules, wrap_n, key=lead),
+    })
+    check("skill-rules: a wrapped clause matches a must_contain that contains a newline",
+          got == [], got)
+
+    got = against({"data/skill-rules.json": "{"})
+    check("skill-rules: malformed JSON is reported with the parser's message",
+          any(e.startswith("data/skill-rules.json:") and "invalid JSON" in e for e in got), got)
+
+    got = against({})
+    check("skill-rules: a missing skill-rules.json is named",
+          any(e.startswith("data/skill-rules.json:") and "missing" in e for e in got), got)
+
+    got = against({
+        "data/skill-rules.json": rules_file(one, 1000, key="skills/other/SKILL.md"),
+    })
+    check("skill-rules: a referenced file that is not there is named",
+          any(e == "skills/other/SKILL.md: missing (named in data/skill-rules.json)"
+              for e in got), got)
+
+    got = against({
+        "skills/lead/SKILL.md": body,
+        "data/skill-rules.json": json.dumps(
+            {"skills": {"skills/lead/SKILL.md": {"max_bytes": nbytes, "rules": []}}}),
+    })
+    check("skill-rules: an empty rules list is refused",
+          any("rules is empty" in e for e in got), got)
+
+    got = against({
+        "skills/lead/SKILL.md": body,
+        "data/skill-rules.json": json.dumps(
+            {"skills": {"skills/lead/SKILL.md": {"max_bytes": "10", "rules": one}}}),
+    })
+    check("skill-rules: a non-integer budget is refused",
+          any("max_bytes is missing or not an integer" in e for e in got), got)
+
+    got = against({
+        "skills/lead/SKILL.md": body,
+        "data/skill-rules.json": json.dumps(
+            {"skills": {"skills/lead/SKILL.md": {"max_bytes": True, "rules": one}}}),
+    })
+    check("skill-rules: true is not an integer budget",
+          any("max_bytes is missing or not an integer" in e for e in got), got)
+
+    check("skill-rules: the must_contain cap is 400 characters",
+          lint.MUST_CONTAIN_MAX == 400)
+    long = "y" * (lint.MUST_CONTAIN_MAX + 1)
+    got = against({
+        lead: long + "\n",
+        "data/skill-rules.json": rules_file(
+            [{"id": "long", "must_contain": long}], 10000, key=lead),
+    })
+    check("skill-rules: a must_contain over 400 characters is refused",
+          any("rule long:" in e and "%d characters" % (lint.MUST_CONTAIN_MAX + 1) in e
+              and "%d-character" % lint.MUST_CONTAIN_MAX in e for e in got), got)
+
+    exact = "Z" * lint.MUST_CONTAIN_MAX
+    exact_body, exact_rules, _ = padded(lint.MIN_LEAD_SKILL_RULES - 1)
+    exact_body = exact + "\n" + exact_body
+    exact_rules.append({"id": "exact", "must_contain": exact})
+    got = against({
+        lead: exact_body,
+        "data/skill-rules.json": rules_file(
+            exact_rules, len(exact_body.encode("utf-8")), key=lead),
+    })
+    check("skill-rules: a must_contain of exactly 400 characters passes",
+          got == [], got)
+
+    got = against({
+        "data/skill-rules.json": json.dumps(
+            {"skills": {"../outside.md": {"max_bytes": 1, "rules": one}}}),
+    })
+    check("skill-rules: a path that leaves the repo is refused",
+          any("not a path inside the repo" in e for e in got), got)
+
+    got = against({"data/skill-rules.json": json.dumps({"rules": []})})
+    check("skill-rules: JSON with no skills object is refused",
+          any('has no "skills" object' in e for e in got), got)
+
+    got = against({
+        "skills/lead/SKILL.md": b"\xff",
+        "data/skill-rules.json": rules_file(one, 10),
+    })
+    check("skill-rules: a referenced file that is not utf-8 is named",
+          any(e.startswith("skills/lead/SKILL.md:") and "not utf-8" in e for e in got), got)
+
+    got = against({
+        "skills/lead/SKILL.md": body,
+        "data/skill-rules.json": rules_file(
+            [{"id": "no-push", "must_contain": sentence},
+             {"id": "no-push", "must_contain": sentence}], nbytes),
+    })
+    check("skill-rules: a duplicated rule id is named",
+          any("rule no-push:" in e and "duplicated id" in e for e in got), got)
+
+    got = against({
+        "skills/lead/SKILL.md": body,
+        "data/skill-rules.json": rules_file([{"id": "blank", "must_contain": ""}], nbytes),
+    })
+    check("skill-rules: an empty must_contain is refused",
+          any("rule blank:" in e and "must_contain is empty" in e for e in got), got)
+
+    blank_body, blank_rules, blank_n = padded(lint.MIN_LEAD_SKILL_RULES)
+    blank_rules[0] = {"id": "blank", "must_contain": " \n "}
+    got = against({
+        lead: blank_body,
+        "data/skill-rules.json": rules_file(blank_rules, blank_n, key=lead),
+    })
+    check("skill-rules: a whitespace-only must_contain is empty after normalisation",
+          any("rule blank:" in e and "must_contain is empty" in e for e in got), got)
+
+    # Two rules, one clause. The second needle differs only by a newline, so a
+    # comparison of the raw strings would not see that they are the same needle.
+    shared_body, shared_rules, shared_n = padded(lint.MIN_LEAD_SKILL_RULES)
+    shared_rules.append({"id": "again", "must_contain": "Padded lead\nrule 0 must stay."})
+    got = against({
+        lead: shared_body,
+        "data/skill-rules.json": rules_file(shared_rules, shared_n, key=lead),
+    })
+    check("skill-rules: two rules may not share a needle, even across whitespace",
+          any("rule again: must_contain duplicates rule pad-0" in e for e in got)
+          and not any("not unique" in e for e in got), got)
+
+    other_body, other_rules, other_n = padded(lint.MIN_LEAD_SKILL_RULES)
+    got = against({
+        "skills/other/SKILL.md": other_body,
+        "data/skill-rules.json": rules_file(other_rules, other_n, key="skills/other/SKILL.md"),
+    })
+    check("skill-rules: the lead skill entry is required",
+          any(e == "skills/dev-lead/SKILL.md: required (the lead skill's rules)" for e in got),
+          got)
+    check("skill-rules: the lead-skill floor is 100", lint.MIN_LEAD_SKILL_RULES == 100)
+    short_body, short_rules, short_n = padded(lint.MIN_LEAD_SKILL_RULES - 1)
+    got = against({
+        lead: short_body,
+        "data/skill-rules.json": rules_file(short_rules, short_n, key=lead),
+    })
+    check("skill-rules: fewer than 100 lead rules is refused",
+          any("has %d rules, fewer than the %d-rule floor"
+              % (lint.MIN_LEAD_SKILL_RULES - 1, lint.MIN_LEAD_SKILL_RULES) in e
+              for e in got), got)
+
+    # A CRLF checkout of a wrapped clause. The budget is the LF size, and a
+    # needle that still contains a CR matches the same clause.
+    cr_body, cr_rules, _ = padded(lint.MIN_LEAD_SKILL_RULES)
+    cr_text = cr_body.replace("Padded lead rule 0 must stay.", "Padded lead\nrule 0 must stay.", 1)
+    cr_rules[0] = {"id": "pad-0", "must_contain": "Padded lead\rrule 0 must stay."}
+    cr_lf = len(cr_text.encode("utf-8"))
+    crlf = cr_text.replace("\n", "\r\n").encode("utf-8")
+    got = against({
+        lead: crlf,
+        "data/skill-rules.json": rules_file(cr_rules, cr_lf, key=lead),
+    })
+    check("skill-rules: a CRLF file at the LF budget matches a CR needle", got == [], got)
+    got = against({
+        lead: crlf,
+        "data/skill-rules.json": rules_file(cr_rules, cr_lf - 1, key=lead),
+    })
+    check("skill-rules: a CRLF file over the LF budget reports the LF size",
+          any("is %d bytes, over the %d-byte budget" % (cr_lf, cr_lf - 1) in e for e in got)
+          and not any("is %d bytes" % len(crlf) in e for e in got), got)
+
+    for key in ("/etc/passwd", "C:\\x", "C:/x", "\\\\server\\share"):
+        got = against({
+            "data/skill-rules.json": rules_file(one, 10, key=key),
+        })
+        check("skill-rules: an absolute path is refused (%s)" % key,
+              any("%r is not a path inside the repo" % key in e for e in got), got)
+
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td) / "repo"
+        outside = Path(td) / "outside"
+        root.mkdir()
+        outside.mkdir()
+        link_body, link_rules, link_n = padded(lint.MIN_LEAD_SKILL_RULES)
+        (outside / "SKILL.md").write_text(link_body, encoding="utf-8")
+        (root / "skills").mkdir()
+        (root / "skills" / "dev-lead").symlink_to(outside)
+        (root / "data").mkdir()
+        (root / "data" / "skill-rules.json").write_text(
+            rules_file(link_rules, link_n, key=lead), encoding="utf-8")
+        real_root, real_errors = lint.ROOT, lint.ERRORS
+        try:
+            lint.ROOT, lint.ERRORS = root, []
+            lint.check_skill_rules()
+            got = list(lint.ERRORS)
+        finally:
+            lint.ROOT, lint.ERRORS = real_root, real_errors
+    check("skill-rules: a symlink that resolves outside the repo is refused",
+          any(e == lead + ": resolves outside the repo" for e in got), got)
+
+    nested = '{"a":' * 2000 + "1" + "}" * 2000
+    got = against({"data/skill-rules.json": nested})
+    check("skill-rules: JSON nested past the decoder's limit is a lint error",
+          any(e.startswith("data/skill-rules.json:") and "nested too deeply" in e for e in got),
+          got)
+
+    # The limit is whatever PYTHONINTMAXSTRDIGITS said when the process
+    # started, including 0 (no limit). Set one here so the test does not
+    # depend on it, and put it back.
+    old_digits = sys.get_int_max_str_digits()
+    try:
+        # 640 is the lowest limit the interpreter will enable. A number past
+        # it trips the conversion whatever PYTHONINTMAXSTRDIGITS was, including
+        # 0 (no limit at all).
+        sys.set_int_max_str_digits(640)
+        huge = '{"skills": {"%s": {"max_bytes": %s, "rules": []}}}' % (lead, "9" * 1000)
+        got = against({"data/skill-rules.json": huge})
+    finally:
+        sys.set_int_max_str_digits(old_digits)
+    check("skill-rules: a huge integer is a lint error, not a crash",
+          any(e.startswith("data/skill-rules.json:") and "invalid JSON" in e
+              and "Exceeds the limit" in e for e in got), got)
+
+    long_name = "skills/" + ("b" * 300) + "/SKILL.md"
+    got = against({
+        lead: "unrelated\n",
+        "data/skill-rules.json": json.dumps({"skills": {
+            long_name: {"max_bytes": 10, "rules": [{"id": "x", "must_contain": "y"}]},
+            lead: {"max_bytes": 1000, "rules": [
+                {"id": "no", "must_contain": "The lead must never push."}]},
+        }}),
+    })
+    check("skill-rules: a too-long path is a lint error and the other skill is still checked",
+          any("File name too long" in e for e in got)
+          and any("rule no:" in e and "must_contain is missing" in e for e in got), got)
+
+    if not skip_as_root("skill-rules: an unreadable manifest is a lint error",
+                        "root reads a mode-000 file"):
+        with tempfile.TemporaryDirectory() as td:
+            fake = Path(td)
+            (fake / "data").mkdir()
+            manifest = fake / "data" / "skill-rules.json"
+            manifest.write_text("{}\n", encoding="utf-8")
+            manifest.chmod(0)
+            real_root, real_errors = lint.ROOT, lint.ERRORS
+            try:
+                lint.ROOT, lint.ERRORS = fake, []
+                lint.check_skill_rules()
+                got = list(lint.ERRORS)
+            finally:
+                manifest.chmod(0o644)
+                lint.ROOT, lint.ERRORS = real_root, real_errors
+        check("skill-rules: an unreadable manifest is a lint error",
+              any(e.startswith("data/skill-rules.json:") and "unreadable:" in e for e in got),
+              got)
+
+    orig_loads = lint.json.loads
+
+    def loads_int_key(raw, *args, **kwargs):
+        return {"skills": {9: {"max_bytes": 1, "rules": [{"id": "x", "must_contain": "y"}]}}}
+
+    lint.json.loads = loads_int_key
+    try:
+        got = against({"data/skill-rules.json": "{}", lead: "y\n"})
+    finally:
+        lint.json.loads = orig_loads
+    check("skill-rules: a non-string skill name is refused",
+          any("not a path inside the repo" in e for e in got), got)
+
+    got = against({"data/skill-rules.json": json.dumps({"skills": {lead: "nope"}})})
+    check("skill-rules: a skill entry that is not an object is refused",
+          any("%s: skill entry is not an object" % lead in e for e in got), got)
+
+    got = against({"data/skill-rules.json": json.dumps(
+        {"skills": {lead: {"max_bytes": 1, "rules": {"a": 1}}}})})
+    check("skill-rules: rules that are not a list are refused",
+          any("%s: rules is not a list" % lead in e for e in got), got)
+    check("skill-rules: a lead skill whose rules are not a list fails the floor",
+          any("has 0 rules, fewer than the %d-rule floor" % lint.MIN_LEAD_SKILL_RULES in e
+              for e in got), got)
+
+    obj_body, obj_rules, obj_n = padded(lint.MIN_LEAD_SKILL_RULES)
+    obj_rules[0] = "nope"
+    got = against({
+        lead: obj_body,
+        "data/skill-rules.json": rules_file(obj_rules, obj_n, key=lead),
+    })
+    check("skill-rules: a rule that is not an object is refused",
+          any("a rule is not an object" in e for e in got), got)
+
+    id_body, id_rules, id_n = padded(lint.MIN_LEAD_SKILL_RULES)
+    id_rules[0] = {"id": 3, "must_contain": id_rules[0]["must_contain"]}
+    got = against({
+        lead: id_body,
+        "data/skill-rules.json": rules_file(id_rules, id_n, key=lead),
+    })
+    check("skill-rules: a non-string rule id is refused",
+          any("a rule has no id" in e for e in got), got)
+
+    empty_id_body, empty_id_rules, empty_id_n = padded(lint.MIN_LEAD_SKILL_RULES)
+    empty_id_rules[0] = {"id": "", "must_contain": empty_id_rules[0]["must_contain"]}
+    got = against({
+        lead: empty_id_body,
+        "data/skill-rules.json": rules_file(empty_id_rules, empty_id_n, key=lead),
+    })
+    check("skill-rules: an empty rule id is refused",
+          any("a rule has no id" in e for e in got), got)
+
+    bad_needle_body, bad_needle_rules, bad_needle_n = padded(lint.MIN_LEAD_SKILL_RULES)
+    bad_needle_rules[0] = {"id": "bad", "must_contain": ["Padded lead rule 0 must stay."]}
+    got = against({
+        lead: bad_needle_body,
+        "data/skill-rules.json": rules_file(bad_needle_rules, bad_needle_n, key=lead),
+    })
+    check("skill-rules: a must_contain that is not a string is refused",
+          any("rule bad:" in e and "must_contain is missing" in e for e in got), got)
+
+    check("skill-rules: the must_contain minimum is 24 characters",
+          lint.MIN_MUST_CONTAIN == 24)
+    first = "Padded lead rule 0 must stay."
+    short_body, short_rules, _ = padded(lint.MIN_LEAD_SKILL_RULES)
+    short_sentence = "Y" * (lint.MIN_MUST_CONTAIN - 1)
+    short_body = short_body.replace(first, short_sentence, 1)
+    short_rules[0] = {"id": "pad-0", "must_contain": short_sentence}
+    short_n = len(short_body.encode("utf-8"))
+    got = against({
+        lead: short_body,
+        "data/skill-rules.json": rules_file(short_rules, short_n, key=lead),
+    })
+    check("skill-rules: a must_contain under 24 characters is refused",
+          any("rule pad-0:" in e and "is %d characters" % (lint.MIN_MUST_CONTAIN - 1) in e
+              and "%d-character minimum" % lint.MIN_MUST_CONTAIN in e for e in got), got)
+
+    exact_min = "Y" * lint.MIN_MUST_CONTAIN
+    min_body, min_rules, _ = padded(lint.MIN_LEAD_SKILL_RULES)
+    min_body = min_body.replace(first, exact_min, 1)
+    min_rules[0] = {"id": "pad-0", "must_contain": exact_min}
+    min_n = len(min_body.encode("utf-8"))
+    got = against({
+        lead: min_body,
+        "data/skill-rules.json": rules_file(min_rules, min_n, key=lead),
+    })
+    check("skill-rules: a must_contain of exactly 24 characters passes", got == [], got)
+
+    def hide(wrapper):
+        body, rules, _ = padded(lint.MIN_LEAD_SKILL_RULES)
+        body = body.replace(first, wrapper(first), 1)
+        return body, rules, len(body.encode("utf-8"))
+
+    hidden_body, hidden_rules, hidden_n = hide(lambda s: "```\n" + s + "\n```")
+    got = against({
+        lead: hidden_body,
+        "data/skill-rules.json": rules_file(hidden_rules, hidden_n, key=lead),
+    })
+    check("skill-rules: a rule wrapped in a fence is not the rule",
+          any("rule pad-0:" in e and "must_contain is missing" in e for e in got)
+          and not any("unbalanced fence" in e for e in got), got)
+    fenced_rules = [dict(r) for r in hidden_rules]
+    fenced_rules[0] = dict(fenced_rules[0], in_fence=True)
+    got = against({
+        lead: hidden_body,
+        "data/skill-rules.json": rules_file(fenced_rules, hidden_n, key=lead),
+    })
+    check("skill-rules: in_fence matches a rule that lives in the fence", got == [], got)
+
+    prose_body, prose_rules, prose_n = padded(lint.MIN_LEAD_SKILL_RULES)
+    prose_rules[0] = dict(prose_rules[0], in_fence=True)
+    got = against({
+        lead: prose_body,
+        "data/skill-rules.json": rules_file(prose_rules, prose_n, key=lead),
+    })
+    check("skill-rules: in_fence does not match a rule that lives in prose",
+          any("rule pad-0:" in e and "must_contain is missing" in e for e in got), got)
+
+    tilde_body, tilde_rules, tilde_n = hide(lambda s: "~~~\n" + s + "\n~~~")
+    got = against({
+        lead: tilde_body,
+        "data/skill-rules.json": rules_file(tilde_rules, tilde_n, key=lead),
+    })
+    check("skill-rules: a rule wrapped in a tilde fence is not the rule",
+          any("rule pad-0:" in e and "must_contain is missing" in e for e in got), got)
+
+    comment_body, comment_rules, comment_n = hide(lambda s: "<!-- " + s + " -->")
+    got = against({
+        lead: comment_body,
+        "data/skill-rules.json": rules_file(comment_rules, comment_n, key=lead),
+    })
+    check("skill-rules: a rule wrapped in an HTML comment is not the rule",
+          any("rule pad-0:" in e and "must_contain is missing" in e for e in got)
+          and not any("unclosed HTML comment" in e for e in got), got)
+
+    open_body, open_rules, _ = padded(lint.MIN_LEAD_SKILL_RULES)
+    open_body = "<!--\n" + open_body
+    open_n = len(open_body.encode("utf-8"))
+    got = against({
+        lead: open_body,
+        "data/skill-rules.json": rules_file(open_rules, open_n, key=lead),
+    })
+    check("skill-rules: an unclosed HTML comment is an error",
+          any("unclosed HTML comment" in e for e in got), got)
+
+    strike_body, strike_rules, strike_n = hide(lambda s: "~~" + s + "~~")
+    got = against({
+        lead: strike_body,
+        "data/skill-rules.json": rules_file(strike_rules, strike_n, key=lead),
+    })
+    check("skill-rules: a rule wrapped in strikethrough is not the rule",
+          any("rule pad-0:" in e and "must_contain is missing" in e for e in got), got)
+
+    details_body, details_rules, details_n = hide(
+        lambda s: "<details hidden>" + s + "</details>")
+    got = against({
+        lead: details_body,
+        "data/skill-rules.json": rules_file(details_rules, details_n, key=lead),
+    })
+    check("skill-rules: a rule wrapped in <details hidden> is not the rule",
+          any("rule pad-0:" in e and "must_contain is missing" in e for e in got), got)
+
+    bare_body, bare_rules, _ = padded(lint.MIN_LEAD_SKILL_RULES)
+    bare_body = "```\n" + bare_body
+    bare_n = len(bare_body.encode("utf-8"))
+    got = against({
+        lead: bare_body,
+        "data/skill-rules.json": rules_file(bare_rules, bare_n, key=lead),
+    })
+    check("skill-rules: an unbalanced fence is an error",
+          any("unbalanced fence" in e for e in got), got)
+
+    nbsp_body, nbsp_rules, _ = padded(lint.MIN_LEAD_SKILL_RULES)
+    nbsp_body = nbsp_body.replace(first, first.replace(" ", "\u00a0"), 1)
+    nbsp_n = len(nbsp_body.encode("utf-8"))
+    got = against({
+        lead: nbsp_body,
+        "data/skill-rules.json": rules_file(nbsp_rules, nbsp_n, key=lead),
+    })
+    check("skill-rules: a non-breaking space does not match an ASCII space",
+          any("rule pad-0:" in e and "must_contain is missing" in e for e in got), got)
+
+    cr_body, cr_only_rules, _ = padded(lint.MIN_LEAD_SKILL_RULES)
+    cr_body = cr_body.replace(first, "Padded lead\rrule 0 must stay.", 1)
+    cr_n = len(cr_body.encode("utf-8"))
+    got = against({
+        lead: cr_body,
+        "data/skill-rules.json": rules_file(cr_only_rules, cr_n, key=lead),
+    })
+    check("skill-rules: a lone CR is whitespace between the words of a clause",
+          got == [], got)
+
+    shape_body, shape_rules, shape_n = padded(lint.MIN_LEAD_SKILL_RULES)
+
+    def shape(extra):
+        entry = {"max_bytes": shape_n, "rules": shape_rules}
+        entry.update(extra)
+        return against({
+            lead: shape_body,
+            "data/skill-rules.json": json.dumps({"skills": {lead: entry}}),
+        })
+
+    got = shape({"reworded": "nope"})
+    check("skill-rules: reworded must be an object",
+          any("reworded is not an object" in e for e in got), got)
+    got = shape({"retired": []})
+    check("skill-rules: retired must be an object",
+          any("retired is not an object" in e for e in got), got)
+    got = shape({"retired": {"pad-0": "  "}})
+    check("skill-rules: a retired reason must be non-empty",
+          any("retired pad-0: reason is empty" in e for e in got), got)
+    got = shape({"reworded": {"pad-0": ""}})
+    check("skill-rules: a reworded reason must be non-empty",
+          any("reworded pad-0: reason is empty" in e for e in got), got)
+    got = shape({"retired": {"pad-0": "moved to the reference"}})
+    check("skill-rules: a retired id that is still present is refused",
+          any("retired pad-0: still present" in e for e in got), got)
+
+    # The base is a temp git repo, the same way the version-move tests name one.
+    # 101 rules so dropping one id still clears the floor and the drop is the
+    # only error.
+    with tempfile.TemporaryDirectory() as td:
+        repo = Path(td)
+        parent = make_repo(repo, commits=1)[0]
+        base_body, base_rules, base_n = padded(lint.MIN_LEAD_SKILL_RULES + 1)
+        (repo / "skills" / "dev-lead").mkdir(parents=True)
+        skill = repo / lead
+        skill.write_text(base_body, encoding="utf-8")
+        (repo / "data").mkdir()
+        manifest = repo / "data" / "skill-rules.json"
+        manifest.write_text(rules_file(base_rules, base_n, key=lead), encoding="utf-8")
+        git(repo, "add", "-A")
+        git(repo, "commit", "-qm", "guard")
+        base = git(repo, "rev-parse", "HEAD").stdout.strip()
+
+        def run(base_value):
+            real = (lint.ROOT, lint.ERRORS, lint.NOTES, os.environ.get("LINT_BASE"))
+            try:
+                lint.ROOT, lint.ERRORS, lint.NOTES = repo, [], []
+                if base_value is None:
+                    os.environ.pop("LINT_BASE", None)
+                else:
+                    os.environ["LINT_BASE"] = base_value
+                lint.check_skill_rules()
+                return list(lint.ERRORS), list(lint.NOTES)
+            finally:
+                lint.ROOT, lint.ERRORS, lint.NOTES = real[0], real[1], real[2]
+                if real[3] is None:
+                    os.environ.pop("LINT_BASE", None)
+                else:
+                    os.environ["LINT_BASE"] = real[3]
+
+        def restore():
+            skill.write_text(base_body, encoding="utf-8")
+            manifest.write_text(rules_file(base_rules, base_n, key=lead), encoding="utf-8")
+
+        def lead_doc(rules, max_bytes, **extra):
+            entry = {"max_bytes": max_bytes, "rules": rules}
+            entry.update(extra)
+            return json.dumps({"skills": {lead: entry}})
+
+        def commit_base(text):
+            manifest.write_text(text, encoding="utf-8")
+            git(repo, "add", "-A")
+            git(repo, "commit", "-qm", "base shape")
+            return git(repo, "rev-parse", "HEAD").stdout.strip()
+
+        got, notes = run(base)
+        check("skill-rules: the base revision's own tree passes",
+              got == [] and notes == [], (got, notes))
+
+        # The manifest has lost a rule the base still has. A comparison that
+        # ran would report the drop; a skip has to say why it did not.
+        kept = [r for r in base_rules if r["id"] != "pad-0"]
+        manifest.write_text(rules_file(kept, base_n, key=lead), encoding="utf-8")
+        got, notes = run(parent)
+        check("skill-rules: a base with no skill-rules.json is a note, not a pass",
+              got == [] and any(
+                  n.startswith("skill-rules baseline comparison skipped:")
+                  and parent in n and "has no data/skill-rules.json" in n
+                  for n in notes)
+              and not any("dropped" in e for e in got),
+              (got, notes))
+        got, notes = run("0" * 40)
+        check("skill-rules: an all-zero LINT_BASE skips with a note",
+              got == [] and any(
+                  n.startswith("skill-rules baseline comparison skipped:")
+                  and "all-zero" in n for n in notes)
+              and not any("dropped" in e for e in got),
+              (got, notes))
+        got, notes = run(None)
+        check("skill-rules: no git base skips with a note naming origin/master",
+              got == [] and any(
+                  n.startswith("skill-rules baseline comparison skipped:")
+                  and "cannot resolve 'origin/master'" in n for n in notes)
+              and not any("dropped" in e for e in got),
+              (got, notes))
+        fake = "deadbeef" * 5
+        got, notes = run(fake)
+        check("skill-rules: a LINT_BASE that does not resolve is an error",
+              any("LINT_BASE='%s' does not resolve" % fake in e for e in got)
+              and not any("dropped" in e for e in got),
+              (got, notes))
+
+        def boom(*_args, **_kwargs):
+            raise OSError("boom")
+
+        orig_git = lint._git
+        lint._git = boom
+        try:
+            got, notes = run(base)
+        finally:
+            lint._git = orig_git
+        check("skill-rules: a git OSError while reading the base is an error",
+              any("git failed" in e and "boom" in e for e in got)
+              and not any("dropped" in e for e in got),
+              (got, notes))
+        restore()
+
+        manifest.write_text(rules_file(kept, base_n, key=lead), encoding="utf-8")
+        got, notes = run(base)
+        check("skill-rules: a rule id dropped from the base is refused",
+              any("rule pad-0: dropped compared with %s" % base in e for e in got),
+              (got, notes))
+        restore()
+
+        edited = "Edited lead rule 0 must stay."
+        edited_body = base_body.replace("Padded lead rule 0 must stay.", edited, 1)
+        edited_rules = [dict(r) for r in base_rules]
+        edited_rules[0] = {"id": "pad-0", "must_contain": edited}
+        skill.write_text(edited_body, encoding="utf-8")
+        manifest.write_text(rules_file(edited_rules, base_n, key=lead), encoding="utf-8")
+        got, notes = run(base)
+        check("skill-rules: a changed must_contain that drops the base wording is refused",
+              any("rule pad-0:" in e and "no longer contains the wording in %s" % base in e
+                  for e in got),
+              (got, notes))
+        manifest.write_text(lead_doc(
+            edited_rules, base_n, reworded={"pad-0": "reworded the clause"}))
+        got, notes = run(base)
+        check("skill-rules: reworded with a reason allows a changed must_contain",
+              got == [] and notes == [], (got, notes))
+        restore()
+
+        prefix_rules = [dict(r) for r in base_rules]
+        prefix_rules[0] = {"id": "pad-0", "must_contain": "Padded lead rule 0 must"}
+        prefix = commit_base(rules_file(prefix_rules, base_n, key=lead))
+        restore()
+        got, notes = run(prefix)
+        check("skill-rules: a must_contain that still contains the base wording passes",
+              got == [] and notes == [], (got, notes))
+
+        manifest.write_text(lead_doc(
+            base_rules, base_n, reworded={"invented-id": "because"}))
+        got, notes = run(base)
+        check("skill-rules: a reworded id that is not in the base is refused",
+              any("reworded invented-id: not a rule id in %s" % base in e for e in got),
+              (got, notes))
+        manifest.write_text(lead_doc(
+            base_rules, base_n, retired={"invented-id": "because"}))
+        got, notes = run(base)
+        check("skill-rules: a retired id that is not in the base is refused",
+              any("retired invented-id: not a rule id in %s" % base in e for e in got),
+              (got, notes))
+        manifest.write_text(lead_doc(
+            kept, base_n, retired={"pad-0": "moved to the reference"}))
+        got, notes = run(base)
+        check("skill-rules: retiring a base id with a reason is allowed",
+              got == [] and notes == [], (got, notes))
+        kept_two = [r for r in base_rules if r["id"] not in ("pad-0", "pad-1")]
+        manifest.write_text(lead_doc(
+            kept_two, base_n,
+            retired={"pad-0": "moved out", "pad-1": "moved out"}))
+        got, notes = run(base)
+        check("skill-rules: retiring under the floor is still refused",
+              any("has %d rules, fewer than the %d-rule floor"
+                  % (len(kept_two), lint.MIN_LEAD_SKILL_RULES) in e for e in got)
+              and not any("dropped" in e for e in got),
+              (got, notes))
+        restore()
+
+        # The lifecycle: a transition record is valid for the change that makes it AND in the commits after it (the
+        # committed tree is its own next base), but it never licenses a second change.
+        landed_retire = commit_base(lead_doc(kept, base_n, retired={"pad-0": "moved to the reference"}))
+        manifest.write_text(lead_doc(kept, base_n, retired={"pad-0": "moved to the reference"}))
+        got, notes = run(landed_retire)
+        check("skill-rules: a landed retirement does not turn the next lint red (the base already lists it)",
+              got == [], (got, notes))
+        restore()
+        skill.write_text(edited_body, encoding="utf-8")                  # the rewording landed in the skill AND the manifest
+        landed_reword = commit_base(lead_doc(edited_rules, base_n, reworded={"pad-0": "reworded the clause"}))
+        manifest.write_text(lead_doc(edited_rules, base_n, reworded={"pad-0": "reworded the clause"}))
+        got, notes = run(landed_reword)
+        check("skill-rules: a landed rewording, unchanged since, stays valid",
+              got == [], (got, notes))
+        again_rules = [dict(r) for r in edited_rules]
+        again = "Edited again lead rule 0 ok."
+        again_rules[0] = {"id": "pad-0", "must_contain": again}
+        skill.write_text(edited_body.replace(edited, again, 1), encoding="utf-8")
+        manifest.write_text(lead_doc(again_rules, base_n, reworded={"pad-0": "reworded the clause"}))
+        got, notes = run(landed_reword)
+        check("skill-rules: changing the wording AGAIN under the old reason is refused (a new reason is needed)",
+              any("reworded pad-0: the wording changed again; give a NEW reason" in e for e in got), (got, notes))
+        manifest.write_text(lead_doc(again_rules, base_n, reworded={"pad-0": "a fresh reason for this change"}))
+        got, notes = run(landed_reword)
+        check("skill-rules: ...and with a new reason it is accepted", got == [], (got, notes))
+        skill.write_text(edited_body, encoding="utf-8")
+        manifest.write_text(lead_doc(edited_rules, base_n, reworded={"pad-0": "an unrelated new entry"}))
+        got, notes = run(landed_reword)
+        check("skill-rules: a new reworded entry for wording that did not change is refused as unnecessary",
+              any("reworded pad-0: the wording is unchanged" in e and "remove the entry" in e for e in got), (got, notes))
+        restore()
+
+        other = "skills/other/SKILL.md"
+        alpha = "The other skill must keep this alpha sentence intact."
+        beta = "The other skill must keep this beta sentence intact."
+        other_body = alpha + "\n" + beta + "\n"
+        other_rules = [
+            {"id": "alpha", "must_contain": alpha},
+            {"id": "beta", "must_contain": beta},
+        ]
+        other_n = len(other_body.encode("utf-8"))
+        (repo / "skills" / "other").mkdir(parents=True)
+        (repo / other).write_text(other_body, encoding="utf-8")
+        both = {"skills": {
+            lead: {"max_bytes": base_n, "rules": base_rules},
+            other: {"max_bytes": other_n, "rules": other_rules},
+        }}
+        two = commit_base(json.dumps(both))
+        dropped_beta = {"skills": {
+            lead: both["skills"][lead],
+            other: {"max_bytes": other_n, "rules": [other_rules[0]]},
+        }}
+        manifest.write_text(json.dumps(dropped_beta), encoding="utf-8")
+        got, notes = run(two)
+        check("skill-rules: a rule dropped from the second skill is refused",
+              any("%s: rule beta: dropped compared with %s" % (other, two) in e
+                  for e in got)
+              and not any("rule pad-0: dropped" in e for e in got),
+              (got, notes))
+        manifest.write_text(json.dumps(
+            {"skills": {lead: both["skills"][lead]}}), encoding="utf-8")
+        got, notes = run(two)
+        check("skill-rules: deleting a whole skill entry reports the dropped rules",
+              any("%s: rule alpha: dropped compared with %s" % (other, two) in e
+                  for e in got)
+              and any("%s: rule beta: dropped compared with %s" % (other, two) in e
+                      for e in got),
+              (got, notes))
+        restore()
+
+        nested = '{"a":' * 2000 + "1" + "}" * 2000
+        nested_sha = commit_base(nested)
+        restore()
+        got, notes = run(nested_sha)
+        check("skill-rules: a base nested past the decoder's limit is a lint error",
+              any(e.startswith("data/skill-rules.json:")
+                  and "base skill-rules.json is invalid JSON: nested too deeply" in e
+                  for e in got),
+              (got, notes))
+        skills_list = commit_base(json.dumps({"skills": []}))
+        restore()
+        got, notes = run(skills_list)
+        check("skill-rules: a base whose skills value is not an object is refused",
+              any('base skill-rules.json has no "skills" object' in e for e in got),
+              (got, notes))
+        true_budget = json.loads(rules_file(base_rules, base_n, key=lead))
+        true_budget["skills"][lead]["max_bytes"] = True
+        true_sha = commit_base(json.dumps(true_budget))
+        restore()
+        got, notes = run(true_sha)
+        check("skill-rules: a boolean max_bytes in the base is not a number to beat",
+              got == [] and not any("is above" in e for e in got),
+              (got, notes))
+        restore()
+
+        manifest.write_text(rules_file(base_rules, base_n + 50, key=lead), encoding="utf-8")
+        got, notes = run(base)
+        check("skill-rules: raising max_bytes above the base is refused",
+              any("max_bytes %d is above the %d in %s" % (base_n + 50, base_n, base) in e
+                  for e in got)
+              and not any("over the" in e for e in got),
+              (got, notes))
+        restore()
+
+        skill.write_text(base_body[:-1], encoding="utf-8")
+        manifest.write_text(rules_file(base_rules, base_n - 1, key=lead), encoding="utf-8")
+        got, notes = run(base)
+        check("skill-rules: a lower budget with a smaller file passes",
+              got == [] and notes == [], (got, notes))
+        restore()
+
+        extra = list(base_rules) + [
+            {"id": "extra", "must_contain": "Padded lead rule 0 must stay"}]
+        manifest.write_text(rules_file(extra, base_n, key=lead), encoding="utf-8")
+        got, notes = run(base)
+        check("skill-rules: a new rule id is allowed",
+              got == [] and notes == [], (got, notes))
+
+
 # ------------------------------------------------------ lint: the plain checks ----
 def _lint_against(files, *checks, git=False):
     """Run lint checks against a synthetic tree and return their errors.
@@ -15922,6 +16788,7 @@ def sections():
             ("lint.py check_leaf_rule", test_lint_leaf_rule),
             ("lint.py check_launch", test_lint_launch),
             ("lint.py timeout block", test_lint_timeout_block),
+            ("lint.py check_skill_rules", test_lint_skill_rules),
             ("lint.py plain checks (structure, frontmatter, manifest, links, fences, var_order, tracked, "
              "sentinels, families)", test_lint_plain_checks),
             ("lint.py check_delegate_guardrails", test_lint_delegate_guardrails),

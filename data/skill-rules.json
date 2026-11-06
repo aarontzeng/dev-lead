@@ -1,0 +1,928 @@
+{
+  "_comment": [
+    "Rule sentences the lead skill must still contain, and a byte budget",
+    "it must not grow past. scripts/lint.py check_skill_rules reads this.",
+    "",
+    "A text guard is a tripwire for a reviewer, not a proof that a rule's",
+    "meaning survived. Read the diff. What is collapsed before matching is",
+    "only runs of spaces, tabs, and newlines (CR or LF); a non-breaking",
+    "space does not stand in for an ordinary space. Fenced code, HTML",
+    "comments, strikethrough, and <details hidden> are masked out of the",
+    "match. A needle that lives in a bash block sets in_fence true and is",
+    "matched only inside fences; every other needle must match outside them.",
+    "An anchor is a whole clause of at least 24 characters.",
+    "",
+    "Against the base revision, an id's must_contain may change only when",
+    "the new wording still contains the old, or the id is listed in reworded",
+    "with a non-empty reason. An id may disappear only when it is listed in",
+    "retired with a non-empty reason. max_bytes may not rise. Both maps sit",
+    "on the skill, next to rules. A reworded or retired id that is not in",
+    "the base is an error, and a retired id that is still present is an",
+    "error. The lead-skill floor stays 100 rules.",
+    "",
+    "Each must_contain is one clause, unique in its region after that",
+    "whitespace collapse, at most 400 characters. max_bytes is the LF size",
+    "of the skill; a trim lowers it in the same change. The file may only",
+    "shrink, and a Windows CRLF checkout is measured as LF."
+  ],
+  "skills": {
+    "skills/dev-lead/SKILL.md": {
+      "max_bytes": 60780,
+      "rules": [
+        {
+          "id": "host-runs-mutations-itself",
+          "must_contain": "must be able to run the suite and execute mutations ITSELF"
+        },
+        {
+          "id": "no-silent-elevation",
+          "must_contain": "never silently substitute elevation for a failed default sandbox."
+        },
+        {
+          "id": "do-not-trust-system-prompt-identity",
+          "must_contain": "Do not trust a system prompt's \"you are powered by X\" line when lead identity matters"
+        },
+        {
+          "id": "model-field-is-source-of-truth",
+          "must_contain": "read the transcript's per-message model field, which is the source of truth."
+        },
+        {
+          "id": "falsifiable-questions",
+          "must_contain": "Split the problem into falsifiable questions, not topics."
+        },
+        {
+          "id": "settled-decisions-verbatim",
+          "must_contain": "decisions in the brief verbatim"
+        },
+        {
+          "id": "completeness-rerun",
+          "must_contain": "of results it returned; we will re-run it."
+        },
+        {
+          "id": "no-research-skill",
+          "must_contain": "`*-research` skill and there should not be"
+        },
+        {
+          "id": "forbid-commits-and-edits",
+          "must_contain": "forbid commits and tracked-file edits"
+        },
+        {
+          "id": "test-fails-against-unmutated",
+          "must_contain": "shown to fail against unmutated source before it counts."
+        },
+        {
+          "id": "plan-nothing-unverified",
+          "must_contain": "Nothing a leg returns enters the plan unverified."
+        },
+        {
+          "id": "legs-never-write-plan",
+          "must_contain": "**Legs never write plan prose.** The lead writes the plan."
+        },
+        {
+          "id": "refuse-to-dispatch",
+          "must_contain": "Refuse to dispatch until the task has:"
+        },
+        {
+          "id": "risk-assessment-overrides-table",
+          "must_contain": "A repo plan's own dated risk assessment overrides this table"
+        },
+        {
+          "id": "triage-only-raises",
+          "must_contain": "it only raises. The tables still decide"
+        },
+        {
+          "id": "premise-check-claims",
+          "must_contain": "premise-check the task's factual claims"
+        },
+        {
+          "id": "plan-precedes-dispatch",
+          "must_contain": "the plan document precedes dispatch."
+        },
+        {
+          "id": "premortem-when-deleting",
+          "must_contain": "**Premortem — for HIGH risk, and for any task that deletes or disables existing behavior.** Before writing the task brief, run one prompt against the plan:"
+        },
+        {
+          "id": "premortem-medium-deletion",
+          "must_contain": "Deletion-shaped tasks get the premortem even at MEDIUM"
+        },
+        {
+          "id": "never-absorb-unverified",
+          "must_contain": "labeled as an unverified assumption for the delegate and reviewers to check — never silently absorbed as a requirement."
+        },
+        {
+          "id": "family-collision-is-a-stop",
+          "must_contain": "or two reviewers sharing a family — is a stop."
+        },
+        {
+          "id": "never-drop-a-leg",
+          "must_contain": "Never drop a leg silently."
+        },
+        {
+          "id": "do-not-invent-a-model",
+          "must_contain": "ask, do not invent a model."
+        },
+        {
+          "id": "pick-a-registered-model",
+          "must_contain": "unregistered, which no family clears: pick a registered model."
+        },
+        {
+          "id": "fix-round-family-is-relative",
+          "must_contain": "cross-family requirement is relative to who implemented THAT"
+        },
+        {
+          "id": "fix-legs-other-family",
+          "must_contain": "come from a family other than the fix's author."
+        },
+        {
+          "id": "launch-via-leg-cmd",
+          "must_contain": "Compose every launch command with the suite's `leg-cmd.sh`, never from recall."
+        },
+        {
+          "id": "scripts-never-target-cwd",
+          "must_contain": "the suite's scripts never resolve against the target repo's cwd."
+        },
+        {
+          "id": "probe-one-real-call",
+          "must_contain": "\"cheap\" means one real call, never a listing."
+        },
+        {
+          "id": "high-risk-lead-implements",
+          "must_contain": "**the lead implements directly** — delegation adds a supervision layer exactly where supervision is hardest"
+        },
+        {
+          "id": "switch-rewrites-the-prompt",
+          "must_contain": "Switching families mid-run rewrites the task prompt, not just the"
+        },
+        {
+          "id": "reread-task-prompt-on-switch",
+          "must_contain": "Re-read the target skill's task-prompt section on every switch."
+        },
+        {
+          "id": "never-unreachable-scope",
+          "must_contain": "never hand a delegate a scope it cannot REACH."
+        },
+        {
+          "id": "shell-forbidden-name-files",
+          "must_contain": "Where shell is forbidden, name the files explicitly"
+        },
+        {
+          "id": "confirm-allow-list",
+          "must_contain": "on THAT family's allow-list before it goes in the preamble."
+        },
+        {
+          "id": "run-pinned-command-yourself",
+          "must_contain": "command in the worktree yourself, provision what it needs"
+        },
+        {
+          "id": "compare-totals-digit-for-digit",
+          "must_contain": "reported total to your baseline digit for digit."
+        },
+        {
+          "id": "rerun-tests-a-round-turns-on",
+          "must_contain": "Re-run the specific tests a round turns on"
+        },
+        {
+          "id": "never-symlink-shared-dir",
+          "must_contain": "Never symlink the lead's copy of a shared directory"
+        },
+        {
+          "id": "sanitized-nothing-secret",
+          "must_contain": "minimum and nothing secret"
+        },
+        {
+          "id": "cross-family-absolute",
+          "must_contain": "the cross-family rule is absolute"
+        },
+        {
+          "id": "never-review-leads-own-family",
+          "must_contain": "Never review the lead's work with the lead's own family — even through a different CLI"
+        },
+        {
+          "id": "high-risk-two-reviewers",
+          "must_contain": "two independent reviewers from two families"
+        },
+        {
+          "id": "medium-take-second-reviewer",
+          "must_contain": "take the second reviewer anyway."
+        },
+        {
+          "id": "default-wide-not-minimum",
+          "must_contain": "default WIDE, not minimum"
+        },
+        {
+          "id": "change-the-brief",
+          "must_contain": "change the BRIEF, not just the model."
+        },
+        {
+          "id": "challenge-never-find-defects",
+          "must_contain": "never phrased as \"find defects\""
+        },
+        {
+          "id": "brief-per-family",
+          "must_contain": "A brief is written PER FAMILY. It is not a template"
+        },
+        {
+          "id": "preamble-per-adapter",
+          "must_contain": "write the lens once, the preamble four times."
+        },
+        {
+          "id": "rewrite-voids-bracket",
+          "must_contain": "voids that leg's scaffold bracket."
+        },
+        {
+          "id": "premise-as-checked-claim",
+          "must_contain": "State each premise as a claim with a check next to it"
+        },
+        {
+          "id": "check-before-the-brief",
+          "must_contain": "Run the check before writing the brief"
+        },
+        {
+          "id": "green-suite-wrong-premise",
+          "must_contain": "A green suite built from a wrong premise is evidence of nothing."
+        },
+        {
+          "id": "parallel-only-zero-files",
+          "must_contain": "only when the slices share **zero files**"
+        },
+        {
+          "id": "commit-shared-layer-first",
+          "must_contain": "the lead writes and COMMITS the shared layer first"
+        },
+        {
+          "id": "do-not-share-review-brief",
+          "must_contain": "Do not share a review brief across slices"
+        },
+        {
+          "id": "two-green-legs-not-a-merge",
+          "must_contain": "two green legs are not a green merge, they are two green legs."
+        },
+        {
+          "id": "rounds-max-three",
+          "must_contain": "`ROUNDS_MAX = 3` implementation rounds by default (R1 + two fix rounds)"
+        },
+        {
+          "id": "review-only-still-has-rounds",
+          "must_contain": "A review that did not come from an implement round still has rounds."
+        },
+        {
+          "id": "quote-findings-verbatim",
+          "must_contain": "quote each verified finding **verbatim,"
+        },
+        {
+          "id": "background-the-work",
+          "must_contain": "Background the WORK, not the launch."
+        },
+        {
+          "id": "never-inner-background",
+          "must_contain": "hand it over directly and never add"
+        },
+        {
+          "id": "one-call-per-leg",
+          "must_contain": "one backgrounded call PER LEG, not one call"
+        },
+        {
+          "id": "no-hand-rolled-poll",
+          "must_contain": "Do not substitute a hand-rolled poll loop between turns."
+        },
+        {
+          "id": "leaf-wait-is-not-waiting",
+          "must_contain": "\"wait for the monitor\" is not waiting"
+        },
+        {
+          "id": "never-trust-self-report",
+          "must_contain": "never from the delegate's self-report."
+        },
+        {
+          "id": "uncommitted-range-false-green",
+          "must_contain": "FIRST inspect the working tree itself (`git status --short`, `git diff` — a `$BASE...HEAD` range on an uncommitted tree is empty and reads as a clean scope check, a measured false green), re-run the tests, THEN the lead stages in-scope paths and makes the checkpoint commit, and only then do ranged checks"
+        },
+        {
+          "id": "mutation-proof-new-tests",
+          "must_contain": "mutation-proof every new regression test"
+        },
+        {
+          "id": "grep-copies-before-edit",
+          "must_contain": "grep for its copies BEFORE you"
+        },
+        {
+          "id": "restore-invalidates-verification",
+          "must_contain": "A working-tree restore invalidates every verification behind it"
+        },
+        {
+          "id": "never-checkout-shared-tree",
+          "must_contain": "never `git checkout` to undo your own"
+        },
+        {
+          "id": "which-test-goes-red",
+          "must_contain": "if this sentence were false, which test goes"
+        },
+        {
+          "id": "silent-audit-not-evidence",
+          "must_contain": "a silent run is not evidence"
+        },
+        {
+          "id": "commit-before-mutation",
+          "must_contain": "The three that bite earliest: **commit before any mutation**"
+        },
+        {
+          "id": "mutation-on-a-committed-tree",
+          "must_contain": "**commit before any mutation** (a restore on an uncommitted tree erases the work)"
+        },
+        {
+          "id": "never-chain-verdict",
+          "must_contain": "never `&&`-chain the test run into the verdict echo"
+        },
+        {
+          "id": "marker-in-its-own-command",
+          "must_contain": "**put the marker check in its own command** (a timeout kills the restore, and the mutant stays)."
+        },
+        {
+          "id": "frozen-for-the-whole-run",
+          "must_contain": "**The reviewed directory must be FROZEN for the whole run** — a detached worktree at the exact commit, that nothing else touches."
+        },
+        {
+          "id": "bare-scripts-exits-127",
+          "must_contain": "Use the tested helpers rather than hand-rolling this — it is the repo's highest-risk shell, and every bug ever found in it was in a hand-rolled copy"
+        },
+        {
+          "id": "agy-review-needs-clone",
+          "must_contain": "An agy leg needs a self-contained clone, not the worktree"
+        },
+        {
+          "id": "triage-before-every-review",
+          "must_contain": "Triage the immutable target before launching every review round"
+        },
+        {
+          "id": "medium-two-unconditional",
+          "must_contain": "MEDIUM's minimum of two is unconditional here"
+        },
+        {
+          "id": "read-the-legs-exit-line",
+          "must_contain": "Tear the frozen directories down only after every leg has actually returned, and read the leg's own exit line rather than the wrapper's."
+        },
+        {
+          "id": "findings-are-hypotheses",
+          "must_contain": "hypotheses: verify each against the code"
+        },
+        {
+          "id": "record-every-finding",
+          "must_contain": "record **every** finding in the run log."
+        },
+        {
+          "id": "rejection-needs-equal-evidence",
+          "must_contain": "the same grade the finding needed"
+        },
+        {
+          "id": "judged-wrong-is-not-rejection",
+          "must_contain": "\"I judged it wrong\" is not a rejection"
+        },
+        {
+          "id": "lead-fixes-are-unreviewed",
+          "must_contain": "What the lead fixes directly never gets reviewed"
+        },
+        {
+          "id": "docs-fix-without-a-leg",
+          "must_contain": "only a documentation fix goes without a leg"
+        },
+        {
+          "id": "push-before-rereview",
+          "must_contain": "A fix exercised for real may be pushed before its re-review"
+        },
+        {
+          "id": "rereview-still-runs",
+          "must_contain": "the re-review still runs at the rung"
+        },
+        {
+          "id": "do-not-merge-open-high",
+          "must_contain": "Cap reached with verified HIGH findings open → keep the worktree, present the findings history, let the user decide. Do not merge."
+        },
+        {
+          "id": "non-blockers-no-new-full-round",
+          "must_contain": "findings that are not blockers do not"
+        },
+        {
+          "id": "blocker-always-another-round",
+          "must_contain": "A blocker always gets another round"
+        },
+        {
+          "id": "lead-implementer-inverts",
+          "must_contain": "When the lead IS the implementer, that escalation inverts"
+        },
+        {
+          "id": "delegate-fix-or-stop",
+          "must_contain": "Delegate the fix round, or stop and hand the findings to the user."
+        },
+        {
+          "id": "same-finding-lead-fixes",
+          "must_contain": "transmit it; lead fixes it directly."
+        },
+        {
+          "id": "rewrite-instead-of-accretion",
+          "must_contain": "the unit from its requirements instead, and review THAT."
+        },
+        {
+          "id": "boundary-before-review-fires",
+          "must_contain": "Write the boundary before the review is FIRED, not after it"
+        },
+        {
+          "id": "reverify-target-identity",
+          "must_contain": "Re-verify the target branch's IDENTITY at the gate"
+        },
+        {
+          "id": "never-switch-to-no-ff",
+          "must_contain": "never switch to `--no-ff` to get past it."
+        },
+        {
+          "id": "gate-is-what-show-prints",
+          "must_contain": "Which gate is in force is what `roster.py show` prints"
+        },
+        {
+          "id": "neither-mode-changes-green",
+          "must_contain": "**Neither mode changes what counts as green**: a verdict with an unanswered review round, a failing test, an open blocker or an unverified finding goes to the person in both."
+        },
+        {
+          "id": "not-green-goes-to-person",
+          "must_contain": "a verdict with an unanswered review round, a failing test, an open blocker or an unverified finding goes to the person in both."
+        },
+        {
+          "id": "stricter-contract-wins",
+          "must_contain": "A repo's own contract wins where it is stricter"
+        },
+        {
+          "id": "land-only-after-proceed",
+          "must_contain": "only after the user says proceed. The human approves the RESULT — the verdict and the diff — not the intention"
+        },
+        {
+          "id": "no-second-may-i-push",
+          "must_contain": "no second \"may I push?\" (rule changed 2026-09-11: the ask had been answered yes every time and gated nothing the verdict did not)"
+        },
+        {
+          "id": "never-force-push-or-foreign-branch",
+          "must_contain": "never a force-push, never someone else's branch"
+        },
+        {
+          "id": "verdict-is-the-approval",
+          "must_contain": "the verdict IS the approval"
+        },
+        {
+          "id": "non-green-falls-back",
+          "must_contain": "non-green condition falls back to the user gate."
+        },
+        {
+          "id": "auto-merge-never-remembered",
+          "must_contain": "per-run, never remembered."
+        },
+        {
+          "id": "delegates-never-push",
+          "must_contain": "Delegates never push, in every mode, no exceptions."
+        },
+        {
+          "id": "push-never-before-green",
+          "must_contain": "The lead's push above is the only one, and it happens after the approval, never before a green verdict."
+        },
+        {
+          "id": "log-as-events-happen",
+          "must_contain": "not reconstructed afterward"
+        },
+        {
+          "id": "log-the-refuting-evidence",
+          "must_contain": "for each rejection, the evidence that"
+        },
+        {
+          "id": "worktree-is-resume-state",
+          "must_contain": "preserved worktree is the resume state."
+        },
+        {
+          "id": "dispatch-three-fields",
+          "must_contain": "Record every delegate dispatch as three separate fields"
+        },
+        {
+          "id": "served-model-not-the-id-passed",
+          "must_contain": "silently substitute tiers), not the id you passed"
+        },
+        {
+          "id": "unknown-never-satisfies",
+          "must_contain": "accounting_valid: false`) can never satisfy the"
+        },
+        {
+          "id": "small-task-one-implementation",
+          "must_contain": "direct implementation should get one"
+        },
+        {
+          "id": "phase0-acceptance-criteria",
+          "must_contain": "**Acceptance criteria** concrete enough to verify mechanically."
+        },
+        {
+          "id": "phase0-scope",
+          "must_contain": "**Scope**: the files/directories a correct change should touch."
+        },
+        {
+          "id": "phase0-risk-class",
+          "must_contain": "**Risk class** — decides everything downstream:"
+        },
+        {
+          "id": "risk-high",
+          "must_contain": "**HIGH**: auth, money, concurrency, data loss, notification delivery, anything with an offline/partial-failure path."
+        },
+        {
+          "id": "risk-medium",
+          "must_contain": "**MEDIUM**: behavior changes with test coverage, bounded refactors."
+        },
+        {
+          "id": "risk-low",
+          "must_contain": "**LOW**: mechanical changes, test-only, docs-adjacent code."
+        },
+        {
+          "id": "premortem-prompt",
+          "must_contain": "*\"Assume this change shipped and failed — we are in the postmortem. List the scenarios we forgot to consider.\"*"
+        },
+        {
+          "id": "fix-of-sizes-the-delta",
+          "must_contain": "`triage.py scope --fix-of <the head the last round reviewed>` sizes it by the fix's delta"
+        },
+        {
+          "id": "fix-of-ladder-prose",
+          "must_contain": "documentation only takes the lead's own read, a small fix with a failing-before test and a killed mutation per finding takes one leg, anything else takes the range's minimum."
+        },
+        {
+          "id": "fix-of-adds-to-scope",
+          "must_contain": "A fix round of your own change adds `--fix-of <the head the previous round reviewed>` to `scope`"
+        },
+        {
+          "id": "fix-of-rung-wording",
+          "must_contain": "| wording | none: the lead's own read |"
+        },
+        {
+          "id": "fix-of-rung-tested",
+          "must_contain": "stated as `--fix-tested '<which tests, which mutations>'` | tested | one cross-family leg |"
+        },
+        {
+          "id": "fix-of-rung-full",
+          "must_contain": "| anything else, or a delta a `delta_triggers` rule raises to HIGH | full | the range's minimum (at least HIGH's for a trigger) |"
+        },
+        {
+          "id": "fix-of-latest-head",
+          "must_contain": "`--fix-of` must name the head of the latest round recorded for the change; an older head is refused, since the count would restart."
+        },
+        {
+          "id": "scope-without-fix-of",
+          "must_contain": "A `scope` without `--fix-of` (or a `change`) will not replace a fix-round record."
+        },
+        {
+          "id": "fix-of-third-round-blocker",
+          "must_contain": "From the third fix round on, a full round needs `--blocker '<the finding>'`"
+        },
+        {
+          "id": "fix-of-binds-the-gate",
+          "must_contain": "The gate binds rounds sized with `--fix-of`: triaging a fix as a change of its own takes the full legs and no gate"
+        },
+        {
+          "id": "no-triage-owners-word",
+          "must_contain": "Going below the minimum is `--no-triage '<reason>'` only with the owner's word, and records that exception."
+        },
+        {
+          "id": "round-check-before-complete",
+          "must_contain": "run `triage.py round-check --head \"$REVIEW_HEAD\" --target \"$FROZEN_DIR\" --leg <adapter>[:<family>]=<log> [--expect <verdict-regex>]` for every leg before treating the round as complete."
+        },
+        {
+          "id": "route-high-or-next",
+          "must_contain": "**Route**: no verified HIGH findings → merge gate. Verified findings → next round."
+        },
+        {
+          "id": "route-lead-fixes-in-place",
+          "must_contain": "Small, precisely diagnosed defects (a fake test, a stray trailer) the lead fixes directly in-place — a delegation round for a one-line fix costs more than it protects."
+        },
+        {
+          "id": "fix-churn-lead-takes-over",
+          "must_contain": "A fix round introduces a **new** HIGH finding (fix churn) → the spec or the delegate is wrong for this task; lead takes over or stops."
+        },
+        {
+          "id": "findings-inside-previous-fix",
+          "must_contain": "**Round N's findings land inside round N−1's fixes** → stop patching."
+        },
+        {
+          "id": "falsifiability-lens-for-a-guard",
+          "must_contain": "Give that last one to a leg whenever the change ADDS a guard or a gate, because a green suite is equally convincing whether or not the suite is able to go red"
+        },
+        {
+          "id": "rebutted-file",
+          "must_contain": "Write the findings already rebutted or recorded as known limits, each with its answer, to `$RUN_DIR/rebutted.md` beside the brief."
+        },
+        {
+          "id": "rebutted-do-not-reraise",
+          "must_contain": "receive that file under an instruction not to raise those points again without something new."
+        },
+        {
+          "id": "systemd-run-without-wait-returns",
+          "must_contain": "`systemd-run --user --collect …` returns once the unit has started, not when the leg has finished"
+        },
+        {
+          "id": "systemd-run-wait-blocks",
+          "must_contain": "Launch it as the waiting form instead -- `systemd-run --user --wait --collect --quiet --unit=<name> … <runner> …` -- which blocks until the unit has ended"
+        },
+        {
+          "id": "one-directory-per-reviewer",
+          "must_contain": "One directory per reviewer, no lead activity inside it."
+        },
+        {
+          "id": "dev-lead-root-resolution",
+          "must_contain": "DEV_LEAD=${DEV_LEAD_ROOT:-$(ls -d \"$HOME\"/.claude/plugins/cache/dev-lead/dev-lead/* 2>/dev/null | sort -V | tail -1)}",
+          "in_fence": true
+        },
+        {
+          "id": "freeze-target-command",
+          "must_contain": "REVIEW_HEAD=$(\"$DEV_LEAD/scripts/freeze-target.sh\" \"$REPO\" \"$SHA\" \"$FROZEN_DIR\")",
+          "in_fence": true
+        },
+        {
+          "id": "verify-target-command",
+          "must_contain": "\"$DEV_LEAD/scripts/verify-target.sh\" \"$FROZEN_DIR\" \"$REVIEW_HEAD\"",
+          "in_fence": true
+        },
+        {
+          "id": "dev-lead-root-unresolved",
+          "must_contain": "dev-lead root unresolved (no $helper) — set DEV_LEAD_ROOT to your checkout",
+          "in_fence": true
+        },
+        {
+          "id": "read-worktree-provisioning",
+          "must_contain": "[`references/worktree-provisioning.md`](references/worktree-provisioning.md)"
+        },
+        {
+          "id": "read-claim-audit",
+          "must_contain": "[`references/claim-audit.md`](references/claim-audit.md)"
+        },
+        {
+          "id": "read-mutation-runbook",
+          "must_contain": "**[`references/mutation-runbook.md`](references/mutation-runbook.md)** — read it before this step."
+        },
+        {
+          "id": "host-cannot-lead",
+          "must_contain": "If the host cannot run the repo's tests and mutations natively, it does not lead that repo."
+        },
+        {
+          "id": "roster-override-not-written-back",
+          "must_contain": "A model the user names for this round overrides the roster for this round only (`--implement agy=<model>[:<family>]`) and is reported as an override; it is not written back."
+        },
+        {
+          "id": "fix-round-passes-round-fix",
+          "must_contain": "A fix round passes `--round fix`."
+        },
+        {
+          "id": "name-the-models-real-family",
+          "must_contain": "names another family than the one given (`agy=claude-opus-5-5:Gemini`) -- name the model's real family"
+        },
+        {
+          "id": "stealth-family-unverifiable",
+          "must_contain": "cross-family is UNVERIFIABLE — any reviewer might secretly share its family. Prefer a named-family implementer when accounting matters"
+        },
+        {
+          "id": "not-deepseek",
+          "must_contain": "**NOT DeepSeek** — measured 2026-09-16, it is absent from this account's free pool and consent-gated on the paid one"
+        },
+        {
+          "id": "rereview-mid-tier",
+          "must_contain": "a mid tier is enough — the changes follow written findings; save the frontier tier for open-ended hunts"
+        },
+        {
+          "id": "merge-serially",
+          "must_contain": "**Merge serially, gate once more.** Land the legs one at a time onto the integration branch (`--no-ff`, so each leg's history stays legible)"
+        },
+        {
+          "id": "leaf-poll-inside-one-call",
+          "must_contain": "For a leaf the blocking poll the lead must avoid is exactly the right answer, provided it lives *inside a single tool call*"
+        },
+        {
+          "id": "restore-then-reread",
+          "must_contain": "So after ANY restore, stash, or reset in the worktree, re-read the diff against the message, re-run the suite, and re-run the mutations, all against the **committed** tree."
+        },
+        {
+          "id": "launch-base-must-match-record",
+          "must_contain": "When a record has `base`, a launch's `--base` must match it"
+        },
+        {
+          "id": "diff-no-leg-saw",
+          "must_contain": "Say in the run log which parts of the final diff no leg ever saw."
+        },
+        {
+          "id": "spend-scarce-model-on-review",
+          "must_contain": "when one model is scarce, spend it on **review**, not implementation"
+        },
+        {
+          "id": "premise-even-when-obvious",
+          "must_contain": "Do this even when the premise is \"obviously\" true."
+        },
+        {
+          "id": "one-waiter-per-leg",
+          "must_contain": "**One waiter per leg**, each backgrounded on its own; a single poll loop waiting for \"both\" cannot tell which finished."
+        },
+        {
+          "id": "zero-byte-output-means-running",
+          "must_contain": "a 0-byte output file means *running*, not dead"
+        },
+        {
+          "id": "agent-instruction-not-wording",
+          "must_contain": "not an agent instruction file -- `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `QUANTA.md`, `SKILL.md`"
+        },
+        {
+          "id": "clear-host-residue",
+          "must_contain": "\"$DEV_LEAD/scripts/clear-host-residue.sh\" \"$FROZEN_DIR\""
+        },
+        {
+          "id": "absent-roster-means-user-gate",
+          "must_contain": "Absent means `user`, and so does any roster `check` would refuse: `show` then prints INVALID and the person's gate"
+        },
+        {
+          "id": "per-run-ask-me-anyway",
+          "must_contain": "A per-run \"ask me anyway\" likewise overrides a configured `lead` for that run: the person can always take the gate back."
+        },
+        {
+          "id": "prefer-not-to-create-a-leaf",
+          "must_contain": "**But the stronger move is to not create a leaf at all.**"
+        },
+        {
+          "id": "leaf-phrases-are-not-end-states",
+          "must_contain": "*\"I'll report once the notification arrives\"* and *\"still running, continuing to wait\"*. Neither is a valid end state for a leaf."
+        },
+        {
+          "id": "commit-audit-before-freeze",
+          "must_contain": "Commit what the audit changed before the target is frozen, and mutation-proof any test it produced."
+        },
+        {
+          "id": "grep-the-expression-itself",
+          "must_contain": "before changing any decision expression — a verdict, a guard, a comparison a test's result turns on — `grep -rn` the expression itself, not just its surrounding prose."
+        },
+        {
+          "id": "parallel-brief-carries-premises",
+          "must_contain": "**The parallel brief carries the lead's premises twice as far.**"
+        },
+        {
+          "id": "fix-round-names-leads-error",
+          "must_contain": "the fix-round brief says so — \"this was the lead's error, not yours\""
+        },
+        {
+          "id": "stale-context-is-not-closed",
+          "must_contain": "This does not close the stale-context hole, and saying otherwise > would be the same overclaim twice"
+        },
+        {
+          "id": "run-leg-cmd-once-per-leg",
+          "must_contain": "Run it once per leg at dispatch and paste what it prints."
+        },
+        {
+          "id": "low-risk-skips-premortem",
+          "must_contain": "LOW-risk mechanical work skips it — this is one prompt, not a new phase."
+        },
+        {
+          "id": "unmatched-files-are-a-gap",
+          "must_contain": "`unmatched_files` means the local rules have a gap worth fixing."
+        },
+        {
+          "id": "same-category-is-unbounded",
+          "must_contain": "The same finding CATEGORY keeps reopening against approximation-shaped code → the review property is unbounded, not the code unfixable."
+        },
+        {
+          "id": "agy-clone-fourth-argument",
+          "must_contain": "add `--clone` as the fourth argument"
+        },
+        {
+          "id": "tear-clone-down-with-rm",
+          "must_contain": "Tear a clone down with `rm -rf`, not `git worktree remove`."
+        },
+        {
+          "id": "launch-cursor-from-frozen-cwd",
+          "must_contain": "Launch cursor-type adapters from inside the frozen worktree, because they review their caller cwd."
+        },
+        {
+          "id": "kill-and-relaunch-or-void",
+          "must_contain": "Kill and relaunch, or record in the run log that the bracket is void for that leg and why."
+        },
+        {
+          "id": "delegate-fixes-get-rereview",
+          "must_contain": "only a documentation fix goes without a leg, and a code fix within `small_delta_lines` gets one leg only when the mutation standard you hold the delegate's work to is met and stated."
+        },
+        {
+          "id": "blocker-refuses-third-full-round",
+          "must_contain": "`triage.py scope --fix-of` refuses a third full fix round without `--blocker '<the finding>'`, and records the statement."
+        },
+        {
+          "id": "same-finding-prompt-is-failing",
+          "must_contain": "The same finding survives two fix rounds → the task prompt is failing to transmit it; lead fixes it directly."
+        },
+        {
+          "id": "subagent-leaf-abandons-the-run",
+          "must_contain": "a leaf that ends its turn to \"wait for the monitor\" is not waiting — it has silently abandoned the run"
+        },
+        {
+          "id": "provision-is-sanitized",
+          "must_contain": "**\"Provision\" is not \"copy the real one.\"** The delegate gets a sanitized minimum and nothing secret"
+        },
+        {
+          "id": "fix-tested-is-your-statement",
+          "must_contain": "`--fix-tested` and `--blocker` are your statements: the record and `round-check` carry them verbatim, and nothing checks them."
+        },
+        {
+          "id": "lower-minimum-needs-no-no-triage",
+          "must_contain": "so a lower minimum here needs no `--no-triage`; the report names the rung."
+        },
+        {
+          "id": "phase0-triage-scope-files",
+          "must_contain": "If a `triage.json` exists, run `\"$DEV_LEAD/scripts/triage.py\" scope --files <planned paths>`"
+        },
+        {
+          "id": "phase0-scope-files-for-a-risk-floor",
+          "must_contain": "`\"$DEV_LEAD/scripts/triage.py\" scope --files <planned paths>` for a risk floor and lenses"
+        },
+        {
+          "id": "cross-family-own-change",
+          "must_contain": "implementer's family never reviews its own change"
+        },
+        {
+          "id": "user-can-set-rounds-max",
+          "must_contain": "the user can set it at invocation"
+        },
+        {
+          "id": "premortem-hypotheses-not-findings",
+          "must_contain": "Premortem output is hypotheses, not findings."
+        },
+        {
+          "id": "premortem-verify-named-scenario",
+          "must_contain": "Verify each named scenario against the actual code before it shapes the brief"
+        },
+        {
+          "id": "fix-of-excludes-agent-instruction-files",
+          "must_contain": "not an agent instruction file -- `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `QUANTA.md`, `SKILL.md` and their variants"
+        },
+        {
+          "id": "fix-of-excludes-instruction-globs",
+          "must_contain": "`*instructions*` / `*prompt*` files, anything under `.claude/`, `skills/` and the other agent directories README lists"
+        },
+        {
+          "id": "stop-conditions",
+          "must_contain": "**Stop conditions** (report instead of looping):"
+        },
+        {
+          "id": "report-says-mode-was-lead",
+          "must_contain": "Report says the mode was `lead` and names what made the verdict green"
+        },
+        {
+          "id": "report-mode-is-auditable",
+          "must_contain": "so the person reading it afterwards can audit the decision they delegated"
+        },
+        {
+          "id": "head-is-only-an-assertion",
+          "must_contain": "`--head` is only an assertion and must resolve to that same HEAD."
+        },
+        {
+          "id": "rebase-onto-moved-target",
+          "must_contain": "Rebase the branch onto the moved target and re-run the ff."
+        },
+        {
+          "id": "main-checkout-assumed-to-move",
+          "must_contain": "The human owns the main checkout; assume it moves."
+        },
+        {
+          "id": "say-the-cap-out-loud",
+          "must_contain": "Say the cap out loud at the start"
+        },
+        {
+          "id": "cap-without-it-has-no-end",
+          "must_contain": "without it a review-fix-review loop has no defined end and stops when the lead happens to feel finished, which is not a criterion."
+        },
+        {
+          "id": "never-add-inner-ampersand",
+          "must_contain": "an inner `&`/`nohup … &`, which makes the host task exit at launch and discards the notification."
+        },
+        {
+          "id": "spell-out-in-the-dispatch-prompt",
+          "must_contain": "Spell this out in the dispatch prompt"
+        },
+        {
+          "id": "leaf-that-only-follows-launch",
+          "must_contain": "the review skills describe how to *launch*, and a leaf that follows only that stops one step early."
+        },
+        {
+          "id": "triage-every-round-including-fix",
+          "must_contain": "Triage the immutable target before launching every review round, including fix rounds."
+        },
+        {
+          "id": "merge-gate-lead-green-verdict",
+          "must_contain": "on a fully green verdict the verdict IS the approval — merge, push, tear down, and report what landed and why it qualified. Any non-green condition falls back to the user gate."
+        },
+        {
+          "id": "merge-gate-lead-names-what-made-green",
+          "must_contain": "Report says the mode was `lead` and names what made the verdict green, so the person reading it afterwards can audit the decision they delegated."
+        },
+        {
+          "id": "refs-snapshot-is-the-evidence",
+          "must_contain": "which is why all four carry the fail-closed refs snapshot diffed at handoff as the evidence"
+        },
+        {
+          "id": "verify-target-before-and-after",
+          "must_contain": "verify-target.sh\" \"$FROZEN_DIR\" \"$REVIEW_HEAD\" # before AND after",
+          "in_fence": true
+        }
+      ]
+    }
+  }
+}
