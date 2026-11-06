@@ -5,12 +5,15 @@
 
 leg-cmd.sh puts this in front of an argv-delivered paid command when it composes for Windows. A prompt passed as an argument
 failed above about 32 KB with `Argument list too long`, wrote an empty report and still exited 0, which read as a clean leg
-(Win-Lead, 2026-11-06). The limit is on the SERIALISED command line in UTF-16 code units (CreateProcess: 32767), not on the
-file's bytes, so this measures what is actually sent:
+(Win-Lead, 2026-11-06). Two limits apply on the Git Bash path and this takes the larger of the two measures:
 
-  * UTF-16 units, not UTF-8 bytes: a Chinese brief is 3 bytes a character but 1 unit, and must not be refused for its bytes;
-  * the argument quoting Windows applies (CommandLineToArgvW rules): the argument is wrapped in quotes, each `"` becomes `\\"`,
-    and a run of backslashes before a `"` is doubled -- a quote-dense brief grows by up to 2x;
+  * Git Bash's own exec limit counts UTF-8 BYTES of the argument, the same for Chinese and ASCII -- measured on a real Windows
+    (Win-Lead, 2026-11-07, one argument to python.exe): 32500 bytes ran, 32700 failed with `Argument list too long`; a
+    10800-character Chinese brief (32400 bytes) ran, 10900 characters (32700 bytes) failed. UTF-16 units under-count a Chinese
+    brief threefold, which is why a 12000-character brief passed the first version of this guard and then died in bash;
+  * CreateProcess's 32767 UTF-16 units of the SERIALISED command line, with the argument quoting Windows applies
+    (CommandLineToArgvW rules): the argument is wrapped in quotes, each `"` becomes `\\"`, and a run of backslashes before a `"`
+    is doubled -- a quote-dense brief grows by up to 2x, which its bytes do not show;
   * `<extra-units>`: the rest of the command line, which leg-cmd.sh knows when it composes (the CLI, its flags, any
     --add-dir, the timeout wrapper) plus a margin for the paths its shell variables expand to.
 
@@ -38,6 +41,11 @@ def serialised_units(text):
     return units + extra
 
 
+def measured_size(text):
+    """The larger of the two measures (see the module doc): UTF-8 bytes (Git Bash's exec limit) and serialised UTF-16 units."""
+    return max(len(text.encode("utf-8", "surrogatepass")), serialised_units(text))
+
+
 def main(argv):
     if len(argv) != 2:
         print("usage: argv-size.py <file> <extra-units>", file=sys.stderr)
@@ -50,10 +58,11 @@ def main(argv):
     except (OSError, ValueError) as exc:
         print("leg-cmd: cannot measure the brief %s: %s" % (path, exc), file=sys.stderr)
         return 2
-    size = serialised_units(text) + extra
+    size = measured_size(text) + extra
     if size > LIMIT:
         print("leg-cmd: the brief would make a %d-unit Windows command line, over the %d limit (Windows passes the prompt as one "
-              "command-line argument: UTF-16 units after quoting, plus the rest of the command, about 32 KB in all). Shorten "
+              "command-line argument: the larger of its UTF-8 bytes and its quoted UTF-16 units, plus the rest of the command, "
+              "about 32 KB in all; a Chinese character costs 3). Shorten "
               "the brief, or put the bulk in a file inside the target and tell the leg to read it; for a framed leg give the "
               "retry a FRESH --run-dir (the evidence directory already exists)." % (size, LIMIT), file=sys.stderr)
         return 1

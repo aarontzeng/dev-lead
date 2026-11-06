@@ -9516,7 +9516,8 @@ def test_leg_cmd_windows_argv_limit():
     """Windows (a peer, 2026-11-06): an argv brief past about 32 KB dies with `Argument list too long` and the wrapper still
     exits 0, so an empty report reads as a clean leg. The emitted chain runs scripts/argv-size.py before the paid CLI: it
     measures the SERIALISED command line in UTF-16 units (argument quoting included, plus the rest of the command), not the
-    file's bytes -- a Chinese brief is not refused for its UTF-8 bytes and a quote-dense one is not passed on its raw size.
+    file's size: the larger of its UTF-8 bytes (Git Bash's exec limit, measured on a real Windows: a Chinese character costs 3) and its
+    quoted UTF-16 units (CreateProcess: a quote-dense brief grows), plus the rest of the command.
     Unframed argv measures the brief (prompt.md, or task.md for implement); framed argv measures framed-prompt.md, which is
     larger than the lens. stdin and prompt_file are not arguments, and off Windows the guard is absent."""
     script = SCRIPTS / "leg-cmd.sh"
@@ -9530,9 +9531,14 @@ def test_leg_cmd_windows_argv_limit():
                             ('"', 1 + 2 + 1, "a quote is escaped (+1)"),
                             ('\\"', 2 + 2 + 1 + 1, "a backslash before a quote is doubled (+1) and the quote escaped (+1)"),
                             ("a\\", 2 + 2 + 1, "a trailing backslash run is doubled: it precedes the closing quote"),
-                            ("\u4e2d" * 10, 10 + 2, "a Chinese character is ONE unit, not three bytes"),
+                            ("\u4e2d" * 10, 10 + 2, "a Chinese character is ONE UTF-16 unit"),
                             ("\U0001F600", 2 + 2, "an astral character is two UTF-16 units")):
         got = asz.serialised_units(text)
+        check("argv-size: %s" % why, got == want, "%r -> %d, want %d" % (text, got, want))
+    for text, want, why in (("\u4e2d" * 10, 30, "measured_size: ten Chinese characters are 30 bytes (the larger measure)"),
+                            ('"' * 10, 10 * 2 + 2, "measured_size: ten quotes are 22 quoted units, more than their 10 bytes"),
+                            ("abc", 5, "measured_size: plain ASCII is its quoted units (bytes 3 < units 5)")):
+        got = asz.measured_size(text)
         check("argv-size: %s" % why, got == want, "%r -> %d, want %d" % (text, got, want))
     with tempfile.TemporaryDirectory() as td:
         td = Path(td)
@@ -9579,9 +9585,13 @@ def test_leg_cmd_windows_argv_limit():
               ran.returncode != 0 and not started and re.search(r"would make a \d+-unit Windows command line, over the 32000 limit", ran.stderr)
               and "Shorten the brief" in ran.stderr and "tell the leg to read it" in ran.stderr and "FRESH --run-dir" in ran.stderr,
               "%s %s" % (ran.returncode, ran.stderr))
-        ran, started = attempt(("中" * 12000).encode("utf-8"), "cjk")       # 36000 bytes, 12000 units
-        check("leg-cmd windows argv: 12000 Chinese characters (36000 bytes) are NOT refused for their bytes",
+        ran, started = attempt(("中" * 9500).encode("utf-8"), "cjk-fits")    # 28500 bytes: fits
+        check("leg-cmd windows argv: 9500 Chinese characters (28500 bytes) run the CLI",
               ran.returncode == 0 and started, "%s %s" % (ran.returncode, ran.stderr))
+        ran, started = attempt(("中" * 12000).encode("utf-8"), "cjk")        # 36000 bytes, only 12000 UTF-16 units
+        check("leg-cmd windows argv: 12000 Chinese characters (36000 bytes, 12000 UTF-16 units) ARE refused: Git Bash counts bytes "
+              "(Win-Lead measured 10900 characters failing on a real Windows)",
+              ran.returncode != 0 and not started and "unit Windows command line" in ran.stderr, "%s %s" % (ran.returncode, ran.stderr))
         ran, started = attempt(b'"' * 17000, "quotes")                        # 17000 bytes, but ~34000 units once escaped
         check("leg-cmd windows argv: 17000 double quotes (17000 bytes) ARE refused: Windows escapes each one",
               ran.returncode != 0 and not started and "unit Windows command line" in ran.stderr, "%s %s" % (ran.returncode, ran.stderr))
