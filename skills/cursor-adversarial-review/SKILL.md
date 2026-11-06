@@ -92,6 +92,10 @@ running" abandons the review. Poll to exit inside a single tool call, and
 issue another immediately if it times out ([dev-lead Phase
 2](../dev-lead/SKILL.md)). Budget for it: a measured `-xhigh` code review took
 48 minutes against ~9 for a `-high` document review the same day.
+Launched through `leg-cmd.sh` (the mandated path) the leg is capped from [`launch.json`](../../data/launch.json): the
+`# timeout:` line on stderr names the number, and a stop at the cap exits 124 and is not a verdict that the leg hung --
+`--output-format json` prints nothing until the end, so rerun with a larger `--timeout <minutes>`. The raw command above
+has no cap at all; if you run it by hand, put [`with-timeout.py`](../../scripts/with-timeout.py) in front of it.
 
 Role-specific choices:
 

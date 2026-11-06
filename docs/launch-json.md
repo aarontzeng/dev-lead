@@ -26,6 +26,30 @@ are comments.
 | `add_dir_verified` / `add_dir_note` | When the flag was probed, or (for an adapter without one) what to do instead. The note is the refusal's message. |
 | `model_prefix` / `model_prefix_note` | The SUGGESTED provider segment for a bare model id (`opencode/`). `leg-cmd.sh` requires SOME provider segment and offers this one; the note records why it is not "the required prefix". |
 
+## `timeout`
+
+A wall-clock cap on the paid command, in minutes. It is a POLICY value, not a CLI fact (the 2026-09-08 pass removed an
+invented agy timeout; agy's real one is its own `--print-timeout`, in the argv), and its job is to end a leg that is
+really hung, so every number is generous. [`scripts/leg-cmd.sh`](../scripts/leg-cmd.sh) puts
+[`scripts/with-timeout.py`](../scripts/with-timeout.py) in front of the CLI -- after the framing builder and the
+lockdown check, which are not paid and not capped.
+
+| key | meaning |
+|---|---|
+| `review` / `implement` | The adapter's default per role, in minutes. Both required (`lint.py` checks). `null` means no cap, and then `no_cap.<role>` must say why: codex `implement` is the companion's `task --background`, which returns as soon as the job is accepted, so a cap on it would stop nothing (the wait is `scripts/await-codex-job.sh`; its deadline stops waiting, it does not cancel the job). The render says `# timeout: none (no cap on ...)`, so nobody believes one is running. |
+| `overrides` | A list, **first match wins**. `model` is an `fnmatch` glob on the id exactly as given to `--model` (so `*-xhigh*` must come before `*-high*`); `effort` (optional) must equal the `--effort` value, for adapters that take effort as a flag; `role` (optional) limits it to one role; `minutes`; `why` is required and records the measurement behind the number. |
+| `note` | Free text. |
+
+`leg-cmd.sh --timeout <minutes>` beats all of it for one launch (fractions are fine; `inf`, `nan`, a negative, and a value
+that underflows to 0 or overflows when converted to seconds are refused -- one validator, `with-timeout.py`'s `parse_minutes`,
+serves the flag and the wrapper); `--timeout 0` emits no cap and says so on stderr. A leg that left the process group
+(`setsid`) is found through its parent links and stopped with the rest; a signal aimed at the wrapper stops the leg and exits 128+N. The render prints `# timeout: N min (<where it came from>)` so a lead sees the number before launching.
+
+A launch stopped by the cap exits 124 and prints that it was the wrapper's limit, **not** a verdict that the leg was
+hung: `cursor-agent --output-format json` writes nothing until it finishes, so a long healthy run looks exactly like
+this. The starting numbers come from the calibration journals and the 2026-11-06 grok-4.7-high review (28 min on a
+12K-line file); raise one when a healthy leg is stopped, and write the `why`.
+
 ## `effort`
 
 | key | meaning |

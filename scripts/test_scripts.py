@@ -9,6 +9,7 @@ directory still exits 0, and reads as a passing safety check).
 import contextlib
 import io
 import json
+import re
 import os
 import shlex
 import stat
@@ -1991,6 +1992,7 @@ QS_RUNS = []
 # reuses our ids, and a late duplicate of the first reply.
 QS_FAKE_CODEX = r'''#!@PYTHON@
 import json
+import re
 import os
 import signal
 import sys
@@ -7521,6 +7523,1016 @@ def test_triage_bash_on_windows():
           "no Git Bash found" in refused and "WSL" in refused, refused)
 
 
+def test_lint_timeout_block():
+    """lint.py _check_timeout_block (0.6.126): the shipped launch data passes, and each malformed shape is named."""
+    sys.path.insert(0, str(SCRIPTS))
+    import lint
+
+    def errors_for(spec):
+        real = lint.ERRORS
+        try:
+            lint.ERRORS = []
+            lint._check_timeout_block(lint.ROOT / "data" / "launch.json", "x", spec)
+            return list(lint.ERRORS)
+        finally:
+            lint.ERRORS = real
+    good = {"role": {"review": {}, "implement": {}},
+            "timeout": {"review": 30, "implement": 60.5, "overrides": [
+                {"model": "*-high*", "role": "review", "effort": "high", "minutes": 50, "why": "measured 28 min"}]}}
+    check("lint timeout: a well-formed block passes", errors_for(good) == [], str(errors_for(good)))
+    nul = json.loads(json.dumps(good))
+    nul["timeout"]["implement"] = None
+    check("lint timeout: a null role without a no_cap reason is named",
+          any("no_cap.implement gives no reason" in e for e in errors_for(nul)), str(errors_for(nul)))
+    nul["timeout"]["no_cap"] = {"implement": "the launcher returns before the work ends"}
+    check("lint timeout: a null role with its reason passes", errors_for(nul) == [], str(errors_for(nul)))
+    launch = json.loads((SCRIPTS.parent / "data" / "launch.json").read_text(encoding="utf-8"))
+    check("lint timeout: every shipped adapter passes", all(errors_for(v) == [] for k, v in launch.items() if not k.startswith("_")),
+          str({k: errors_for(v) for k, v in launch.items() if not k.startswith("_") and errors_for(v)}))
+
+    def mutated(path, value):
+        spec = json.loads(json.dumps(good))
+        node = spec
+        for key in path[:-1]:
+            node = node[key]
+        if value is KeyError:
+            del node[path[-1]]
+        else:
+            node[path[-1]] = value
+        return errors_for(spec)
+    for what, path, value, want in (
+            ("no timeout object", ["timeout"], KeyError, "no 'timeout' object"),
+            ("a role without minutes", ["timeout", "implement"], KeyError, "timeout.implement must be a positive"),
+            ("zero minutes", ["timeout", "review"], 0, "timeout.review must be a positive"),
+            ("negative minutes", ["timeout", "review"], -5, "timeout.review must be a positive"),
+            ("minutes as text", ["timeout", "review"], "30", "timeout.review must be a positive"),
+            ("minutes as bool", ["timeout", "review"], True, "timeout.review must be a positive"),
+            ("minutes the wrapper would refuse (1e308)", ["timeout", "review"], 1e308, "timeout.review must be a positive"),
+            ("minutes beyond a week", ["timeout", "review"], 20000, "timeout.review must be a positive"),
+            ("overrides not a list", ["timeout", "overrides"], {}, "must be a list"),
+            ("an override without a model", ["timeout", "overrides", 0, "model"], "", "non-empty 'model'"),
+            ("an override without minutes", ["timeout", "overrides", 0, "minutes"], KeyError, "'minutes' as a positive"),
+            ("an override without a why", ["timeout", "overrides", 0, "why"], "  ", "needs a 'why'"),
+            ("an override naming a role the adapter lacks", ["timeout", "overrides", 0, "role"], "plan", "does not have"),
+            ("an empty effort", ["timeout", "overrides", 0, "effort"], "", "'effort' must be")):
+        got = mutated(path, value)
+        check("lint timeout: %s is named" % what, any(want in e for e in got), str(got))
+
+
+def test_leg_timeout():
+    """Wall-clock caps on paid legs (0.6.126): data/launch.json declares them per adapter, role, model and
+    effort; leg-cmd.sh wraps the paid command in with-timeout.py; --timeout beats the data and 0 removes the cap.
+    A bare rc=124 beside an empty log read as a hung leg on 2026-11-06 (a healthy grok-4.7-high review was killed
+    by a hand-written 20-minute timeout), so the wrapper must say it was the limit and not a verdict."""
+    wt = SCRIPTS / "with-timeout.py"
+    leg = SCRIPTS / "leg-cmd.sh"
+    py = sys.executable
+
+    def run_wt(*args, **kw):
+        return subprocess.run([py, str(wt), *args], capture_output=True, text=True, **kw)
+
+    # ---- the wrapper
+    r = run_wt("1", "--", py, "-c", "import sys; print('streamed'); sys.exit(7)")
+    check("with-timeout: the command's own status and output pass through", r.returncode == 7 and "streamed" in r.stdout,
+          r.stdout + r.stderr)
+    t0 = time.monotonic()
+    r = run_wt("0.02", "--label", "cursor review grok-4.7-high", "--source", "launch.json cursor override", "--",
+               py, "-c", "import time; time.sleep(60)")
+    took = time.monotonic() - t0
+    check("with-timeout: a command past the limit is stopped at the limit (not before it), status 124",
+          r.returncode == 124 and 1.0 <= took < 12, "rc=%s took=%.1fs %s" % (r.returncode, took, r.stderr))
+    check("with-timeout: the message names the leg, the limit and where it came from",
+          "cursor review grok-4.7-high TIMED OUT after 0.02 min" in r.stderr and "launch.json cursor override" in r.stderr,
+          r.stderr)
+    check("with-timeout: the message says the limit is not a verdict that the leg was hung",
+          "NOT a verdict" in r.stderr and "--timeout" in r.stderr, r.stderr)
+    with tempfile.TemporaryDirectory() as td:
+        pidfile = Path(td) / "grandchild.pid"
+        (Path(td) / "grandchild.py").write_text(
+            "import os, sys, time\nopen(sys.argv[1], 'w').write(str(os.getpid()))\ntime.sleep(60)\n")
+        (Path(td) / "leader.py").write_text(
+            "import subprocess, sys, time\n"
+            "subprocess.Popen([sys.executable, sys.argv[1], sys.argv[2]])\n"
+            "time.sleep(60)\n")
+        # files, not pipes: a surviving grandchild would hold a pipe open and make the run wait for it, hiding the survivor
+        with open(Path(td) / "wt.out", "w") as sink:
+            r = subprocess.run([py, str(wt), "0.03", "--", py, str(Path(td) / "leader.py"), str(Path(td) / "grandchild.py"),
+                                str(pidfile)], stdout=sink, stderr=sink, timeout=30)
+        deadline = time.monotonic() + 5
+        while not pidfile.exists() and time.monotonic() < deadline:
+            time.sleep(0.1)
+        alive = True
+        if pidfile.exists():
+            gpid = int(pidfile.read_text())
+            for _ in range(50):
+                try:
+                    os.kill(gpid, 0)
+                except ProcessLookupError:
+                    alive = False
+                    break
+                time.sleep(0.1)
+            if alive:
+                os.kill(gpid, 9)
+        check("with-timeout: the whole process tree dies, not just the leader",
+              r.returncode == 124 and pidfile.exists() and not alive, "rc=%s pid file=%s alive=%s" % (r.returncode, pidfile.exists(), alive))
+    r = run_wt("1", "--", py, "-c", "import os, signal; os.kill(os.getpid(), signal.SIGKILL)")
+    check("with-timeout: a command killed by signal 9 is 137, the shell's spelling", r.returncode == 137, str(r.returncode))
+    for what, args, want in (("no `--`", ["1", py], "missing `--`"), ("no command", ["1", "--"], "no command"),
+                             ("not a number", ["soon", "--", py], "must be a number"),
+                             ("zero", ["0", "--", py], "greater than 0"), ("negative", ["-3", "--", py], "must not be negative"),
+                             ("two numbers", ["1", "2", "--", py], "exactly one")):
+        r = run_wt(*args)
+        check("with-timeout: a usage error (%s) is status 2 with a reason" % what, r.returncode == 2 and want in r.stderr,
+              r.stderr)
+    r = run_wt("1", "--", "/nonexistent/cli-xyz")
+    check("with-timeout: a command that cannot start is 127, not a timeout", r.returncode == 127, str(r.returncode) + r.stderr)
+
+    for bad in ("inf", "nan", "1e-1000", "-1e-999", "-0", "1e308", "1e307", "20000", "-3"):
+        r = run_wt(bad, "--", py, "-c", "pass")
+        check("with-timeout: %r is refused rather than read as no cap or a cap that never fires" % bad,
+              r.returncode == 2 and "minutes" in r.stderr, str(r.returncode) + r.stderr)
+    # streaming: the first line must arrive while the command is still running
+    p = subprocess.Popen([py, str(wt), "1", "--", py, "-u", "-c", "import time; print('first'); time.sleep(4); print('last')"],
+                         stdout=subprocess.PIPE, text=True)
+    t0 = time.monotonic()
+    first = p.stdout.readline()
+    check("with-timeout: output streams through while the command runs, not at its end",
+          first.strip() == "first" and time.monotonic() - t0 < 3 and p.poll() is None, "%r after %.1fs" % (first, time.monotonic() - t0))
+    p.communicate()
+    with tempfile.TemporaryDirectory() as td:
+        tdp = Path(td)
+        (tdp / "grandchild.py").write_text(
+            "import os, sys, time\nif sys.argv[2] == 'setsid':\n    os.setsid()\nopen(sys.argv[1], 'w').write(str(os.getpid()))\ntime.sleep(60)\n")
+        (tdp / "leader.py").write_text(
+            "import subprocess, sys, time\n"
+            "subprocess.Popen([sys.executable, sys.argv[1], sys.argv[2], sys.argv[3]])\n"
+            "time.sleep(60)\n")
+        (tdp / "stubborn.py").write_text(
+            "import signal, time, os, sys\nsignal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+            "open(sys.argv[1], 'w').write(str(os.getpid()))\ntime.sleep(60)\n")
+
+        def gone(pid_path, wait=6.0):
+            deadline = time.monotonic() + 5
+            while not pid_path.exists() and time.monotonic() < deadline:
+                time.sleep(0.1)
+            if not pid_path.exists():
+                return None
+            pid = int(pid_path.read_text())
+            end = time.monotonic() + wait
+            while time.monotonic() < end:
+                try:
+                    os.kill(pid, 0)
+                except ProcessLookupError:
+                    return True
+                time.sleep(0.1)
+            os.kill(pid, 9)
+            return False
+
+        def wt_files(*args, env=None):
+            with open(tdp / "wt.out", "w") as sink:
+                return subprocess.run([py, str(wt), *args], stdout=sink, stderr=sink, timeout=40, env=env)
+        pidf = tdp / "setsid.pid"
+        r = wt_files("0.03", "--", py, str(tdp / "leader.py"), str(tdp / "grandchild.py"), str(pidf), "setsid")
+        check("with-timeout: a descendant that left the process group (setsid) is found by its parent links and killed",
+              r.returncode == 124 and gone(pidf) is True, "rc=%s" % r.returncode)
+        pidf = tdp / "stubborn.pid"
+        t0 = time.monotonic()
+        r = wt_files("0.03", "--", py, str(tdp / "stubborn.py"), str(pidf), env=dict(os.environ, WITH_TIMEOUT_GRACE="0.3"))
+        check("with-timeout: a command that ignores SIGTERM is SIGKILLed after the grace period, still status 124",
+              r.returncode == 124 and gone(pidf) is True and time.monotonic() - t0 < 6, "rc=%s %.1fs" % (r.returncode, time.monotonic() - t0))
+        for sig, want in ((signal.SIGTERM, 143), (signal.SIGINT, 130), (signal.SIGTSTP, 148)):
+            pidf = tdp / ("sig%d.pid" % sig)
+            p = subprocess.Popen([py, str(wt), "5", "--", py, str(tdp / "stubborn.py"), str(pidf)],
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                 env=dict(os.environ, WITH_TIMEOUT_GRACE="0.3"))
+            deadline = time.monotonic() + 5
+            while not pidf.exists() and time.monotonic() < deadline:
+                time.sleep(0.1)
+            p.send_signal(sig)
+            try:
+                rc = p.wait(timeout=20)
+            except subprocess.TimeoutExpired:
+                p.kill()
+                rc = None
+            check("with-timeout: %s aimed at the wrapper ends the command and exits %d (no deadlock)" % (sig.name, want),
+                  rc == want and gone(pidf) is True, "rc=%s" % rc)
+
+    import importlib.util as _ilu
+    _sp = _ilu.spec_from_file_location("with_timeout_under_test", str(wt))
+    wtm = _ilu.module_from_spec(_sp)
+    _sp.loader.exec_module(wtm)
+    for raw, want in (("inf", 10.0), ("nan", 10.0), ("1e309", 10.0), ("-1", 10.0), ("999", 10.0), ("x", 10.0), ("", 10.0),
+                      ("0.5", 0.5), ("0", 0.0), ("300", 300.0)):
+        check("with-timeout: WITH_TIMEOUT_GRACE=%r -> %s (a hostile or broken value keeps the default)" % (raw, want),
+              wtm.grace_from_env(raw) == want, str(wtm.grace_from_env(raw)))
+    # the identity of a process, not its number: a recycled pid must not be signalled, a zombie is not a live process
+    victim = subprocess.Popen(["sleep", "30"])
+    snap = wtm._snapshot()
+    check("with-timeout: the process snapshot lists a live process with its start time",
+          snap is not None and victim.pid in snap and snap[victim.pid][2], str(snap and snap.get(victim.pid)))
+
+    class _Gone:
+        pid = 2 ** 22 + 12345
+        def poll(self):
+            return 0
+    wtm._send(_Gone(), signal.SIGKILL, {victim.pid: ("some other start time", 0)})
+    time.sleep(0.3)
+    check("with-timeout: a pid whose start time changed (a recycled number) is NOT signalled", victim.poll() is None, "")
+    wtm._send(_Gone(), signal.SIGKILL, {victim.pid: (snap[victim.pid][2], snap[victim.pid][3])})
+    signalled = True
+    try:
+        victim.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        signalled = False                 # the signal never arrived: the cleanup kill below must not be able to pass this
+        victim.kill()
+        victim.wait()
+    check("with-timeout: ...and the same pid with the recorded start time is", signalled and victim.returncode == -9,
+          "signalled=%s rc=%s" % (signalled, victim.returncode))
+    # a reaped leader's number may name an unrelated group: nothing is sent to it, however many recorded pids are alive
+    calls = []
+    real_killpg = wtm.os.killpg
+    wtm.os.killpg = lambda pgid, sig: calls.append((pgid, sig))
+    try:
+        keeper = subprocess.Popen(["sleep", "30"])
+        ksnap = wtm._snapshot()
+        wtm._send(_Gone(), signal.SIGTERM, {keeper.pid: (ksnap[keeper.pid][2], ksnap[keeper.pid][3])})
+        reaped_calls = list(calls)
+
+        class _Alive:
+            pid = keeper.pid
+            def poll(self):
+                return None
+        wtm._send(_Alive(), signal.SIGCONT, {})
+        live_calls = list(calls)
+    finally:
+        wtm.os.killpg = real_killpg
+        keeper.kill()
+        keeper.wait()
+    check("with-timeout: killpg is NOT called for a reaped leader even while a recorded descendant is alive",
+          reaped_calls == [], str(reaped_calls))
+    check("with-timeout: ...and is called for a leader that is still unreaped", live_calls == [(keeper.pid, signal.SIGCONT)], str(live_calls))
+    zombie = subprocess.Popen(["true"])
+    time.sleep(0.4)
+    zs = wtm._snapshot()
+    check("with-timeout: a zombie (exited, not yet reaped) is not counted as live",
+          zs is not None and zombie.pid in zs and not wtm._live(zs, zombie.pid, zs[zombie.pid][2]), str(zs and zs.get(zombie.pid)))
+    zombie.wait()
+    with tempfile.TemporaryDirectory() as td:
+        tdp = Path(td)
+        marker = "wt-marker-%d" % os.getpid()
+        (tdp / "sleeper.py").write_text("import time\ntime.sleep(60)  # %s\n" % marker)
+        leaked = []
+        for delay in (0, 0.005, 0.02, 0.05, 0.1, 0.3):
+            p = subprocess.Popen([py, str(wt), "5", "--", py, str(tdp / "sleeper.py"), marker],
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=dict(os.environ, WITH_TIMEOUT_GRACE="0.3"))
+            time.sleep(delay)
+            p.send_signal(signal.SIGTERM)
+            try:
+                rc = p.wait(timeout=20)
+            except subprocess.TimeoutExpired:
+                p.kill()
+                rc = None
+            time.sleep(0.5)
+            left = subprocess.run(["pgrep", "-f", marker], capture_output=True, text=True).stdout.split()
+            if rc not in (143, -15) or left:
+                leaked.append((delay, rc, left))
+            for pid in left:
+                try:
+                    os.kill(int(pid), 9)
+                except OSError:
+                    pass
+        check("with-timeout: a SIGTERM at any moment around the spawn leaves no command running (handlers precede Popen)",
+              not leaked, str(leaked))
+        # the same setsid descendant, found through the ps spelling (macOS/BSD) instead of /proc
+        (tdp / "grandchild2.py").write_text(
+            "import os, sys, time\nos.setsid()\nopen(sys.argv[1], 'w').write(str(os.getpid()))\ntime.sleep(60)\n")
+        (tdp / "leader2.py").write_text(
+            "import subprocess, sys, time\nsubprocess.Popen([sys.executable, sys.argv[1], sys.argv[2]])\ntime.sleep(60)\n")
+        pidf = tdp / "ps.pid"
+        with open(tdp / "ps.out", "w") as sink:
+            r = subprocess.run([py, str(wt), "0.03", "--", py, str(tdp / "leader2.py"), str(tdp / "grandchild2.py"), str(pidf)],
+                               stdout=sink, stderr=sink, timeout=40, env=dict(os.environ, WITH_TIMEOUT_SNAPSHOT="ps"))
+        deadline = time.monotonic() + 5
+        while not pidf.exists() and time.monotonic() < deadline:
+            time.sleep(0.1)
+        dead = False
+        if pidf.exists():
+            gp = int(pidf.read_text())
+            for _ in range(60):
+                try:
+                    os.kill(gp, 0)
+                except ProcessLookupError:
+                    dead = True
+                    break
+                time.sleep(0.1)
+            if not dead:
+                os.kill(gp, 9)
+        check("with-timeout: through the `ps` snapshot too, a setsid descendant is found and stopped",
+              r.returncode == 124 and dead, "rc=%s dead=%s" % (r.returncode, dead))
+        # no way to list processes at all: say so, and still stop the command's own group
+        fakebin = tdp / "nops"
+        fakebin.mkdir()
+        (fakebin / "ps").write_text("#!/bin/sh\nexit 1\n")
+        (fakebin / "ps").chmod(0o755)
+        r = subprocess.run([py, str(wt), "0.02", "--", py, "-c", "import time; time.sleep(60)"], capture_output=True, text=True,
+                           timeout=40, env=dict(os.environ, WITH_TIMEOUT_SNAPSHOT="ps", PATH="%s:%s" % (fakebin, "/nonexistent"),
+                                                WITH_TIMEOUT_GRACE="0.3"))
+        check("with-timeout: when no process listing can be read it says so and still stops the command",
+              r.returncode == 124 and "cannot list processes" in r.stderr, "%s %s" % (r.returncode, r.stderr))
+
+    if sys.platform.startswith("linux"):
+        with tempfile.TemporaryDirectory() as td:
+            tdp = Path(td)
+            pidf = tdp / "orphan.pid"
+            (tdp / "orphan.py").write_text(
+                "import os, sys, time\nos.setsid()\nopen(sys.argv[1], 'w').write(str(os.getpid()))\ntime.sleep(60)\n")
+            # the leader forks a detached child from its SIGTERM handler and exits: only a subreaper can still find it
+            (tdp / "forker.py").write_text(
+                "import signal, subprocess, sys, time\n"
+                "def h(*_):\n"
+                "    subprocess.Popen([sys.executable, sys.argv[1], sys.argv[2]])\n"
+                "    sys.exit(0)\n"
+                "signal.signal(signal.SIGTERM, h)\ntime.sleep(60)\n")
+            with open(tdp / "o.out", "w") as sink:
+                r = subprocess.run([py, str(wt), "0.03", "--", py, str(tdp / "forker.py"), str(tdp / "orphan.py"), str(pidf)],
+                                   stdout=sink, stderr=sink, timeout=40, env=dict(os.environ, WITH_TIMEOUT_GRACE="3"))
+            deadline = time.monotonic() + 5
+            while not pidf.exists() and time.monotonic() < deadline:
+                time.sleep(0.1)
+            dead = False
+            if pidf.exists():
+                op = int(pidf.read_text())
+                for _ in range(60):
+                    try:
+                        os.kill(op, 0)
+                    except ProcessLookupError:
+                        dead = True
+                        break
+                    # a killed orphan stays a zombie of ours only until the wrapper exits; a live one keeps running
+                    try:
+                        if Path("/proc/%d/stat" % op).read_text().rsplit(")", 1)[1].split()[0] == "Z":
+                            dead = True
+                            break
+                    except OSError:
+                        dead = True
+                        break
+                    time.sleep(0.1)
+                if not dead:
+                    os.kill(op, 9)
+            check("with-timeout: a child the command forks and detaches from its own SIGTERM handler is found (subreaper) and stopped",
+                  r.returncode == 124 and pidf.exists() and dead, "rc=%s pid file=%s dead=%s" % (r.returncode, pidf.exists(), dead))
+    # a process listing that works once and then fails must not end the stop early or skip the final signal
+    with tempfile.TemporaryDirectory() as td:
+        tdp = Path(td)
+        pidf = tdp / "stub.pid"
+        (tdp / "stubborn2.py").write_text(
+            "import os, signal, sys, time\nsignal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+            "open(sys.argv[1], 'w').write(str(os.getpid()))\ntime.sleep(60)\n")
+        (tdp / "lead2.py").write_text(
+            "import subprocess, sys, time\nsubprocess.Popen([sys.executable, sys.argv[1], sys.argv[2]])\ntime.sleep(60)\n")
+        proc = subprocess.Popen([py, str(tdp / "lead2.py"), str(tdp / "stubborn2.py"), str(pidf)], start_new_session=True)
+        deadline = time.monotonic() + 5
+        while not pidf.exists() and time.monotonic() < deadline:
+            time.sleep(0.1)
+        calls = {"n": 0}
+        real_snapshot = wtm._snapshot
+
+        def flaky():
+            calls["n"] += 1
+            return real_snapshot() if calls["n"] == 1 else None
+        wtm._snapshot = flaky
+        err = io.StringIO()
+        try:
+            with contextlib.redirect_stderr(err):
+                wtm.stop_tree(proc, grace=0.6)
+        finally:
+            wtm._snapshot = real_snapshot
+        gone_ = False
+        for _ in range(40):
+            try:
+                os.kill(int(pidf.read_text()), 0)
+            except ProcessLookupError:
+                gone_ = True
+                break
+            time.sleep(0.1)
+        if not gone_:
+            os.kill(int(pidf.read_text()), 9)
+        check("with-timeout: when the process list cannot be refreshed it says so and still SIGKILLs from the last good one",
+              gone_ and "cannot refresh" in err.getvalue(), err.getvalue())
+
+    # identity is checked when the signal is SENT: a stale or failed listing cannot turn a recycled pid into a target
+    victim2 = subprocess.Popen(["sleep", "30"])
+    vsnap = wtm._snapshot()
+    real_snapshot_ = wtm._snapshot
+    wtm._snapshot = lambda: None
+    try:
+        class _Done:
+            pid = 2 ** 22 + 777
+            def poll(self):
+                return 0
+        wtm._send(_Done(), signal.SIGKILL, {victim2.pid: ("a start time from before the number was reused", 0)})
+        time.sleep(0.3)
+        survived = victim2.poll() is None
+        wtm._send(_Done(), signal.SIGKILL, {victim2.pid: (vsnap[victim2.pid][2], vsnap[victim2.pid][3])})
+        arrived = True
+        try:
+            victim2.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            arrived = False                  # the cleanup kill below must not be able to make this pass
+            victim2.kill()
+            victim2.wait()
+    finally:
+        wtm._snapshot = real_snapshot_
+    check("with-timeout: with every process listing failing, a pid recorded under another start time is still not signalled, the right one is",
+          survived and arrived and victim2.returncode == -9, "survived=%s arrived=%s rc=%s" % (survived, arrived, victim2.returncode))
+    # a stalled `ps` is killed AND reaped (no zombie either), also when a grandchild keeps its stdout open
+    with tempfile.TemporaryDirectory() as td:
+        slowbin = Path(td) / "bin"
+        slowbin.mkdir()
+        helper_pid = Path(td) / "helper.pid"
+        (slowbin / "ps").write_text('#!/bin/sh\necho $$ > "$HELPER_PID"\n(sleep 31.9 &)\nexec sleep 31.8\n')
+        (slowbin / "ps").chmod(0o755)
+        old_env = {k: os.environ.get(k) for k in ("PATH", "WITH_TIMEOUT_SNAPSHOT", "WITH_TIMEOUT_LIST_TIMEOUT", "HELPER_PID")}
+        os.environ.update(PATH="%s:%s" % (slowbin, os.environ["PATH"]), WITH_TIMEOUT_SNAPSHOT="ps",
+                          WITH_TIMEOUT_LIST_TIMEOUT="0.5", HELPER_PID=str(helper_pid))
+        try:
+            t0 = time.monotonic()
+            got_snap = wtm._snapshot()
+            took_snap = time.monotonic() - t0
+        finally:
+            for k, v in old_env.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+        time.sleep(0.3)
+        hp = int(helper_pid.read_text()) if helper_pid.exists() else None
+        straggler = []                    # the backgrounded grandchild is not ours to reap; only make sure the test leaves none
+        for name in os.listdir("/proc"):
+            if name.isdigit():
+                try:
+                    if Path("/proc/%s/cmdline" % name).read_bytes() == b"sleep\x0031.9\x00":
+                        straggler.append(int(name))
+                except OSError:
+                    pass
+        for pid in straggler:
+            try:
+                os.kill(pid, 9)
+            except OSError:
+                pass
+        check("with-timeout: a stalled `ps` (even with a grandchild holding its pipe) gives up at its own limit and leaves no helper, not even a zombie",
+              got_snap is None and took_snap < 8 and hp is not None and not os.path.exists("/proc/%d" % hp),
+              "snap=%s took=%.1fs helper=%s exists=%s" % (got_snap, took_snap, hp, hp is not None and os.path.exists("/proc/%d" % hp)))
+    for raw, want in (("inf", 10.0), ("nan", 10.0), ("0", 10.0), ("-2", 10.0), ("0.5", 0.5)):
+        old = os.environ.get("WITH_TIMEOUT_LIST_TIMEOUT")
+        os.environ["WITH_TIMEOUT_LIST_TIMEOUT"] = raw
+        try:
+            got_lt = wtm._list_timeout()
+        finally:
+            if old is None:
+                os.environ.pop("WITH_TIMEOUT_LIST_TIMEOUT", None)
+            else:
+                os.environ["WITH_TIMEOUT_LIST_TIMEOUT"] = old
+        check("with-timeout: WITH_TIMEOUT_LIST_TIMEOUT=%r -> %s (finite and positive, else the default)" % (raw, want), got_lt == want, str(got_lt))
+    # pidfd exists but cannot be opened: fail closed, never fall back to a bare kill
+    if hasattr(os, "pidfd_open"):
+        vic = subprocess.Popen(["sleep", "30"])
+        vs = wtm._snapshot()
+        real_open = os.pidfd_open
+
+        def refuse(*_a, **_k):
+            raise OSError(24, "too many open files")
+        os.pidfd_open = refuse
+        try:
+            sent = wtm._signal_verified(vic.pid, vs[vic.pid][2], signal.SIGKILL)
+            time.sleep(0.3)
+            alive = vic.poll() is None
+        finally:
+            os.pidfd_open = real_open
+            vic.kill()
+            vic.wait()
+        check("with-timeout: when pidfd_open fails the pid is NOT signalled (no fallback to a bare kill) and the failure is reported as such",
+              sent == "failed" and alive, "sent=%s alive=%s" % (sent, alive))
+        # ...and the stop says so: a leg that could not be fully stopped must not read as "stopped"
+        vic2 = subprocess.Popen(["sleep", "30"], start_new_session=True)
+        vs2 = wtm._snapshot()
+        os.pidfd_open = refuse
+        try:
+            class _LiveLeader:
+                pid = 2 ** 22 + 99
+                def poll(self):
+                    return None
+            real_kpg2 = wtm.os.killpg
+            wtm.os.killpg = lambda *_a: None
+            try:
+                not_stopped = wtm._send(_LiveLeader(), signal.SIGKILL, {vic2.pid: (vs2[vic2.pid][2], vs2[vic2.pid][3])})
+            finally:
+                wtm.os.killpg = real_kpg2
+        finally:
+            os.pidfd_open = real_open
+            vic2.kill()
+            vic2.wait()
+        check("with-timeout: _send returns a verified process it could not signal, so the caller can report it",
+              not_stopped == [vic2.pid], str(not_stopped))
+        check("with-timeout: the timeout message names the processes that were not stopped",
+              str(vic2.pid) in wtm.unstopped_note([vic2.pid]) and "NOT everything was stopped" in wtm.unstopped_note([vic2.pid])
+              and wtm.unstopped_note([]) == "" and wtm.unstopped_note(None) == "", wtm.unstopped_note([vic2.pid]))
+    # a look that FAILS is not proof of absence: an unreadable probe is "failed" (reported), only a confirmed absence is "gone"
+    check("with-timeout: a pid that does not exist probes as confirmed absent (None)", wtm._probe(2 ** 22 + 31337) is None,
+          str(wtm._probe(2 ** 22 + 31337)))
+    real_open_b = open
+    me = os.getpid()
+
+    def refuse_stat(path, *a_, **k_):
+        if str(path) == "/proc/%d/stat" % me:
+            raise PermissionError(13, "denied")
+        return real_open_b(path, *a_, **k_)
+    import builtins as _bi
+    _bi.open = refuse_stat
+    try:
+        unreadable = wtm._probe(me)
+    finally:
+        _bi.open = real_open_b
+    check("with-timeout: a /proc read that fails for any reason but absence probes as UNKNOWN, not as gone",
+          unreadable is wtm._UNKNOWN, str(unreadable))
+    with tempfile.TemporaryDirectory() as td:
+        for status, body, want in ((3, "", "unknown"), (1, "", "absent"), (0, "garbage", "unknown")):
+            fb = Path(td) / ("ps%d" % status)
+            fb.mkdir()
+            (fb / "ps").write_text("#!/bin/sh\nprintf '%s' '" + body + "'\nexit " + str(status) + "\n")
+            (fb / "ps").chmod(0o755)
+            old_env = {k: os.environ.get(k) for k in ("PATH", "WITH_TIMEOUT_SNAPSHOT")}
+            os.environ.update(PATH="%s:%s" % (fb, os.environ["PATH"]), WITH_TIMEOUT_SNAPSHOT="ps")
+            try:
+                got_p = wtm._probe(12345)
+            finally:
+                for k, v in old_env.items():
+                    if v is None:
+                        os.environ.pop(k, None)
+                    else:
+                        os.environ[k] = v
+            check("with-timeout: the ps probe answering exit %d %r is %s" % (status, body, want),
+                  (got_p is wtm._UNKNOWN) if want == "unknown" else (got_p is None), str(got_p))
+    # a ps that stalls (timeout) or cannot start is UNKNOWN too, and so is a probe that fails only on the SECOND look
+    with tempfile.TemporaryDirectory() as td:
+        stall = Path(td) / "bin"
+        stall.mkdir()
+        (stall / "ps").write_text("#!/bin/sh\nexec sleep 31.6\n")
+        (stall / "ps").chmod(0o755)
+        old_env = {k: os.environ.get(k) for k in ("PATH", "WITH_TIMEOUT_SNAPSHOT", "WITH_TIMEOUT_LIST_TIMEOUT")}
+        os.environ.update(PATH="%s:%s" % (stall, os.environ["PATH"]), WITH_TIMEOUT_SNAPSHOT="ps", WITH_TIMEOUT_LIST_TIMEOUT="0.3")
+        try:
+            stalled_probe = wtm._probe(12345)
+        finally:
+            for k, v in old_env.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+        check("with-timeout: a ps probe that times out is UNKNOWN, not absence", stalled_probe is wtm._UNKNOWN, str(stalled_probe))
+    if hasattr(os, "pidfd_open"):
+        vic4 = subprocess.Popen(["sleep", "30"])
+        vs4 = wtm._snapshot()
+        real_probe4, calls4 = wtm._probe, {"n": 0}
+
+        def second_look_fails(pid):
+            calls4["n"] += 1
+            return real_probe4(pid) if calls4["n"] == 1 else wtm._UNKNOWN
+        wtm._probe = second_look_fails
+        try:
+            res4 = wtm._signal_verified(vic4.pid, vs4[vic4.pid][2], signal.SIGKILL)
+            alive4 = vic4.poll() is None
+        finally:
+            wtm._probe = real_probe4
+            vic4.kill()
+            vic4.wait()
+        check("with-timeout: a probe that fails only on the look after pidfd_open is 'failed', and nothing is signalled",
+              res4 == "failed" and alive4, "%s alive=%s" % (res4, alive4))
+    vic3 = subprocess.Popen(["sleep", "30"])
+    vs3 = wtm._snapshot()
+    real_probe = wtm._probe
+    wtm._probe = lambda pid: wtm._UNKNOWN
+    try:
+        class _LL:
+            pid = 2 ** 22 + 5
+            def poll(self):
+                return None
+        real_kpg3 = wtm.os.killpg
+        wtm.os.killpg = lambda *_a: None
+        try:
+            res3 = wtm._signal_verified(vic3.pid, vs3[vic3.pid][2], signal.SIGKILL)
+            sent3 = wtm._send(_LL(), signal.SIGKILL, {vic3.pid: (vs3[vic3.pid][2], vs3[vic3.pid][3])})
+        finally:
+            wtm.os.killpg = real_kpg3
+    finally:
+        wtm._probe = real_probe
+        alive3 = vic3.poll() is None
+        vic3.kill()
+        vic3.wait()
+    check("with-timeout: when the per-pid probe fails while the process is alive it is reported as not stopped, never as gone",
+          res3 == "failed" and sent3 == [vic3.pid] and alive3, "%s %s alive=%s" % (res3, sent3, alive3))
+    # a SIGKILL that was SENT is not a process that is gone: survivors after the final signal are reported
+    sleeper = subprocess.Popen(["sleep", "30"], start_new_session=True)
+
+    class _Reaped3:
+        pid = 2 ** 22 + 6
+        def poll(self):
+            return 0
+        def wait(self, timeout=None):
+            return 0
+    real_send, real_sub3 = wtm._send, wtm._SUBREAPER
+    wtm._send = lambda *a_, **k_: []             # the signals "go through", and the process stays (uninterruptible I/O)
+    wtm._SUBREAPER = True
+    try:
+        with contextlib.redirect_stderr(io.StringIO()):
+            left3 = wtm.stop_tree(_Reaped3(), grace=0.3)
+    finally:
+        wtm._send, wtm._SUBREAPER = real_send, real_sub3
+        sleeper.kill()
+        sleeper.wait()
+    check("with-timeout: a recorded process still alive after the final signal is returned as not stopped", sleeper.pid in left3,
+          "%s (sleeper %d)" % (left3, sleeper.pid))
+    # an unreadable process makes the listing incomplete: that is a failed listing, not a listing without it
+    _bi2 = __import__("builtins")
+    real_open_c = _bi2.open
+    unlucky = os.getpid()
+
+    def refuse_one(path, *a_, **k_):
+        if str(path) == "/proc/%d/stat" % unlucky:
+            raise PermissionError(13, "denied")
+        return real_open_c(path, *a_, **k_)
+    _bi2.open = refuse_one
+    try:
+        incomplete = wtm._snapshot()
+    finally:
+        _bi2.open = real_open_c
+    check("with-timeout: a listing with an unreadable process in it is no listing (None), not a listing without that process",
+          incomplete is None or os.environ.get("WITH_TIMEOUT_SNAPSHOT") == "ps", str(incomplete is None))
+    with tempfile.TemporaryDirectory() as td:
+        noisy = Path(td) / "bin"
+        noisy.mkdir()
+        (noisy / "ps").write_text("#!/bin/sh\necho 'ps: something went wrong' >&2\nexit 1\n")
+        (noisy / "ps").chmod(0o755)
+        old_env = {k: os.environ.get(k) for k in ("PATH", "WITH_TIMEOUT_SNAPSHOT")}
+        os.environ.update(PATH="%s:%s" % (noisy, os.environ["PATH"]), WITH_TIMEOUT_SNAPSHOT="ps")
+        try:
+            noisy_probe = wtm._probe(12345)
+        finally:
+            for k, v in old_env.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+        check("with-timeout: ps exit 1 WITH an error on stderr is UNKNOWN, only a silent exit 1 is absence", noisy_probe is wtm._UNKNOWN, str(noisy_probe))
+    # "stopped" needs a final listing that confirms it; with recorded processes and no listing, say so
+    sl = subprocess.Popen(["sleep", "30"], start_new_session=True)
+    seen_n = {"n": 0}
+    real_snap_d, real_send_d, real_sub_d = wtm._snapshot, wtm._send, wtm._SUBREAPER
+
+    def listing_dies():
+        seen_n["n"] += 1
+        return real_snap_d() if seen_n["n"] == 1 else None
+
+    class _Reaped4:
+        pid = 2 ** 22 + 8
+        def poll(self):
+            return 0
+        def wait(self, timeout=None):
+            return 0
+    wtm._snapshot, wtm._send, wtm._SUBREAPER = listing_dies, (lambda *a_, **k_: []), True
+    try:
+        with contextlib.redirect_stderr(io.StringIO()):
+            left4 = wtm.stop_tree(_Reaped4(), grace=0.3)
+    finally:
+        wtm._snapshot, wtm._send, wtm._SUBREAPER = real_snap_d, real_send_d, real_sub_d
+        sl.kill()
+        sl.wait()
+    check("with-timeout: with recorded processes and no final listing the stop is reported as unconfirmed",
+          any("final process listing failed" in str(x) for x in left4), str(left4))
+    wtm._snapshot, wtm._SUBREAPER = (lambda: {os.getpid(): (1, "S", "me", 1)}), True
+    try:
+        with contextlib.redirect_stderr(io.StringIO()):
+            left5 = wtm.stop_tree(_Reaped4(), grace=0.3)
+    finally:
+        wtm._snapshot, wtm._SUBREAPER = real_snap_d, real_sub_d
+    check("with-timeout: with nothing recorded there is nothing to confirm and nothing is reported", left5 == [], str(left5))
+    # Windows branch (driven with a fake os.name): a failed or missing taskkill is reported, a clean one is not
+    class _WinProc:
+        pid = 777
+        def wait(self, timeout=None):
+            return 0
+        def kill(self):
+            pass
+    real_name, real_run = os.name, wtm.subprocess.run
+    outcomes = {}
+    for label, behaviour in (("missing", FileNotFoundError("no taskkill")), ("rc1", 1), ("rc0", 0)):
+        def fake_run(argv, **kw_):
+            if isinstance(behaviour, Exception):
+                raise behaviour
+            return type("R", (), {"returncode": behaviour})()
+        wtm.subprocess.run = fake_run
+        os.name = "nt"
+        try:
+            outcomes[label] = wtm.stop_tree(_WinProc(), grace=0.1)
+        finally:
+            os.name = real_name
+            wtm.subprocess.run = real_run
+    check("with-timeout: on Windows a missing or failing taskkill is reported, a successful one is not",
+          bool(outcomes["missing"]) and bool(outcomes["rc1"]) and outcomes["rc0"] == [], str(outcomes))
+    # the whole message, in-process: a stop that left something running must say so in the timeout report
+    saved_handlers = {sg: signal.getsignal(sg) for sg in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP, signal.SIGQUIT, signal.SIGTSTP)}
+    real_stop = wtm.stop_tree
+    wtm.stop_tree = lambda proc, *a, **k: (real_stop(proc, *a, grace=0.3, **k), [4242, 4243])[1]
+    err_buf = io.StringIO()
+    try:
+        with contextlib.redirect_stderr(err_buf):
+            rc_main = wtm.main(["0.01", "--label", "unit leg", "--", py, "-c", "import time; time.sleep(30)"])
+    finally:
+        wtm.stop_tree = real_stop
+        for sg, h in saved_handlers.items():
+            signal.signal(sg, h)
+    check("with-timeout: a timeout report that left processes behind says which, and still exits 124",
+          rc_main == 124 and "unit leg TIMED OUT" in err_buf.getvalue() and "NOT everything was stopped" in err_buf.getvalue()
+          and "4242, 4243" in err_buf.getvalue(), "%s %s" % (rc_main, err_buf.getvalue()))
+    # a leader that has been reaped is no root: its number may name an unrelated process, and that process's children are not ours
+    calls = []
+    real_sv, real_sn, real_sub = wtm._signal_verified, wtm._snapshot, wtm._SUBREAPER
+
+    class _Reaped:
+        pid = 4242
+        def poll(self):
+            return 0
+        def wait(self, timeout=None):
+            return 0
+    wtm._signal_verified = lambda pid, start, sig: calls.append((pid, sig)) or True
+    wtm._snapshot = lambda: {4242: (1, "S", "unrelated", 4242), 5000: (4242, "S", "its-child", 4242), os.getpid(): (1, "S", "me", 1)}
+    wtm._SUBREAPER = False
+    try:
+        with contextlib.redirect_stderr(io.StringIO()):
+            wtm.stop_tree(_Reaped(), grace=0.3)
+    finally:
+        wtm._signal_verified, wtm._snapshot, wtm._SUBREAPER = real_sv, real_sn, real_sub
+    check("with-timeout: nothing is walked from, or signalled below, a leader's number once the leader is reaped", calls == [], str(calls))
+    # the polite pass skips members of the leader's group (the group signal covered them); the final pass does not
+    seen = []
+    wtm._signal_verified = lambda pid, start, sig: seen.append((pid, sig)) or True
+
+    class _Live:
+        pid = 31337
+        def poll(self):
+            return None
+    real_kpg = wtm.os.killpg
+    wtm.os.killpg = lambda *_a: None
+    try:
+        wtm._send(_Live(), signal.SIGTERM, {111: ("s", 31337), 222: ("s", 999)}, skip_group=True)
+        polite = list(seen)
+        seen.clear()
+        wtm._send(_Live(), signal.SIGKILL, {111: ("s", 31337), 222: ("s", 999)})
+        final = list(seen)
+        seen.clear()
+        unreached = wtm._send(_Live(), signal.SIGKILL, {111: ("s", 31337), 222: ("s", 999)}, deadline=time.monotonic() - 1)
+    finally:
+        wtm._signal_verified = real_sv
+        wtm.os.killpg = real_kpg
+    check("with-timeout: the polite pass signals only the process outside the leader's group (once), the final pass signals both",
+          polite == [(222, signal.SIGTERM)] and sorted(final) == [(111, signal.SIGKILL), (222, signal.SIGKILL)], "%s | %s" % (polite, final))
+    check("with-timeout: a send pass past its deadline stops verifying and returns the pids it did not reach",
+          sorted(unreached) == [111, 222] and seen == [], "%s %s" % (unreached, seen))
+    # reaping is housekeeping: a denied waitid turns it off instead of breaking the stop
+    real_waitid = os.waitid
+    wtm._SUBREAPER = True
+
+    def denied(*_a, **_k):
+        raise OSError(1, "operation not permitted")
+    os.waitid = denied
+    try:
+        wtm._reap_adopted(1)
+        reap_after, subreaper_after = wtm._REAP, wtm._SUBREAPER
+    finally:
+        os.waitid = real_waitid
+        wtm._SUBREAPER = real_sub
+        wtm._REAP = True
+    check("with-timeout: a denied waitid switches REAPING off, raises nothing, and leaves the subreaper flag (who adopts orphans) alone",
+          reap_after is False and subreaper_after is True, "reap=%s subreaper=%s" % (reap_after, subreaper_after))
+    if sys.platform.startswith("linux"):
+        with tempfile.TemporaryDirectory() as td:
+            tdp = Path(td)
+            # adopted orphans that exit must be reaped while the leader keeps running (the subreaper makes them our children)
+            (tdp / "spawner.py").write_text(
+                "import os, sys, time\n"
+                "for _ in range(5):\n"
+                "    if os.fork() == 0:\n"
+                "        if os.fork() == 0:\n"
+                "            time.sleep(1.0)\n"
+                "            os._exit(0)\n"
+                "        os._exit(0)\n"
+                "time.sleep(2.5)\n")
+            wp = subprocess.Popen([py, str(wt), "0.2", "--", py, str(tdp / "spawner.py")],
+                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            time.sleep(0.5)
+            adopted_alive = [int(n) for n in os.listdir("/proc") if n.isdigit() and (wtm._proc_stat(int(n)) or (0, "", "", 0))[0] == wp.pid
+                             and (wtm._proc_stat(int(n)) or (0, "", "", 0))[1] != "Z"]
+            time.sleep(1.3)
+            zombies = []
+            for name in os.listdir("/proc"):
+                if name.isdigit():
+                    st = wtm._proc_stat(int(name))
+                    if st and st[0] == wp.pid and st[1] == "Z":
+                        zombies.append(int(name))
+            wp.wait(timeout=20)
+            check("with-timeout: orphans adopted by the wrapper are reaped while the command is still running (and some were adopted)",
+                  not zombies and len(adopted_alive) >= 3, "zombie children of the wrapper: %s; adopted alive at 0.5 s: %s" % (zombies, adopted_alive))
+            # ^Z is turned into SIGTERM: a command that handles SIGTERM gets to run its handler (a stopped tree would just be killed)
+            mark = tdp / "term.mark"
+            (tdp / "termwriter.py").write_text(
+                "import signal, sys, time\n"
+                "signal.signal(signal.SIGTERM, lambda *_: (open(sys.argv[1], 'w').write('term'), sys.exit(0)))\n"
+                "open(sys.argv[1] + '.up', 'w').write('up')\ntime.sleep(60)\n")
+            wp2 = subprocess.Popen([py, str(wt), "5", "--", py, str(tdp / "termwriter.py"), str(mark)],
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=dict(os.environ, WITH_TIMEOUT_GRACE="1.5"))
+            up = Path(str(mark) + ".up")
+            deadline = time.monotonic() + 5
+            while not up.exists() and time.monotonic() < deadline:
+                time.sleep(0.05)
+            wp2.send_signal(signal.SIGTSTP)
+            rc2 = wp2.wait(timeout=20)
+            check("with-timeout: ^Z reaches the command as SIGTERM (its handler runs) and the wrapper exits 148",
+                  rc2 == 148 and mark.exists(), "rc=%s marker=%s" % (rc2, mark.exists()))
+
+    # ---- which number leg-cmd.sh picks (the shipped data)
+    launch = json.loads((SCRIPTS.parent / "data" / "launch.json").read_text(encoding="utf-8"))
+    for name, spec in launch.items():
+        if name.startswith("_"):
+            continue
+        t = spec.get("timeout") or {}
+        check("launch.json: %s declares a review and an implement timeout in minutes (or null, with the reason)" % name,
+              all((isinstance(t.get(k), (int, float)) and not isinstance(t.get(k), bool) and t[k] > 0)
+                  or (t.get(k) is None and k in t and str((t.get("no_cap") or {}).get(k, "")).strip())
+                  for k in ("review", "implement")), str(t))
+        for o in t.get("overrides", []):
+            check("launch.json: %s override %r has a model glob, minutes and the reason" % (name, o.get("model")),
+                  isinstance(o.get("model"), str) and o["model"] and isinstance(o.get("minutes"), (int, float))
+                  and o["minutes"] > 0 and isinstance(o.get("why"), str) and o["why"].strip()
+                  and o.get("role", "review") in ("review", "implement"), str(o))
+
+    with tempfile.TemporaryDirectory() as td:
+        td = Path(td)
+        make_repo(td / "repo")
+        rd = td / "run"
+        rd.mkdir()
+        (rd / "prompt.md").write_text("LENS\n")
+        (rd / "task.md").write_text("TASK\n")
+        home = td / "home"
+
+        def mins(adapter, role, model, *extra, data=None):
+            env = _roster_env(home)
+            if data is not None:
+                env["DEV_LEAD_LAUNCH"] = str(data)
+            args = [str(leg), adapter, role, "--model", model]
+            if "--prompt-file" not in extra:               # (an adapter that reads --prompt-file refuses --run-dir)
+                args += ["--run-dir", str(rd)]
+            if role == "review":                           # (--no-triage is a review-only option)
+                args += ["--no-triage", "t"]
+            r = subprocess.run(args + list(extra), capture_output=True, text=True, env=env, cwd=str(td / "repo"))
+            m = re.search(r"python3 \S+with-timeout\.py (\S+) --label", r.stdout)
+            return (m.group(1) if m else None), r
+
+        got, r = mins("cursor", "review", "grok-4.7-high")
+        check("leg-cmd timeout: cursor review grok-4.7-high takes the -high override (50)", got == "50", r.stdout + r.stderr)
+        got, r = mins("cursor", "review", "grok-4.7-xhigh")
+        check("leg-cmd timeout: -xhigh is not caught by the -high glob (75, first match wins)", got == "75", r.stdout + r.stderr)
+        got, r = mins("cursor", "review", "grok-4.7-medium")
+        check("leg-cmd timeout: -medium takes its own (40: a real grok-4.7-medium review ran 19.5-20.4 min)", got == "40", r.stdout + r.stderr)
+        got, r = mins("cursor", "review", "composer-2.5")
+        check("leg-cmd timeout: a model no override names takes the adapter's review default (30)", got == "30", r.stdout + r.stderr)
+        got, r = mins("cursor", "implement", "grok-4.7-high")
+        check("leg-cmd timeout: an override scoped to review does not apply to implement (75)", got == "75", r.stdout + r.stderr)
+        got, r = mins("cursor", "implement", "composer-2.5")
+        check("leg-cmd timeout: implement has its own default (60)", got == "60", r.stdout + r.stderr)
+        check("leg-cmd timeout: the stderr line says the number and where it came from",
+              "# timeout: 60 min (data/launch.json cursor implement default)" in r.stderr, r.stderr)
+        got, r = mins("claude", "review", "claude-sonnet-5-5", "--effort", "high")
+        check("leg-cmd timeout: an adapter with no overrides takes its default (30)", got == "30", r.stdout + r.stderr)
+        got, r = mins("agy", "implement", "gemini-3.8-flash-high", "--target", str(td / "repo"))
+        check("leg-cmd timeout: agy sits just above its own --print-timeout 20m0s (25)", got == "25", r.stdout + r.stderr)
+        got, r = mins("opencode", "implement", "opencode/x", "--effort", "high")
+        check("leg-cmd timeout: opencode implement (60)", got == "60", r.stdout + r.stderr)
+        got, r = mins("opencode", "review", "opencode/x", "--effort", "high", "--target", str(td / "repo"), "--base", "HEAD")
+        check("leg-cmd timeout: opencode review is capped well above its documented 40m+ budget (60)",
+              got == "60" and int(got) > 40, r.stdout + r.stderr)
+        got, r = mins("codex", "implement", "gpt-6.1-terra", "--effort", "high")
+        check("leg-cmd timeout: codex implement (task --background returns at once) gets NO wrapper, and says why",
+              r.returncode == 0 and got is None and "with-timeout" not in r.stdout
+              and "# timeout: none (no cap on codex implement" in r.stderr and "await-codex-job.sh" in r.stderr,
+              r.stdout + r.stderr)
+        check("leg-cmd timeout: codex implement --timeout N still asks for a wrapper (the lead's explicit choice)",
+              mins("codex", "implement", "gpt-6.1-terra", "--effort", "high", "--timeout", "5")[0] == "5", "")
+
+        got, r = mins("cursor", "review", "grok-4.7-high", "--timeout", "7")
+        check("leg-cmd timeout: --timeout beats the data", got == "7" and "--timeout 7" in r.stderr, r.stdout + r.stderr)
+        got, r = mins("cursor", "review", "grok-4.7-high", "--timeout", "0.5")
+        check("leg-cmd timeout: --timeout takes fractions of a minute", got == "0.5", r.stdout + r.stderr)
+        got, r = mins("cursor", "review", "grok-4.7-high", "--timeout", "0")
+        check("leg-cmd timeout: --timeout 0 emits no wrapper and says so",
+              got is None and "with-timeout" not in r.stdout and "# timeout: none (--timeout 0: no cap)" in r.stderr,
+              r.stdout + r.stderr)
+        for bad in ("abc", "-1", "nan", "inf", "-inf", "", "1e-1000", "-1e-999", "-0", "1e308", "1e307", "20000", "0x10"):
+            got, r = mins("cursor", "review", "grok-4.7-high", "--timeout", bad)
+            check("leg-cmd timeout: --timeout %r is refused" % bad,
+                  r.returncode != 0 and no_launch(r.stdout) and "--timeout" in r.stderr, r.stdout + r.stderr)
+
+        # ---- first match wins, role and effort filters, an adapter with no timeout block
+        fake = td / "launch.json"
+        d = json.loads(json.dumps(launch))
+        d["codex"]["timeout"] = {"review": 11, "implement": 12, "overrides": [
+            {"model": "gpt-*", "effort": "xhigh", "role": "review", "minutes": 21, "why": "a"},
+            {"model": "gpt-*", "role": "review", "minutes": 22, "why": "b"},
+            {"model": "*", "minutes": 23, "why": "c"}]}
+        del d["grok"]["timeout"]
+        fake.write_text(json.dumps(d))
+        got, r = mins("codex", "review", "gpt-6.1-terra", "--effort", "xhigh", "--target", str(td / "repo"), "--base", "HEAD", data=fake)
+        check("leg-cmd timeout: the first matching override wins, effort included", got == "21", r.stdout + r.stderr)
+        got, r = mins("codex", "review", "gpt-6.1-terra", "--effort", "high", "--target", str(td / "repo"), "--base", "HEAD", data=fake)
+        check("leg-cmd timeout: an effort filter that does not match falls to the next override", got == "22", r.stdout + r.stderr)
+        got, r = mins("codex", "review", "o3-mini", "--effort", "high", "--target", str(td / "repo"), "--base", "HEAD", data=fake)
+        check("leg-cmd timeout: an override with no role applies to every role (23)", got == "23", r.stdout + r.stderr)
+        got, r = mins("grok", "review", "grok-4", "--effort", "high", "--prompt-file", str(rd / "prompt.md"), data=fake)
+        check("leg-cmd timeout: an adapter with no timeout block emits no wrapper and says why",
+              got is None and "declares no timeout for grok" in r.stderr, r.stdout + r.stderr)
+
+        # ---- the emitted command, run for real
+        bin_ = td / "bin"
+        bin_.mkdir()
+        slow = bin_ / "cursor-agent"
+        slow.write_text('#!/bin/sh\nif [ "$SLOW" = 1 ]; then sleep 60; fi\necho LEG-OUTPUT\n')
+        slow.chmod(0o755)
+        env = _roster_env(home, PATH="%s:%s" % (bin_, os.environ["PATH"]))
+        emitted = subprocess.run([str(leg), "cursor", "review", "--model", "grok-4.7-high", "--run-dir", str(rd),
+                                  "--no-triage", "t", "--timeout", "0.02"], capture_output=True, text=True, env=env,
+                                 cwd=str(td / "repo")).stdout
+        check("leg-cmd timeout: the cap sits directly in front of the paid CLI",
+              re.search(r"-- cursor-agent -p ", emitted) and emitted.index("with-timeout.py") < emitted.index("cursor-agent -p"),
+              emitted)
+        t0 = time.monotonic()
+        out = subprocess.run(["bash", "-c", 'eval "$(cat)"'], input=emitted, capture_output=True, text=True,
+                             env=dict(env, SLOW="1"))
+        check("leg-cmd timeout: a slow leg is stopped at the cap, status 124, with the explanation",
+              out.returncode == 124 and time.monotonic() - t0 < 20 and "LEG-OUTPUT" not in out.stdout
+              and "TIMED OUT" in out.stderr and "cursor review grok-4.7-high" in out.stderr, "%s %s" % (out.returncode, out.stderr))
+        out = subprocess.run(["bash", "-c", 'eval "$(cat)"'], input=emitted, capture_output=True, text=True, env=dict(env, SLOW="0"))
+        check("leg-cmd timeout: a leg inside the cap runs and exits normally", out.returncode == 0 and "LEG-OUTPUT" in out.stdout,
+              "%s %s" % (out.returncode, out.stderr))
+        # a --model that looks like a template-owned $RUN_DIR token must stay one quoted word, never a command substitution
+        marker = td / "injected"
+        evil = subprocess.run([str(leg), "cursor", "review", "--model", "$RUN_DIR/$(touch %s)" % marker, "--run-dir", str(rd),
+                               "--no-triage", "t", "--timeout", "0"], capture_output=True, text=True, env=env, cwd=str(td / "repo"))
+        subprocess.run(["bash", "-c", 'eval "$(cat)"'], input=evil.stdout, capture_output=True, text=True,
+                       env=dict(env, SLOW="0"), timeout=20)
+        check("leg-cmd: a --model of the form $RUN_DIR/$(cmd) is quoted, not run by the caller's eval",
+              not marker.exists() and "touch" in evil.stdout, "ran: %s\n%s" % (marker.exists(), evil.stdout[-300:]))
+        check("leg-cmd: the template's own $RUN_DIR tokens still expand (codex review -o file)",
+              '-o "$RUN_DIR/review.md"' in subprocess.run(
+                  [str(leg), "codex", "review", "--model", "m", "--effort", "high", "--base", "HEAD", "--target", str(td / "repo"),
+                   "--run-dir", str(rd), "--no-triage", "t", "--timeout", "0"],
+                  capture_output=True, text=True, env=env, cwd=str(td / "repo")).stdout, "")
+        bad_data = json.loads(json.dumps(launch))
+        bad_data["claude"]["timeout"]["review"] = 1e307
+        bad_file = td / "bad-launch.json"
+        bad_file.write_text(json.dumps(bad_data))
+        got, r = mins("claude", "review", "claude-sonnet-5-5", "--effort", "high", data=bad_file)
+        check("leg-cmd timeout: a launch.json number the wrapper would not run is refused before any paid command is emitted",
+              r.returncode != 0 and no_launch(r.stdout) and "not a usable cap" in r.stderr, r.stdout + r.stderr)
+        own = subprocess.run([str(leg), "codex", "review", "--model", "$RUN_DIR/review.md", "--effort", "high", "--base", "HEAD",
+                              "--target", str(td / "repo"), "--run-dir", str(rd), "--no-triage", "t", "--timeout", "0"],
+                             capture_output=True, text=True, env=env, cwd=str(td / "repo")).stdout
+        check("leg-cmd: a --model that spells a template token is plain text (single-quoted), the template's own stays expandable",
+              "-m '$RUN_DIR/review.md'" in own and '-o "$RUN_DIR/review.md"' in own, own[-400:])
+        d2 = json.loads(json.dumps(launch))
+        d2["codex"]["timeout"]["overrides"] = [{"model": "gpt-9-special", "role": "implement", "minutes": 17, "why": "test"}]
+        f2 = td / "launch-override.json"
+        f2.write_text(json.dumps(d2))
+        got, r = mins("codex", "implement", "gpt-9-special", "--effort", "high", data=f2)
+        check("leg-cmd timeout: a model-specific override applies even where the role default is null", got == "17", r.stdout + r.stderr)
+        got, r = mins("codex", "implement", "gpt-6.1-terra", "--effort", "high", data=f2)
+        check("leg-cmd timeout: ...and another model still gets no cap", got is None and "no cap on codex implement" in r.stderr,
+              r.stdout + r.stderr)
+        literal = 'gemini-3.8-flash-high"$(cat "$RUN_DIR/prompt.md")"'
+        ag = subprocess.run([str(leg), "agy", "review", "--model", literal, "--base", "HEAD", "--target", str(td / "repo"),
+                             "--run-dir", str(rd), "--no-triage", "t", "--timeout", "0"],
+                            capture_output=True, text=True, env=env, cwd=str(td / "repo"))
+        check("leg-cmd: the framed prompt replaces the template's brief token only, never caller text that spells it",
+              ag.returncode == 0 and shlex.quote(literal) in ag.stdout and ag.stdout.count('"$(cat "$RUN_DIR/framed-prompt.md")"') == 1,
+              ag.stdout[-600:] + ag.stderr)
+        # the framing builder and the lockdown check stay OUTSIDE the cap: the cap is on the paid command only
+        oc = subprocess.run([str(leg), "opencode", "review", "--model", "opencode/x", "--effort", "high", "--base", "HEAD",
+                             "--target", str(td / "repo"), "--run-dir", str(rd), "--no-triage", "t"],
+                            capture_output=True, text=True, env=_roster_env(home), cwd=str(td / "repo")).stdout
+        check("leg-cmd timeout: the lockdown check and the framing builder run before, outside the cap",
+              oc.index("check-opencode-lockdown.py") < oc.index("review-prompt.py") < oc.index("with-timeout.py") < oc.index("opencode run"),
+              oc)
+
+
+
 def test_leg_cmd_windows_cmd_shim():
     """Windows (0.6.96): an argv-delivered prompt through a .cmd shim is cut at its first newline by
     cmd.exe, and the cursor run still bills (a peer, 2026-10-31). The .ps1 beside it, run by pwsh, keeps
@@ -7580,7 +8592,7 @@ def test_leg_cmd_windows_cmd_shim():
         check("leg-cmd windows: ...an extensionless wrapper beside the .cmd still routes through the .ps1",
               r.returncode == 0 and "cursor-agent.ps1" in r.stdout, r.stdout + r.stderr)
         off = dict(env, DEV_LEAD_LEG_WINDOWS="0", MSYSTEM="MINGW64")   # the seam wins over a Git-Bash marker
-        r = subprocess.run(argv, capture_output=True, text=True, env=off, cwd=str(td / "repo"))
+        r = subprocess.run(argv + ["--timeout", "0"], capture_output=True, text=True, env=off, cwd=str(td / "repo"))
         check("leg-cmd windows: ...and off Windows a .cmd on PATH is ignored (the plain CLI is emitted)",
               r.returncode == 0 and "pwsh" not in r.stdout and "\ncursor-agent -p" in r.stdout, r.stdout + r.stderr)
         # launch.json is UTF-8 (an em dash at least); a Windows Python reads files in the code page
@@ -7759,7 +8771,7 @@ def test_leg_cmd():
         make_repo(Path(td))
         r = subprocess.run([str(script), "codex", "review", "--model", "gpt-6-luna", "--effort", "xhigh",
                             "--base", "abc123", "--target", td, "--run-dir", rd,
-                            "--no-triage", "test fixture", "--head", "HEAD"],
+                            "--no-triage", "test fixture", "--head", "HEAD", "--timeout", "0"],
                            capture_output=True, text=True)
     out = r.stdout
     check("leg-cmd: codex review runs codex exec, read-only, with the effort per call",
@@ -8070,7 +9082,7 @@ def test_leg_cmd():
         make_repo(Path(td))
         r = subprocess.run([str(script), "opencode", "review", "--model", "opencode/x", "--effort", "high",
                             "--base", "abc", "--target", td, "--run-dir", rd,
-                            "--no-triage", "test fixture", "--head", "HEAD"], capture_output=True, text=True)
+                            "--no-triage", "test fixture", "--head", "HEAD", "--timeout", "0"], capture_output=True, text=True)
         cmd = r.stdout.strip().splitlines()[-1] if r.stdout.strip() else ""
         check("leg-cmd: opencode review frames the brief, then runs the leg INSIDE --target in a subshell",
               r.returncode == 0 and "review-prompt.py --adapter opencode --base abc --target " in cmd
@@ -8078,7 +9090,7 @@ def test_leg_cmd():
               and cmd.endswith('< "$RUN_DIR/framed-prompt.md" )'), cmd)
         r = subprocess.run([str(script), "agy", "review", "--model", "gemini-3.8-flash-high",
                             "--base", "abc", "--target", td, "--run-dir", rd,
-                            "--no-triage", "test fixture", "--head", "HEAD"], capture_output=True, text=True)
+                            "--no-triage", "test fixture", "--head", "HEAD", "--timeout", "0"], capture_output=True, text=True)
         cmd = r.stdout.strip().splitlines()[-1] if r.stdout.strip() else ""
         check("leg-cmd: agy review materializes evidence and grants it with a second --add-dir",
               r.returncode == 0 and '--adapter agy' in cmd and '--evidence "$RUN_DIR/evidence"' in cmd
@@ -14718,13 +15730,15 @@ def sections():
             ("lint.py check_pairing_rule", test_lint_pairing_rule),
             ("lint.py check_leaf_rule", test_lint_leaf_rule),
             ("lint.py check_launch", test_lint_launch),
+            ("lint.py timeout block", test_lint_timeout_block),
             ("lint.py plain checks (structure, frontmatter, manifest, links, fences, var_order, tracked, "
              "sentinels, families)", test_lint_plain_checks),
             ("lint.py check_delegate_guardrails", test_lint_delegate_guardrails),
             ("lint.py check_delegate_audit_trails", test_lint_delegate_audit_trails))),
         ("common", _titled(("scripts/_common.py and scripts/lib.sh", _in_tmp(test_common)))),
         ("leg-cmd", _titled((None, test_leg_cmd), (None, test_leg_cmd_refusal_fails_when_run),
-                            (None, test_leg_cmd_windows_cmd_shim), (None, test_triage_bash_on_windows))),
+                            (None, test_leg_cmd_windows_cmd_shim), (None, test_triage_bash_on_windows),
+                            (None, test_leg_timeout))),
         ("lockdown", _titled(("check-opencode-lockdown.py and leg-cmd.sh --help", _in_tmp(test_opencode_lockdown)))),
         ("triage-launch", _titled(("leg-cmd.sh triage gate and review-prompt input",
                                    _in_tmp(lambda t: (test_triage_launch_gate(t), test_review_prompt_input(t)))))),

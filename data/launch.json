@@ -51,7 +51,15 @@
     "next door, and sometimes false on the same machine twice running -- in a file",
     "whose whole purpose is that nobody has to guess. Revisit only with per-host",
     "data, a cell probed to stability, and",
-    "the implement role covered; see the warning in agy-runtime.md."
+    "the implement role covered; see the warning in agy-runtime.md.",
+    "",
+    "timeout is a POLICY cap, not a CLI fact (the 2026-09-08 pass removed an invented one): the most minutes a paid leg may run before",
+    "scripts/with-timeout.py stops it. Its job is to end a leg that is really hung, so every value is generous; it is never a pace.",
+    "  review / implement -- the adapter's default per role, in minutes",
+    "  overrides -- first match wins; model is an fnmatch glob on the id as passed to leg-cmd.sh, effort (optional) matches the --effort value,",
+    "               role (optional) limits it to review or implement; why records the measurement behind the number",
+    "  leg-cmd.sh --timeout <minutes> beats all of it for one launch; --timeout 0 emits no cap at all",
+    "Starting values come from the calibration journals; raise one when a healthy leg is stopped, and write why."
   ],
   "agy": {
     "cli": "agy",
@@ -104,6 +112,12 @@
         "gemini-3.8-flash-low"
       ],
       "note": "A bare tier name is REJECTED: `--model gemini-3.8-flash` errors with `requires --effort (available: low, medium, high)`. `--model gemini-3.8-flash --effort medium` also works, but the suffixed form is self-contained and cannot disagree with a flag. Verified 2026-09-08 by running all three spellings."
+    },
+    "timeout": {
+      "review": 25,
+      "implement": 25,
+      "overrides": [],
+      "note": "The CLI has its own --print-timeout 20m0s (in the argv above); this outer cap sits just above it so the CLI's own message is the one a lead normally sees."
     },
     "not_flags": [],
     "gotchas": [
@@ -172,6 +186,22 @@
         "review": "codex review takes its effort per call since 0.6.28 (codex exec); rosters written earlier may lack it -- set the effort the review used to inherit, e.g. `grep model_reasoning_effort ~/.codex/config.toml`"
       }
     },
+    "timeout": {
+      "review": 30,
+      "implement": null,
+      "overrides": [
+        {
+          "model": "*",
+          "effort": "xhigh",
+          "role": "review",
+          "minutes": 45,
+          "why": "xhigh reads longer before it answers; the 2026-11 reviews of a 12K-line file ran 4-10 min, so 45 only stops a real hang"
+        }
+      ],
+      "no_cap": {
+        "implement": "the implement launcher is the companion's `task --background`, which returns as soon as the job is accepted, so a cap on it would stop nothing; the job runs on, and the wait is scripts/await-codex-job.sh (its own deadline stops WAITING, it does not cancel the job)"
+      }
+    },
     "gotchas": [
       "The review brief is the LENS: review-prompt.py wraps it in the suite's adversarial framing (base revision, verdict line, per-claim answers). An empty brief is refused before codex starts.",
       "`-C` must name a directory inside a git repository; outside one codex prints `Not inside a trusted directory` and exits without reviewing.",
@@ -220,6 +250,42 @@
         "kimi-k3-high"
       ],
       "note": "Effort is part of the model id; there is no effort flag. Two separate quota pools: the grok tier has low/medium/high/xhigh (each with a `-fast` twin), while `kimi-k3` has only low/high/max -- there is NO kimi medium. Verified 2026-09-08 via `cursor-agent models`."
+    },
+    "timeout": {
+      "review": 30,
+      "implement": 60,
+      "overrides": [
+        {
+          "model": "*-xhigh*",
+          "role": "review",
+          "minutes": 75,
+          "why": "a measured -xhigh code review took 48 min (cursor-runtime.md)"
+        },
+        {
+          "model": "*-high*",
+          "role": "review",
+          "minutes": 50,
+          "why": "grok-4.7-high on a 12K-line file ran 28 min (2026-11-06); -high on documents ~9 min"
+        },
+        {
+          "model": "*-medium*",
+          "role": "review",
+          "minutes": 40,
+          "why": "grok-4.7-medium reviews of a 12K-line file ran 19.5-20.4 min (2026-11-06); grok-4.6-medium code reviews took 5-6 min"
+        },
+        {
+          "model": "*-xhigh*",
+          "role": "implement",
+          "minutes": 120,
+          "why": "xhigh implements run longest"
+        },
+        {
+          "model": "*-high*",
+          "role": "implement",
+          "minutes": 75,
+          "why": "a -high implement run took 18 min (2026-09-05)"
+        }
+      ]
     },
     "not_flags": [
       "--effort"
@@ -274,6 +340,12 @@
         "minimal"
       ],
       "note": "Values are the provider's, not a fixed set. There is NO reasoningEffort key in opencode.json -- a lead who looks for one silently gets the provider default. `--help` lists `--variant` but it sits below the point a truncated read stops at; that is exactly how it was missed on 2026-09-08. Measured the same day: on an identical brief and frozen commit, xhigh returned 10 findings against the default's 8, including the round's only remote crash."
+    },
+    "timeout": {
+      "review": 60,
+      "implement": 60,
+      "overrides": [],
+      "note": "The runtime file says to budget 40m+ under free-pool congestion (a healthy review has gone silent for 10+ minutes and finished at ~31), so the cap sits well above that floor."
     },
     "not_flags": [],
     "gotchas": [
@@ -355,6 +427,11 @@
       ],
       "note": "Accepts none..max in principle, but the levels are per-model menus and which ones grok-4.6 advertises is UNVERIFIED. Confirm against the model before relying on a specific level."
     },
+    "timeout": {
+      "review": 30,
+      "implement": 60,
+      "overrides": []
+    },
     "not_flags": [],
     "gotchas": [
       "`--no-memory` on every delegate run: this CLI has cross-session memory and a reviewer that remembers last session's premises is contaminated.",
@@ -423,6 +500,11 @@
         "review": "claude review takes --effort since 0.6.35; rosters written earlier have none -- set the level the leg should run at (the framing test ran high)",
         "implement": "claude implement takes --effort since 0.6.56; rosters written earlier have none -- set the level the delegate should run at (the 2026-10-01 probe ran xhigh)"
       }
+    },
+    "timeout": {
+      "review": 30,
+      "implement": 60,
+      "overrides": []
     },
     "gotchas": [
       "Never the cross-family reviewer for Claude-written work.",

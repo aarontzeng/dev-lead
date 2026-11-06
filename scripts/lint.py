@@ -1019,6 +1019,56 @@ def check_delegate_audit_trails():
 
 
 # ---- launch: the prose must not contradict data/launch.json ----
+def _check_timeout_block(path, name, spec):
+    """data/launch.json `timeout` (0.6.126): a wall-clock cap per role, and overrides that name the measurement
+    behind each number. An unreadable cap fails at launch time, in the middle of a round -- so it fails here."""
+    import importlib.util
+    _spec = importlib.util.spec_from_file_location("dev_lead_with_timeout", Path(__file__).resolve().parent / "with-timeout.py")
+    _wt = importlib.util.module_from_spec(_spec)
+    _spec.loader.exec_module(_wt)
+
+    def positive(v):
+        # the wrapper's own validator: a number lint passes must be one the wrapper will run
+        if not isinstance(v, (int, float)) or isinstance(v, bool):
+            return False
+        try:
+            return _wt.parse_minutes(repr(v)) > 0
+        except ValueError:
+            return False
+    t = spec.get("timeout")
+    if not isinstance(t, dict):
+        err(rel(path), f"adapter '{name}' has no 'timeout' object (leg-cmd.sh wraps every paid leg in a cap)")
+        return
+    roles = spec.get("role", {})
+    no_cap = t.get("no_cap", {})
+    for role in roles:
+        if role in t and t[role] is None:
+            # a launcher that returns before the work ends has nothing to cap -- but the reason must be written down
+            if not (isinstance(no_cap, dict) and isinstance(no_cap.get(role), str) and no_cap[role].strip()):
+                err(rel(path), f"adapter '{name}' timeout.{role} is null (no cap) but timeout.no_cap.{role} gives no reason")
+        elif not positive(t.get(role)):
+            err(rel(path), f"adapter '{name}' timeout.{role} must be a positive number of minutes (or null with a no_cap reason), got {t.get(role)!r}")
+    overrides = t.get("overrides", [])
+    if not isinstance(overrides, list):
+        err(rel(path), f"adapter '{name}' timeout.overrides must be a list")
+        return
+    for i, o in enumerate(overrides):
+        where = f"adapter '{name}' timeout.overrides[{i}]"
+        if not isinstance(o, dict):
+            err(rel(path), f"{where} must be an object")
+            continue
+        if not (isinstance(o.get("model"), str) and o["model"]):
+            err(rel(path), f"{where} needs a non-empty 'model' glob")
+        if not positive(o.get("minutes")):
+            err(rel(path), f"{where} needs 'minutes' as a positive number, got {o.get('minutes')!r}")
+        if not (isinstance(o.get("why"), str) and o["why"].strip()):
+            err(rel(path), f"{where} needs a 'why': the measurement behind the number")
+        if "role" in o and o["role"] not in roles:
+            err(rel(path), f"{where} names role {o['role']!r}, which '{name}' does not have")
+        if "effort" in o and not (isinstance(o["effort"], str) and o["effort"]):
+            err(rel(path), f"{where} 'effort' must be a non-empty string")
+
+
 def check_launch():
     """Hold the skills' launch prose to the declared launch mechanics.
 
@@ -1051,6 +1101,7 @@ def check_launch():
         for field in ("cli", "role", "effort", "verified"):
             if field not in spec:
                 err(rel(path), f"adapter '{name}' has no '{field}'")
+        _check_timeout_block(path, name, spec)
         eff = spec.get("effort", {})
         mech = eff.get("mechanism")
         if mech not in ("model_suffix", "flag", "config_only", "none"):

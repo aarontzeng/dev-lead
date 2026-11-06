@@ -11,7 +11,7 @@
 # Usage:
 #   leg-cmd.sh <adapter> <role> --model <model> [--effort <e>] [--target <dir>]
 #              [--base <ref>] [--prompt-file <f>] [--run-dir <dir>]
-#              [--add-dir <dir> ...] [--allow-bash <prefix> ...]
+#              [--add-dir <dir> ...] [--timeout <minutes>] [--allow-bash <prefix> ...]
 #              [--head <rev>] [--no-triage <reason>] [--check]
 #
 # Not every option applies to every adapter, and one that does not is REFUSED,
@@ -76,10 +76,10 @@ print("Fix rounds: put points already rebutted or recorded as known limits in $R
 PY
     exit 0 ;;
 esac
-[ $# -ge 2 ] || die "usage: leg-cmd.sh <adapter> <role> --model <model> [--effort <e>] [--target <dir>] [--base <ref>] [--prompt-file <f>] [--run-dir <dir>] [--add-dir <dir> ...] [--allow-bash <prefix> ...] [--head <rev>] [--no-triage <reason>] [--check]  (each option only where the adapter takes it; see the header of this script)"
+[ $# -ge 2 ] || die "usage: leg-cmd.sh <adapter> <role> --model <model> [--effort <e>] [--target <dir>] [--base <ref>] [--prompt-file <f>] [--run-dir <dir>] [--add-dir <dir> ...] [--timeout <minutes>] [--allow-bash <prefix> ...] [--head <rev>] [--no-triage <reason>] [--check]  (each option only where the adapter takes it; see the header of this script)"
 ADAPTER=$1; ROLE=$2; shift 2
 
-MODEL=""; EFFORT=""; TARGET=""; BASE=""; PROMPT_FILE=""; RUN_DIR_ARG=""; HEAD=""; NO_TRIAGE=""; HEAD_GIVEN=0; NO_TRIAGE_GIVEN=0; CHECK=0; ADD_DIRS=""; ALLOW_BASH=""
+MODEL=""; EFFORT=""; TARGET=""; BASE=""; PROMPT_FILE=""; RUN_DIR_ARG=""; HEAD=""; NO_TRIAGE=""; HEAD_GIVEN=0; NO_TRIAGE_GIVEN=0; CHECK=0; ADD_DIRS=""; ALLOW_BASH=""; TIMEOUT=""; TIMEOUT_GIVEN=0
 # Every value option checks its value is there before `shift 2`: under
 # `set -e`, `shift 2` with one argument left exits 1 with NO message, so a
 # trailing `--model` used to end the script silently (found 2026-09-25).
@@ -94,6 +94,7 @@ while [ $# -gt 0 ]; do
     --run-dir)     needs_value "$@"; RUN_DIR_ARG=$2; shift 2 ;;
     --head)        needs_value "$@"; HEAD=$2; HEAD_GIVEN=1; shift 2 ;;
     --no-triage)   needs_value "$@"; NO_TRIAGE=$2; NO_TRIAGE_GIVEN=1; shift 2 ;;
+    --timeout)     needs_value "$@"; TIMEOUT=$2; TIMEOUT_GIVEN=1; shift 2 ;;
     --add-dir)     [ -n "${2:-}" ] || die "--add-dir needs a directory"
                    case "$2" in -*) die "--add-dir: '$2' starts with '-' and would read as a flag; use ./$2" ;; esac
                    case "$2" in *$'\n'*) die "--add-dir: a directory name may not contain a newline" ;; esac
@@ -116,7 +117,7 @@ done
 
 ADAPTER="$ADAPTER" ROLE="$ROLE" MODEL="$MODEL" EFFORT="$EFFORT" TARGET="$TARGET" \
 BASE="$BASE" PROMPT_FILE="$PROMPT_FILE" RUN_DIR_ARG="$RUN_DIR_ARG" HEAD="$HEAD" NO_TRIAGE="$NO_TRIAGE" \
-HEAD_GIVEN="$HEAD_GIVEN" NO_TRIAGE_GIVEN="$NO_TRIAGE_GIVEN" \
+HEAD_GIVEN="$HEAD_GIVEN" NO_TRIAGE_GIVEN="$NO_TRIAGE_GIVEN" TIMEOUT="$TIMEOUT" TIMEOUT_GIVEN="$TIMEOUT_GIVEN" \
 CHECK="$CHECK" DATA="$DATA" ADD_DIRS="$ADD_DIRS" ALLOW_BASH="$ALLOW_BASH" HERE="$HERE" python3 - <<'PY'
 import json, os, re, shlex, sys
 
@@ -207,13 +208,18 @@ if prefix and ("/" not in _m or not all(_m.split("/"))):
 r = spec["role"][role]
 BRIEF = '"$RUN_DIR/%s"' % ("task.md" if role == "implement" else "prompt.md")
 BRIEF_ARG = '"$(cat %s)"' % BRIEF
+class Owned(str):
+    """A token the TEMPLATE wrote, by provenance and not by value: a caller's --model that happens to spell one is plain text."""
 subst = {"{MODEL}": os.environ["MODEL"], "{EFFORT}": effort,
          "{TARGET}": os.environ.get("TARGET", ""), "{BASE}": os.environ.get("BASE", ""),
          "{PROMPT_FILE}": os.environ.get("PROMPT_FILE", "")}
 argv, missing = [], set()
 for tok in r["argv"]:
     if tok == "{PROMPT}":
-        argv.append(BRIEF_ARG if r["prompt_delivery"] == "argv" else tok)
+        argv.append(Owned(BRIEF_ARG) if r["prompt_delivery"] == "argv" else tok)
+        continue
+    if tok.startswith("$RUN_DIR/") and not any(k in tok for k in subst):
+        argv.append(Owned(tok))
         continue
     for k, v in subst.items():
         if k in tok:
@@ -307,7 +313,7 @@ if add_dirs:
                  "data/launch.json, so it would be silently dropped.\n  %s"
                  % (a, spec.get("add_dir_note",
                                 "put the context inside the directory the leg runs in.")))
-    at = next((i for i, t in enumerate(argv) if t == BRIEF_ARG), len(argv))
+    at = next((i for i, t in enumerate(argv) if isinstance(t, Owned) and t == BRIEF_ARG), len(argv))
     extra = []
     for d_ in add_dirs:
         extra += [flag, d_]
@@ -339,15 +345,21 @@ if bash_spec:
 # lets every one of those through. Measured 2026-09-08 on this very script:
 # `--model 'x`+chr(96)+'id'+chr(96)+'y'` rendered unquoted.
 # The two exceptions are strings this script emits itself and means as shell.
-OURS = (BRIEF_ARG,)
 # A template token under $RUN_DIR (codex review's -o file) is ours too, and must
 # expand: single-quoting it would write to a file literally named $RUN_DIR/...
+# Only a token the TEMPLATE wrote (not one built from --model, --effort, --target ...) may expand: a model id such as
+# '$RUN_DIR/$(cmd)' used to reach the caller's eval as a command substitution.
 def _emit(t):
-    if t in OURS:
+    if isinstance(t, Owned):
+        if t.startswith("$RUN_DIR/") and "'" not in t and '"' not in t:
+            return '"%s"' % t
         return t
-    if t.startswith("$RUN_DIR/") and "'" not in t and '"' not in t:
-        return '"%s"' % t
     return shlex.quote(t)
+# A framed leg reads the FRAMED prompt where the bare brief would go. Swapped here, on the TOKEN the template wrote, and not
+# by a text replace over the finished command: that replace also rewrote any caller text (a --model, a --target path)
+# that happened to contain the same characters.
+if r.get("prompt_frame") and r["prompt_delivery"] == "argv":
+    argv = [Owned('"$(cat "$RUN_DIR/framed-prompt.md")"') if (isinstance(t, Owned) and t == BRIEF_ARG) else t for t in argv]
 cli = r.get("cli", spec["cli"])
 cmd = cli + " " + " ".join(_emit(t) for t in argv)
 # Windows: a CLI installed as a .cmd/.bat shim runs through cmd.exe, which ends an argument at its
@@ -382,6 +394,62 @@ if windows and r["prompt_delivery"] == "argv" and re.fullmatch(r"[A-Za-z0-9._-]+
                      % (cli, found, os.path.basename(ps1)))
         cmd = "pwsh -NoProfile -NonInteractive -File %s %s" % (
             shlex.quote(ps1), " ".join(_emit(t) for t in argv))
+# A wall-clock cap on the PAID command (not on the framing builder or the lockdown check before it): the number
+# comes from data/launch.json (adapter default per role, then the first matching override), --timeout beats it for
+# one launch and --timeout 0 emits no cap. with-timeout.py rather than coreutils `timeout`: macOS has none, the
+# whole process tree must die, and a bare rc=124 beside an empty log is what read as a hung leg on 2026-11-06.
+def _fmt_min(v):
+    return ("%d" % v) if float(v).is_integer() else ("%g" % v)
+def _resolve_timeout():
+    import fnmatch
+    # one validator for the flag, the wrapper and the data file, so none of them can disagree about what a number of minutes is
+    import importlib.util as _ilu_t
+    _tspec = _ilu_t.spec_from_file_location("dev_lead_with_timeout", os.path.join(os.environ["HERE"], "with-timeout.py"))
+    _tmod = _ilu_t.module_from_spec(_tspec)
+    _tspec.loader.exec_module(_tmod)
+    def _data_minutes(value, where):
+        try:
+            v = _tmod.parse_minutes(str(value))
+        except ValueError as exc:
+            sys.exit("leg-cmd: data/launch.json %s is not a usable cap: %s" % (where, exc))
+        if v == 0:
+            sys.exit("leg-cmd: data/launch.json %s is 0; write null (with a no_cap reason) for no cap" % where)
+        return v
+    if os.environ.get("TIMEOUT_GIVEN") == "1":
+        raw = os.environ.get("TIMEOUT", "")
+        try:
+            v = _tmod.parse_minutes(raw)
+        except ValueError as exc:
+            sys.exit("leg-cmd: --timeout (0 for no cap): %s" % exc)
+        return (None, "--timeout 0: no cap") if v == 0 else (v, "--timeout %s" % _fmt_min(v))
+    t = spec.get("timeout")
+    if not t:
+        return None, "data/launch.json declares no timeout for %s" % a
+    for o in t.get("overrides") or []:
+        if o.get("role") and o["role"] != role:
+            continue
+        if not fnmatch.fnmatchcase(os.environ["MODEL"], o["model"]):
+            continue
+        if o.get("effort") and o["effort"] != effort:
+            continue
+        return _data_minutes(o["minutes"], "%s timeout override %s" % (a, o["model"])), "data/launch.json %s timeout override %s%s (%s)" % (
+            a, o["model"], (" effort " + o["effort"]) if o.get("effort") else "", o.get("why", "no reason recorded"))
+    if t.get(role) is None:
+        # a launcher that returns before the work ends (codex implement: `task --background`) has nothing a wall-clock
+        # cap could stop; the lint rule requires the reason, and it is printed so nobody believes a cap is running.
+        # (After the overrides, so a model-specific cap someone adds still applies.)
+        return None, "no cap on %s %s: %s" % (a, role, (t.get("no_cap") or {}).get(role, "data/launch.json sets none"))
+    return _data_minutes(t[role], "%s timeout.%s" % (a, role)), "data/launch.json %s %s default" % (a, role)
+_mins, _src = _resolve_timeout()
+if _mins:
+    cmd = "python3 %s %s --label %s --source %s -- %s" % (
+        shlex.quote(os.path.join(os.environ["HERE"], "with-timeout.py")), _fmt_min(_mins),
+        shlex.quote("%s %s %s" % (a, role, os.environ["MODEL"])), shlex.quote(_src), cmd)
+    print("# timeout: %s min (%s); raise it for this launch with --timeout <minutes>, 0 for none" % (_fmt_min(_mins), _src),
+          file=sys.stderr)
+else:
+    print("# timeout: none (%s)" % _src, file=sys.stderr)
+
 frame = r.get("prompt_frame")
 if r.get("requires_lockdown") and not frame:
     sys.exit("leg-cmd: %s/%s sets requires_lockdown without prompt_frame; the check rides on the framed command, "
@@ -400,9 +468,7 @@ if frame:
         # A leg that cannot run git reads the diff and the base-side files the
         # builder materializes here -- under RUN_DIR, never in the frozen tree.
         builder += ' --evidence "$RUN_DIR/evidence"'
-    if r["prompt_delivery"] == "argv":
-        cmd = cmd.replace(OURS[0], '"$(cat "$RUN_DIR/framed-prompt.md")"')
-    else:
+    if r["prompt_delivery"] != "argv":
         cmd += ' < "$RUN_DIR/framed-prompt.md"'
     if "{TARGET}" not in " ".join(r["argv"]):
         # The leg runs in its cwd (opencode). The frame names BASE..HEAD of the
