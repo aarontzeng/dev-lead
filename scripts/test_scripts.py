@@ -7579,6 +7579,38 @@ def test_lint_timeout_block():
         check("lint timeout: %s is named" % what, any(want in e for e in got), str(got))
 
 
+def _pids_running(argv):
+    """Pids whose command line is EXACTLY argv (a list of words), not merely mentioning it. /proc where there is one (Linux),
+    `ps` elsewhere (macOS), so tests that look for a leftover helper do not assume Linux."""
+    found = []
+    if os.path.isdir("/proc/self"):
+        want = ("\x00".join(argv) + "\x00").encode()
+        for name in os.listdir("/proc"):
+            if name.isdigit():
+                try:
+                    if Path("/proc/%s/cmdline" % name).read_bytes() == want:
+                        found.append(int(name))
+                except OSError:
+                    pass
+        return found
+    out = subprocess.run(["ps", "-A", "-o", "pid=,command="], capture_output=True, text=True).stdout
+    for line in out.splitlines():
+        parts = line.strip().split(None, 1)
+        if len(parts) == 2 and parts[0].isdigit() and parts[1].strip() == " ".join(argv):
+            found.append(int(parts[0]))
+    return found
+
+
+def _pid_exists(pid):
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
 def test_leg_timeout():
     """Wall-clock caps on paid legs (0.6.126): data/launch.json declares them per adapter, role, model and
     effort; leg-cmd.sh wraps the paid command in with-timeout.py; --timeout beats the data and 0 removes the cap.
@@ -7967,22 +7999,15 @@ def test_leg_timeout():
                     os.environ[k] = v
         time.sleep(0.3)
         hp = int(helper_pid.read_text()) if helper_pid.exists() else None
-        straggler = []                    # the backgrounded grandchild is not ours to reap; only make sure the test leaves none
-        for name in os.listdir("/proc"):
-            if name.isdigit():
-                try:
-                    if Path("/proc/%s/cmdline" % name).read_bytes() == b"sleep\x0031.9\x00":
-                        straggler.append(int(name))
-                except OSError:
-                    pass
+        straggler = _pids_running(["sleep", "31.9"])      # the backgrounded grandchild is not ours to reap; leave none behind
         for pid in straggler:
             try:
                 os.kill(pid, 9)
             except OSError:
                 pass
         check("with-timeout: a stalled `ps` (even with a grandchild holding its pipe) gives up at its own limit and leaves no helper, not even a zombie",
-              got_snap is None and took_snap < 8 and hp is not None and not os.path.exists("/proc/%d" % hp),
-              "snap=%s took=%.1fs helper=%s exists=%s" % (got_snap, took_snap, hp, hp is not None and os.path.exists("/proc/%d" % hp)))
+              got_snap is None and took_snap < 8 and hp is not None and not _pid_exists(hp),
+              "snap=%s took=%.1fs helper=%s exists=%s" % (got_snap, took_snap, hp, hp is not None and _pid_exists(hp)))
     for raw, want in (("inf", 10.0), ("nan", 10.0), ("0", 10.0), ("-2", 10.0), ("0.5", 0.5)):
         old = os.environ.get("WITH_TIMEOUT_LIST_TIMEOUT")
         os.environ["WITH_TIMEOUT_LIST_TIMEOUT"] = raw
@@ -8053,8 +8078,9 @@ def test_leg_timeout():
         unreadable = wtm._probe(me)
     finally:
         _bi.open = real_open_b
-    check("with-timeout: a /proc read that fails for any reason but absence probes as UNKNOWN, not as gone",
-          unreadable is wtm._UNKNOWN, str(unreadable))
+    if os.path.isdir("/proc/self") and os.environ.get("WITH_TIMEOUT_SNAPSHOT") != "ps":
+        check("with-timeout: a /proc read that fails for any reason but absence probes as UNKNOWN, not as gone",
+              unreadable is wtm._UNKNOWN, str(unreadable))
     with tempfile.TemporaryDirectory() as td:
         for status, body, want in ((3, "", "unknown"), (1, "", "absent"), (0, "garbage", "unknown")):
             fb = Path(td) / ("ps%d" % status)
@@ -8166,8 +8192,9 @@ def test_leg_timeout():
         incomplete = wtm._snapshot()
     finally:
         _bi2.open = real_open_c
-    check("with-timeout: a listing with an unreadable process in it is no listing (None), not a listing without that process",
-          incomplete is None or os.environ.get("WITH_TIMEOUT_SNAPSHOT") == "ps", str(incomplete is None))
+    if os.path.isdir("/proc/self") and os.environ.get("WITH_TIMEOUT_SNAPSHOT") != "ps":
+        check("with-timeout: a listing with an unreadable process in it is no listing (None), not a listing without that process",
+              incomplete is None, str(incomplete is None))
     with tempfile.TemporaryDirectory() as td:
         noisy = Path(td) / "bin"
         noisy.mkdir()
@@ -8298,22 +8325,23 @@ def test_leg_timeout():
           polite == [(222, signal.SIGTERM)] and sorted(final) == [(111, signal.SIGKILL), (222, signal.SIGKILL)], "%s | %s" % (polite, final))
     check("with-timeout: a send pass past its deadline stops verifying and returns the pids it did not reach",
           sorted(unreached) == [111, 222] and seen == [], "%s %s" % (unreached, seen))
-    # reaping is housekeeping: a denied waitid turns it off instead of breaking the stop
-    real_waitid = os.waitid
-    wtm._SUBREAPER = True
+    # reaping is housekeeping: a denied waitid turns it off instead of breaking the stop (where waitid exists at all)
+    if hasattr(os, "waitid"):
+        real_waitid = os.waitid
+        wtm._SUBREAPER = True
 
-    def denied(*_a, **_k):
-        raise OSError(1, "operation not permitted")
-    os.waitid = denied
-    try:
-        wtm._reap_adopted(1)
-        reap_after, subreaper_after = wtm._REAP, wtm._SUBREAPER
-    finally:
-        os.waitid = real_waitid
-        wtm._SUBREAPER = real_sub
-        wtm._REAP = True
-    check("with-timeout: a denied waitid switches REAPING off, raises nothing, and leaves the subreaper flag (who adopts orphans) alone",
-          reap_after is False and subreaper_after is True, "reap=%s subreaper=%s" % (reap_after, subreaper_after))
+        def denied(*_a, **_k):
+            raise OSError(1, "operation not permitted")
+        os.waitid = denied
+        try:
+            wtm._reap_adopted(1)
+            reap_after, subreaper_after = wtm._REAP, wtm._SUBREAPER
+        finally:
+            os.waitid = real_waitid
+            wtm._SUBREAPER = real_sub
+            wtm._REAP = True
+        check("with-timeout: a denied waitid switches REAPING off, raises nothing, and leaves the subreaper flag (who adopts orphans) alone",
+              reap_after is False and subreaper_after is True, "reap=%s subreaper=%s" % (reap_after, subreaper_after))
     if sys.platform.startswith("linux"):
         with tempfile.TemporaryDirectory() as td:
             tdp = Path(td)
