@@ -7601,6 +7601,19 @@ def _pids_running(argv):
     return found
 
 
+def _unused_pid():
+    """A pid that is valid on this OS and not in use (macOS pids stop at 99998; a number beyond that is an 'invalid process
+    id' error from ps, which says nothing about a process)."""
+    for pid in range(99000, 90000, -1):
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return pid
+        except PermissionError:
+            continue
+    raise RuntimeError("no unused pid found")
+
+
 def _pid_exists(pid):
     try:
         os.kill(pid, 0)
@@ -7732,7 +7745,8 @@ def test_leg_timeout():
         r = wt_files("0.03", "--", py, str(tdp / "stubborn.py"), str(pidf), env=dict(os.environ, WITH_TIMEOUT_GRACE="0.3"))
         check("with-timeout: a command that ignores SIGTERM is SIGKILLed after the grace period, still status 124",
               r.returncode == 124 and gone(pidf) is True and time.monotonic() - t0 < 6, "rc=%s %.1fs" % (r.returncode, time.monotonic() - t0))
-        for sig, want in ((signal.SIGTERM, 143), (signal.SIGINT, 130), (signal.SIGTSTP, 148)):
+        for sig, want in ((signal.SIGTERM, 128 + signal.SIGTERM), (signal.SIGINT, 128 + signal.SIGINT),
+                          (signal.SIGTSTP, 128 + signal.SIGTSTP)):          # 148 on Linux, 146 on macOS: the signal numbers differ
             pidf = tdp / ("sig%d.pid" % sig)
             p = subprocess.Popen([py, str(wt), "5", "--", py, str(tdp / "stubborn.py"), str(pidf)],
                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
@@ -8063,8 +8077,9 @@ def test_leg_timeout():
               str(vic2.pid) in wtm.unstopped_note([vic2.pid]) and "NOT everything was stopped" in wtm.unstopped_note([vic2.pid])
               and wtm.unstopped_note([]) == "" and wtm.unstopped_note(None) == "", wtm.unstopped_note([vic2.pid]))
     # a look that FAILS is not proof of absence: an unreadable probe is "failed" (reported), only a confirmed absence is "gone"
-    check("with-timeout: a pid that does not exist probes as confirmed absent (None)", wtm._probe(2 ** 22 + 31337) is None,
-          str(wtm._probe(2 ** 22 + 31337)))
+    gone_pid = _unused_pid()
+    check("with-timeout: a pid that does not exist probes as confirmed absent (None)", wtm._probe(gone_pid) is None,
+          str(wtm._probe(gone_pid)))
     real_open_b = open
     me = os.getpid()
 
@@ -8384,8 +8399,8 @@ def test_leg_timeout():
                 time.sleep(0.05)
             wp2.send_signal(signal.SIGTSTP)
             rc2 = wp2.wait(timeout=20)
-            check("with-timeout: ^Z reaches the command as SIGTERM (its handler runs) and the wrapper exits 148",
-                  rc2 == 148 and mark.exists(), "rc=%s marker=%s" % (rc2, mark.exists()))
+            check("with-timeout: ^Z reaches the command as SIGTERM (its handler runs) and the wrapper exits 128+SIGTSTP",
+                  rc2 == 128 + signal.SIGTSTP and mark.exists(), "rc=%s marker=%s" % (rc2, mark.exists()))
 
     # ---- which number leg-cmd.sh picks (the shipped data)
     launch = json.loads((SCRIPTS.parent / "data" / "launch.json").read_text(encoding="utf-8"))
