@@ -77,6 +77,8 @@ this. The starting numbers come from the calibration journals and the 2026-11-06
 | `cli` | Overrides the adapter's `cli` for this role. |
 | `verified` | When and how this role's row was probed. Believe review rows; re-check an implement row against its skill before trusting it (the file's `_comment` records why). |
 
+On Windows an argv-delivered brief is one argument of the process command line. CreateProcess allows 32767 characters for that whole line, so `leg-cmd.sh` refuses an argv brief over 30000 bytes before the paid command starts (the byte count is at least the character count, which keeps 30000 bytes under that character limit). A brief past the limit dies with `Argument list too long` and the wrapper can still exit 0, so an empty report reads as a clean leg — a 59 KB prompt did this on 2026-11-06. The emitted `&&` chain measures `prompt.md` or `task.md` beside the empty-brief guard when the role is unframed, and measures `framed-prompt.md` between the framing builder and the CLI when the role is framed, because the framed prompt is the argument and it is larger than the lens. The refusal names the size and the 30000-byte limit, says that Windows passes the prompt as one command-line argument and that the limit is about 32 KB, and tells the lead to shorten the brief or put the bulk in a file inside the target and tell the leg to read it. The guard is emitted only on Windows, and only for `prompt_delivery: argv`.
+
 ### Placeholders in `argv`
 
 | token | filled from |

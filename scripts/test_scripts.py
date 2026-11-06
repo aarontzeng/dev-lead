@@ -8646,6 +8646,154 @@ def test_leg_cmd_windows_cmd_shim():
               hr.returncode == 0 and "UnicodeDecodeError" not in hr.stderr, hr.stderr[-300:])
 
 
+def test_leg_cmd_windows_argv_limit():
+    """Windows (a peer, 2026-11-06): an argv brief past about 32 KB dies with `Argument list too long` and the wrapper still
+    exits 0, so an empty report reads as a clean leg. The emitted chain runs scripts/argv-size.py before the paid CLI: it
+    measures the SERIALISED command line in UTF-16 units (argument quoting included, plus the rest of the command), not the
+    file's bytes -- a Chinese brief is not refused for its UTF-8 bytes and a quote-dense one is not passed on its raw size.
+    Unframed argv measures the brief (prompt.md, or task.md for implement); framed argv measures framed-prompt.md, which is
+    larger than the lens. stdin and prompt_file are not arguments, and off Windows the guard is absent."""
+    script = SCRIPTS / "leg-cmd.sh"
+    helper = SCRIPTS / "argv-size.py"
+    import importlib.util as _ilu
+    _sp = _ilu.spec_from_file_location("argv_size_under_test", str(helper))
+    asz = _ilu.module_from_spec(_sp)
+    _sp.loader.exec_module(asz)
+    # ---- the measure itself
+    for text, want, why in (("abc", 3 + 2, "plain ASCII: units plus the two surrounding quotes"),
+                            ('"', 1 + 2 + 1, "a quote is escaped (+1)"),
+                            ('\\"', 2 + 2 + 1 + 1, "a backslash before a quote is doubled (+1) and the quote escaped (+1)"),
+                            ("a\\", 2 + 2 + 1, "a trailing backslash run is doubled: it precedes the closing quote"),
+                            ("\u4e2d" * 10, 10 + 2, "a Chinese character is ONE unit, not three bytes"),
+                            ("\U0001F600", 2 + 2, "an astral character is two UTF-16 units")):
+        got = asz.serialised_units(text)
+        check("argv-size: %s" % why, got == want, "%r -> %d, want %d" % (text, got, want))
+    with tempfile.TemporaryDirectory() as td:
+        td = Path(td)
+        make_repo(td / "repo")
+        fake = td / "bin"
+        fake.mkdir()
+        marker = td / "cli-ran"
+        cli = "#!/bin/sh\nprintf x > %s\n" % shlex.quote(str(marker))
+        for name in ("cursor-agent", "agy"):
+            p = fake / name
+            p.write_text(cli)
+            p.chmod(0o755)
+        env = _roster_env(td / "home", PATH="%s:/usr/bin:/bin" % fake, DEV_LEAD_LEG_WINDOWS="1")
+        rd = td / "run"
+        rd.mkdir()
+        argv = [str(script), "cursor", "review", "--model", "composer-2.5", "--run-dir", str(rd),
+                "--no-triage", "test fixture", "--timeout", "0"]
+        r = subprocess.run(argv, capture_output=True, text=True, env=env, cwd=str(td / "repo"))
+        out = r.stdout
+        guard = 'argv-size.py %s' % '"$RUN_DIR/prompt.md"'
+        check("leg-cmd windows argv: an argv review command carries the size guard on the brief, before the CLI",
+              r.returncode == 0 and guard in out and out.index("test -s") < out.index(guard) < out.index("cursor-agent -p"), out)
+        impl = subprocess.run([str(script), "cursor", "implement", "--model", "composer-2.5",
+                               "--run-dir", str(rd), "--timeout", "0"],
+                              capture_output=True, text=True, env=env, cwd=str(td / "repo"))
+        check("leg-cmd windows argv: an argv implement command measures task.md",
+              impl.returncode == 0 and 'argv-size.py "$RUN_DIR/task.md"' in impl.stdout and "prompt.md" not in impl.stdout,
+              impl.stdout + impl.stderr)
+
+        def run_emitted(emitted):
+            return subprocess.run(["bash", "-c", emitted], capture_output=True, text=True, env=env, cwd=str(td / "repo"))
+
+        def attempt(content, label):
+            (rd / "prompt.md").write_bytes(content)
+            if marker.exists():
+                marker.unlink()
+            ran = run_emitted(out)
+            return ran, marker.exists()
+
+        ran, started = attempt(b"x" * 29000, "29000")
+        check("leg-cmd windows argv: a 29000-character brief runs the CLI", ran.returncode == 0 and started, "%s %s" % (ran.returncode, ran.stderr))
+        ran, started = attempt(b"y" * 31000, "31000")
+        check("leg-cmd windows argv: a 31000-character brief is refused, the CLI does not start, and the message says what to do",
+              ran.returncode != 0 and not started and re.search(r"would make a \d+-unit Windows command line, over the 32000 limit", ran.stderr)
+              and "Shorten the brief" in ran.stderr and "tell the leg to read it" in ran.stderr and "FRESH --run-dir" in ran.stderr,
+              "%s %s" % (ran.returncode, ran.stderr))
+        ran, started = attempt(("中" * 12000).encode("utf-8"), "cjk")       # 36000 bytes, 12000 units
+        check("leg-cmd windows argv: 12000 Chinese characters (36000 bytes) are NOT refused for their bytes",
+              ran.returncode == 0 and started, "%s %s" % (ran.returncode, ran.stderr))
+        ran, started = attempt(b'"' * 17000, "quotes")                        # 17000 bytes, but ~34000 units once escaped
+        check("leg-cmd windows argv: 17000 double quotes (17000 bytes) ARE refused: Windows escapes each one",
+              ran.returncode != 0 and not started and "unit Windows command line" in ran.stderr, "%s %s" % (ran.returncode, ran.stderr))
+        ran, started = attempt(b"\\" * 16000 + b'"', "backslashes")           # a backslash run before a quote is doubled
+        check("leg-cmd windows argv: 16000 backslashes before a quote ARE refused: the run is doubled",
+              ran.returncode != 0 and not started, "%s %s" % (ran.returncode, ran.stderr))
+        (rd / "prompt.md").write_bytes(b"x" * 100)
+        os.chmod(rd / "prompt.md", 0)
+        if marker.exists():
+            marker.unlink()
+        try:
+            ran = run_emitted(out)
+            unreadable_ok = os.access(rd / "prompt.md", os.R_OK)      # running as root can read a mode-0 file: nothing to test
+        finally:
+            os.chmod(rd / "prompt.md", 0o644)
+        check("leg-cmd windows argv: a brief that cannot be read stops the chain, the CLI does not start",
+              unreadable_ok or (ran.returncode != 0 and not marker.exists()), "%s %s" % (ran.returncode, ran.stderr))
+        # the rest of the command counts: the same brief that fits alone is refused behind a long enough command line
+        (rd / "prompt.md").write_bytes(b"z" * 29500)
+        adds = []
+        for i in range(12):
+            d = td / ("a-long-directory-name-for-an-extra-readable-directory-%02d" % i)
+            d.mkdir()
+            adds += ["--add-dir", str(d)]
+        longer = subprocess.run(argv + adds, capture_output=True, text=True, env=env, cwd=str(td / "repo"))
+        if marker.exists():
+            marker.unlink()
+        ran_long = run_emitted(longer.stdout)
+        shorter_ran = run_emitted(out)
+        check("leg-cmd windows argv: the other arguments count toward the limit (the same brief passes alone, is refused behind 12 --add-dir)",
+              shorter_ran.returncode == 0 and ran_long.returncode != 0 and "unit Windows command line" in ran_long.stderr,
+              "alone=%s long=%s %s" % (shorter_ran.returncode, ran_long.returncode, ran_long.stderr[-300:]))
+
+        # The framed prompt is the template with the lens substituted, so it exceeds the lens by about the template.
+        body = re.sub(br"\A<!--.*?-->\r?\n", b"",
+                      (SCRIPTS.parent / "skills" / "agy-adversarial-review" / "references" / "adversarial-framing.md").read_bytes(),
+                      count=1, flags=re.S)
+        lens_n = 28000
+        ard = td / "agy-run"
+        ard.mkdir()
+        (ard / "prompt.md").write_bytes(b"L" * lens_n)
+        ag = subprocess.run([str(script), "agy", "review", "--model", "gemini-3.8-flash-high",
+                             "--base", make_repo(td / "repo2", commits=2)[0], "--target", str(td / "repo2"), "--run-dir", str(ard),
+                             "--no-triage", "test fixture", "--timeout", "0"],
+                            capture_output=True, text=True, env=env, cwd=str(td / "repo2"))
+        aout = ag.stdout
+        framed_guard = 'argv-size.py "$RUN_DIR/framed-prompt.md"'
+        check("leg-cmd windows argv: the framed guard measures framed-prompt.md between the builder and the CLI",
+              ag.returncode == 0 and framed_guard in aout and guard not in aout
+              and aout.index('> "$RUN_DIR/framed-prompt.md"') < aout.index(framed_guard) < aout.index("agy -p"),
+              aout[-800:] + ag.stderr[-400:])
+        if marker.exists():
+            marker.unlink()
+        ran = run_emitted(aout)
+        framed = ard / "framed-prompt.md"
+        framed_sz = framed.stat().st_size if framed.is_file() else 0
+        check("leg-cmd windows argv: a small lens whose framed prompt exceeds the limit is refused",
+              ran.returncode != 0 and not marker.exists() and lens_n + len(body) - len(b"{{LENS}}") > 32000 and framed_sz > 32000
+              and "unit Windows command line" in ran.stderr and "FRESH --run-dir" in ran.stderr,
+              "rc=%s lens=%s framed=%s stderr=%s" % (ran.returncode, lens_n, framed_sz, ran.stderr[-500:]))
+
+        off = dict(env, DEV_LEAD_LEG_WINDOWS="0", MSYSTEM="MINGW64")
+        r = subprocess.run(argv, capture_output=True, text=True, env=off, cwd=str(td / "repo"))
+        check("leg-cmd windows argv: DEV_LEAD_LEG_WINDOWS=0 emits no size guard",
+              r.returncode == 0 and "argv-size.py" not in r.stdout, r.stdout + r.stderr)
+        codex = subprocess.run([str(script), "codex", "review", "--model", "m", "--effort", "high",
+                                "--target", str(td / "repo"), "--base", "HEAD", "--run-dir", str(td / "codex-run"),
+                                "--no-triage", "test fixture", "--timeout", "0"],
+                               capture_output=True, text=True, env=env, cwd=str(td / "repo"))
+        check("leg-cmd windows argv: a stdin adapter (codex review) emits no size guard on Windows",
+              codex.returncode == 0 and "argv-size.py" not in codex.stdout, codex.stdout + codex.stderr)
+        grok = subprocess.run([str(script), "grok", "review", "--model", "grok-4", "--effort", "high",
+                               "--prompt-file", str(rd / "prompt.md"), "--no-triage", "test fixture", "--timeout", "0"],
+                              capture_output=True, text=True, env=env, cwd=str(td / "repo"))
+        check("leg-cmd windows argv: a prompt_file adapter (grok review) emits no size guard on Windows",
+              grok.returncode == 0 and "argv-size.py" not in grok.stdout, grok.stdout + grok.stderr)
+
+
 def test_leg_cmd_refusal_fails_when_run():
     """A refused launch prints a command that FAILS (0.6.95). An empty stdout ran as a
     success under both documented callers -- `eval "$(leg-cmd.sh ...)"` and `> cmd.sh;
@@ -15780,7 +15928,8 @@ def sections():
             ("lint.py check_delegate_audit_trails", test_lint_delegate_audit_trails))),
         ("common", _titled(("scripts/_common.py and scripts/lib.sh", _in_tmp(test_common)))),
         ("leg-cmd", _titled((None, test_leg_cmd), (None, test_leg_cmd_refusal_fails_when_run),
-                            (None, test_leg_cmd_windows_cmd_shim), (None, test_triage_bash_on_windows),
+                            (None, test_leg_cmd_windows_cmd_shim), (None, test_leg_cmd_windows_argv_limit),
+                            (None, test_triage_bash_on_windows),
                             (None, test_leg_timeout))),
         ("lockdown", _titled(("check-opencode-lockdown.py and leg-cmd.sh --help", _in_tmp(test_opencode_lockdown)))),
         ("triage-launch", _titled(("leg-cmd.sh triage gate and review-prompt input",

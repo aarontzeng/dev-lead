@@ -371,6 +371,17 @@ cmd = cli + " " + " ".join(_emit(t) for t in argv)
 _seam = os.environ.get("DEV_LEAD_LEG_WINDOWS")
 windows = (_seam == "1" if _seam in ("0", "1")
            else sys.platform in ("win32", "cygwin", "msys") or bool(os.environ.get("MSYSTEM")))
+# Windows refuses a command line past 32767 UTF-16 units ("Argument list too long"; a 59 KB prompt, 2026-11-06) while the wrapper
+# still exited 0. scripts/argv-size.py measures what is really sent -- UTF-16 units after the argument quoting, plus the rest of the
+# command -- so a Chinese brief is not refused for its UTF-8 bytes and a quote-dense one is not passed on its raw size.
+_WIN_MARGIN = 1500    # units for what the shell variables in the command expand to (RUN_DIR, TARGET ...)
+
+def _win_argv_brief_guard(shell_path, rest_of_command):
+    # One link in the emitted && chain. shell_path is a shell word this script already quoted. The { } is a single command,
+    # and a non-zero exit (too long, or unreadable) stops the chain before the paid CLI.
+    return ('{ python3 %s %s %d || false; }'
+            % (shlex.quote(os.path.join(os.environ["HERE"], "argv-size.py")), shell_path,
+               len(rest_of_command.encode("utf-16-le")) // 2 + _WIN_MARGIN))
 if windows and r["prompt_delivery"] == "argv" and re.fullmatch(r"[A-Za-z0-9._-]+", cli):
     import shutil
     found = shutil.which(cli) or shutil.which(cli + ".cmd") or shutil.which(cli + ".bat")
@@ -475,7 +486,16 @@ if frame:
         # --target, so the leg must run THERE, not wherever the lead happens to
         # be: a subshell, so the caller's own cwd is left alone under eval.
         cmd = "( cd %s && %s )" % (shlex.quote(os.environ.get("TARGET", "")), cmd)
-    cmd = '%s < %s > "$RUN_DIR/framed-prompt.md" && %s' % (builder, BRIEF, cmd)
+    # Windows passes an argv brief as one command-line argument and refuses the
+    # launch past ~32 KB (`Argument list too long`, a 59 KB prompt, 2026-11-06),
+    # while the wrapper still exits 0. The framed prompt is the argument, and it
+    # is larger than the lens, so measure framed-prompt.md AFTER the builder
+    # writes it -- between the builder and the CLI, not on the lens.
+    if windows and r["prompt_delivery"] == "argv":
+        cmd = '%s < %s > "$RUN_DIR/framed-prompt.md" && %s && %s' % (
+            builder, BRIEF, _win_argv_brief_guard('"$RUN_DIR/framed-prompt.md"', cmd), cmd)
+    else:
+        cmd = '%s < %s > "$RUN_DIR/framed-prompt.md" && %s' % (builder, BRIEF, cmd)
     if r.get("requires_lockdown"):
         # opencode's read-only boundary is a file in the target, not a mode; a launch
         # without it runs as the build agent (edit and bash open). Checked when the
@@ -732,6 +752,10 @@ else:
     guard = 'test -n "$RUN_DIR" && test -s %s' % brief
     why = "RUN_DIR unset, or brief empty/missing:"
 pre.append("%s || { echo 'leg-cmd: %s' %s >&2; false; } &&" % (guard, why, brief))
+# Same Windows limit, for an argv brief that IS the lens (prompt.md, or task.md
+# for implement). A framed argv role is measured above, on framed-prompt.md.
+if windows and delivery == "argv" and not frame:
+    pre.append(_win_argv_brief_guard(BRIEF, cmd) + " &&")
 print("\n".join(pre))
 print(cmd)
 
