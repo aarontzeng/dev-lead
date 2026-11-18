@@ -158,6 +158,34 @@ auto-denies an unlisted shell command in headless mode and died in about ninety
 seconds having read nothing. One preamble per family, or the leg is not slow —
 it is gone.
 
+## If you already prompt another pane
+
+A terminal workspace manager for agents (herdr) lets one agent type into
+another agent's interactive session, wait for it to settle, and read the screen back. That is a real
+second family, one command away, and you can watch it think. It is the right
+tool for a quick second opinion. It is not a review leg.
+
+|  | Prompting an interactive pane | dev-lead leg |
+|---|---|---|
+| **Time to first answer** | one command; seconds for a small question | freeze, brief, launch; minutes |
+| **A person in the loop** | watches, interrupts and redirects mid-run | reads the result |
+| **What the reviewer reads** | the live working tree, including edits made while it reads | a frozen copy at one commit ([`freeze-target.sh`](scripts/freeze-target.sh)), bracketed before and after ([`verify-target.sh`](scripts/verify-target.sh)) |
+| **Read-only** | a sentence in the prompt; the session keeps whatever write access it was started with | per adapter, machine-enforced where the runtime supports it |
+| **Which model answered** | whatever the pane's picker was last set to, by whoever set it | an explicit `--model` on the launch ([`leg-cmd.sh`](scripts/leg-cmd.sh)), checked against [`data/families.json`](data/families.json) |
+| **Context** | everything that pane was asked before | a new session per leg, one brief |
+| **Evidence afterwards** | a screen that scrolls away | a log, checked for a run that never started or returned nothing ([`leg-log-check.sh`](scripts/leg-log-check.sh)) |
+
+The left column is what one lead observed driving codex and agy panes through
+herdr 0.9.5 on 2026-11-18: both answered, one returned a usable two-finding
+review of a small commit in 22 seconds. Nothing in this repo measures whether
+a pane finds more or fewer defects than a leg on the same target; the
+difference claimed here is what can be shown afterwards, not what was found.
+
+So use both, for different things. A pane is where a hunch gets a second
+family's glance while a person watches. A leg is what the gate counts: the
+round's report has to say which family read which commit under which boundary,
+and a pane cannot say any of the three.
+
 ## How a run flows
 
 ```mermaid
