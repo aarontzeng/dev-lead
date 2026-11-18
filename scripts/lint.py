@@ -1742,7 +1742,18 @@ def check_skill_rules():
 
 def _check_skill_rules():
     path = ROOT / "data" / "skill-rules.json"
-    if not path.is_file():
+    # stat() rather than is_file(), as in the per-skill check below: from 3.14
+    # is_file() answers False for an unsearchable data/ (EACCES) too.
+    try:
+        st = path.stat()
+    except FileNotFoundError:
+        st = None
+    except OSError as e:
+        if e.errno != errno.ENOTDIR:
+            err(rel(path), f"unreadable: {e}")
+            return
+        st = None
+    if st is None or not stat.S_ISREG(st.st_mode):
         err("data/skill-rules.json", "missing (rule sentences a trim must not drop)")
         return
     try:
@@ -1804,7 +1815,8 @@ def _check_skill_rules():
         try:
             resolved = skill.resolve()
             resolved.relative_to(ROOT.resolve())
-        except OSError as e:
+        except (OSError, RuntimeError) as e:
+            # RuntimeError: a symlink loop, on Python before 3.13.
             err(name, f"unreadable: {e}")
             continue
         except ValueError:

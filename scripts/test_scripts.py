@@ -1338,6 +1338,54 @@ def test_lint_skill_rules():
               any(e.startswith("data/skill-rules.json:") and "unreadable:" in e for e in got),
               got)
 
+    # Python 3.14's is_file() answers False when the parent cannot be searched,
+    # which reported the manifest as missing instead of unreadable.
+    if not skip_as_root("skill-rules: a manifest under an unsearchable data/ is unreadable, not missing",
+                        "root searches a mode-0644 directory"):
+        with tempfile.TemporaryDirectory() as td:
+            fake = Path(td)
+            (fake / "data").mkdir()
+            (fake / "data" / "skill-rules.json").write_text("{}\n", encoding="utf-8")
+            (fake / "data").chmod(0o644)
+            real_root, real_errors = lint.ROOT, lint.ERRORS
+            try:
+                lint.ROOT, lint.ERRORS = fake, []
+                lint.check_skill_rules()
+                got = list(lint.ERRORS)
+            finally:
+                (fake / "data").chmod(0o755)
+                lint.ROOT, lint.ERRORS = real_root, real_errors
+        check("skill-rules: a manifest under an unsearchable data/ is unreadable, not missing",
+              any(e.startswith("data/skill-rules.json:") and "unreadable:" in e for e in got)
+              and not any("missing" in e for e in got), got)
+
+    # A symlink loop: resolve() raises RuntimeError before Python 3.13 and
+    # stat() raises ELOOP after; either way one entry, not the whole run.
+    with tempfile.TemporaryDirectory() as td:
+        fake = Path(td)
+        (fake / "data").mkdir()
+        (fake / "skills" / "loop").mkdir(parents=True)
+        os.symlink("SKILL.md", fake / "skills" / "loop" / "SKILL.md")
+        (fake / Path(lead)).parent.mkdir(parents=True, exist_ok=True)
+        (fake / lead).write_text("unrelated\n", encoding="utf-8")
+        (fake / "data" / "skill-rules.json").write_text(json.dumps({"skills": {
+            "skills/loop/SKILL.md": {"max_bytes": 10, "rules": [{"id": "x", "must_contain": "y"}]},
+            lead: {"max_bytes": 1000, "rules": [
+                {"id": "no", "must_contain": "The lead must never push."}]},
+        }}), encoding="utf-8")
+        real_root, real_errors = lint.ROOT, lint.ERRORS
+        try:
+            lint.ROOT, lint.ERRORS = fake, []
+            lint.check_skill_rules()
+            got = list(lint.ERRORS)
+        except RuntimeError as e:
+            got = ["crashed: %r" % e]
+        finally:
+            lint.ROOT, lint.ERRORS = real_root, real_errors
+    check("skill-rules: a symlink loop is unreadable and the other skill is still checked",
+          any(e.startswith("skills/loop/SKILL.md:") and "unreadable:" in e for e in got)
+          and any("rule no:" in e and "must_contain is missing" in e for e in got), got)
+
     orig_loads = lint.json.loads
 
     def loads_int_key(raw, *args, **kwargs):
