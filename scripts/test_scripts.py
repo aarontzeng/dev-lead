@@ -1280,7 +1280,9 @@ def test_lint_skill_rules():
     check("skill-rules: a symlink that resolves outside the repo is refused",
           any(e == lead + ": resolves outside the repo" for e in got), got)
 
-    nested = '{"a":' * 2000 + "1" + "}" * 2000
+    # 2000 levels stopped tripping the decoder in Python 3.12 (3.14: 10 000
+    # still loads). A million trips it on 3.10 through 3.14.
+    nested = '{"a":' * 1_000_000 + "1" + "}" * 1_000_000
     got = against({"data/skill-rules.json": nested})
     check("skill-rules: JSON nested past the decoder's limit is a lint error",
           any(e.startswith("data/skill-rules.json:") and "nested too deeply" in e for e in got),
@@ -1787,7 +1789,7 @@ def test_lint_skill_rules():
               (got, notes))
         restore()
 
-        nested = '{"a":' * 2000 + "1" + "}" * 2000
+        nested = '{"a":' * 1_000_000 + "1" + "}" * 1_000_000
         nested_sha = commit_base(nested)
         restore()
         got, notes = run(nested_sha)

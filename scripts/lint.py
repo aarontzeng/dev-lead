@@ -54,9 +54,11 @@ Every check here guards against a failure this repo has ACTUALLY shipped
                 as retired. Fences, comments, strikethrough and hidden
                 details do not count as the rule.
 """
+import errno
 import json
 import os
 import re
+import stat
 import subprocess
 import sys
 from pathlib import Path
@@ -1808,12 +1810,22 @@ def _check_skill_rules():
         except ValueError:
             err(name, "resolves outside the repo")
             continue
+        # stat() rather than is_file(): from Python 3.14 is_file() answers
+        # False for ANY OSError, so a name the OS refuses (ENAMETOOLONG) would
+        # be reported as missing instead of unreadable.
         try:
-            if not skill.is_file():
-                err(name, "missing (named in data/skill-rules.json)")
-                continue
+            st = skill.stat()
+        except FileNotFoundError:
+            err(name, "missing (named in data/skill-rules.json)")
+            continue
         except OSError as e:
-            err(name, f"unreadable: {e}")
+            if e.errno == errno.ENOTDIR:
+                err(name, "missing (named in data/skill-rules.json)")
+            else:
+                err(name, f"unreadable: {e}")
+            continue
+        if not stat.S_ISREG(st.st_mode):
+            err(name, "missing (named in data/skill-rules.json)")
             continue
         try:
             blob = skill.read_bytes()
