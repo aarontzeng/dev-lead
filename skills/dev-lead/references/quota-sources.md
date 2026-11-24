@@ -576,6 +576,23 @@ they have open.
   plugin about an hour after its last TUI attach (the project instance is disposed, measured by a peer),
   so opencode-go stays fresh only through this refresh there; not seen on Linux.
   Without the mark, a cache past its TTL reads `stale`.
+- **Cursor: `"refresh": "statusline"` (0.6.134).** Cursor keeps its login in the OS secret store (no
+  `auth.json`), so `"refresh": "fetch"` cannot read it and `cursor-agent --trust` may write no cache. Its own
+  `~/.cursor/statusline.ps1 -BackgroundFetch` can: it runs a sidecar under the Cursor CLI's own node, which reads
+  the token through the CLI's credential module and writes `${TEMP}\cursor\statusline-usage-cache.json`;
+  nothing here reads or prints a token. The mark goes on the cursor source in the host's own `quota-sources.json`
+  (`quota-setup.py` does nothing on Windows yet), and takes effect on Windows only (elsewhere:
+  `cursor refresh is not supported here ...`). The guard is the claude one (a plain file, not a link or reparse
+  point, in a `~/.cursor` that is not a link or junction; an absolute `pwsh.exe`), so a stub that runs the aadev
+  script is accepted and a symlink is not. Two differences, both from the script: `-BackgroundFetch` BLOCKS until the
+  sidecar is done and always exits 0, so success is only "the cache was rewritten" (a 3 s settle at most, 20 s for
+  the run); and in that mode the script does not look at its own back-off or lock (its render path does), so the
+  collector does: a `statusline-backoff` younger than 600 s or a `statusline-fetch.lock` younger than 30 s beside the
+  cache is a skip (`the statusline's own fetch failed N s ago ...`, `another fetch is running ...`, no back-off
+  written by the collector), and it creates the lock for the run and removes it after, so a redraw does not start a
+  second fetch. A lock older than 30 s is a dead one and is replaced. Its own lock and back-off marker:
+  `quota-statusline-cursor.lock` / `.backoff` in `~/.cache/dev-lead`. Same messages otherwise as above, with the
+  `cursor` label. Simulated in the tests (fake pwsh); not yet run on a real Windows host.
 - **Codex.** The pipe is read by a thread (a selector cannot wait on a Windows pipe) and the
   binary is looked up through `PATHEXT`. Ending a `codex.cmd` shim with `terminate()` may leave
   the node process under it running.

@@ -5305,9 +5305,9 @@ def test_quota_snapshot_statusline_refresh_windows(tmp):
     seen = []
     real_locked = win._statusline_locked
 
-    def locked(ctx, path, base, argv, env, flags):
+    def locked(ctx, path, base, argv, env, flags, **kw):
         seen.append(flags)
-        return real_locked(ctx, path, base, argv, env, 0)         # creationflags exist on Windows only
+        return real_locked(ctx, path, base, argv, env, 0, **kw)   # creationflags exist on Windows only
     win._statusline_locked = locked
 
     home = tmp / "slw-home"
@@ -5475,6 +5475,215 @@ def test_quota_snapshot_statusline_refresh_windows(tmp):
             else:
                 os.environ[k] = v
 
+
+
+QS_FAKE_CURSOR_PWSH = r"""#!@PYTHON@
+import json, os, sys
+sys.stdin.read()
+cache = os.environ["FAKE_CACHE"]
+lock = os.path.join(os.path.dirname(cache), "statusline-fetch.lock")
+with open(os.environ["FAKE_LOG"], "a") as fh:
+    fh.write(json.dumps({"argv": sys.argv[1:], "lock_held": os.path.exists(lock)}) + "\n")
+if os.environ["FAKE_MODE"] == "write":
+    with open(cache + ".tmp", "w") as fh:
+        json.dump({"schema": 2, "unified": True, "weekly_pct": 40}, fh)
+    os.replace(cache + ".tmp", cache)
+if os.environ.get("FAKE_REMOVE_LOCK") == "1" and os.path.exists(lock):
+    os.unlink(lock)          # the real script removes its lock at its end and always exits 0
+"""
+
+
+def test_quota_snapshot_statusline_refresh_cursor_windows(tmp):
+    """"statusline" on a cursor source (Windows): pwsh runs ~/.cursor/statusline.ps1 -BackgroundFetch, which blocks and exits 0;
+    the collector honours the script's own back-off and lock files, judges by the cache and never reads a token."""
+    import importlib.util as _ilu
+    import types as _types
+    import fcntl as _fcntl
+
+    def load(name, windows):
+        spec = _ilu.spec_from_file_location(name, QS_SCRIPT)
+        mod = _ilu.module_from_spec(spec)
+        saved = (sys.platform, sys.modules.get("fcntl", "absent"))
+        sys.path.insert(0, str(SCRIPTS))
+        try:
+            if windows:
+                sys.platform = "win32"
+                sys.modules["fcntl"] = None
+            spec.loader.exec_module(mod)
+        finally:
+            sys.path.pop(0)
+            sys.platform = saved[0]
+            if saved[1] == "absent":
+                sys.modules.pop("fcntl", None)
+            else:
+                sys.modules["fcntl"] = saved[1]
+        return mod
+    win, posix = load("qs_wincur_under_test", True), load("qs_poscur_under_test", False)
+
+    def flock_msvcrt():
+        def locking(fd, mode, n):
+            if mode == 2:
+                try:
+                    _fcntl.flock(fd, _fcntl.LOCK_EX | _fcntl.LOCK_NB)
+                except BlockingIOError as exc:
+                    raise OSError(13, "locked") from exc
+            else:
+                _fcntl.flock(fd, _fcntl.LOCK_UN)
+        return _types.SimpleNamespace(LK_NBLCK=2, LK_UNLCK=0, locking=locking)
+    win.msvcrt = flock_msvcrt()
+    real_locked = win._statusline_locked
+    win._statusline_locked = lambda ctx, path, base, argv, env, flags, **kw: real_locked(ctx, path, base, argv, env, 0, **kw)
+
+    home = tmp / "slc-home"
+    (home / ".cursor").mkdir(parents=True)
+    (home / ".cache").mkdir()
+    script = home / ".cursor" / "statusline.ps1"
+    script.write_text("# stub")
+    binary = tmp / "slc-bin"
+    binary.mkdir()
+    pwsh = binary / "pwsh.exe"
+    pwsh.write_text(QS_FAKE_CURSOR_PWSH.replace("@PYTHON@", sys.executable))
+    pwsh.chmod(0o755)
+    log = tmp / "slc.log"
+    folder = tmp / "slc-temp-cursor"
+    cache = folder / "statusline-usage-cache.json"
+    own_backoff = home / ".cache" / "dev-lead" / "quota-statusline-cursor.backoff"
+    theirs_backoff, theirs_lock = folder / "statusline-backoff", folder / "statusline-fetch.lock"
+    saved = {k: os.environ.get(k) for k in ("HOME", "USERPROFILE", "PATH", "PATHEXT", "FAKE_MODE", "FAKE_LOG", "FAKE_CACHE", "FAKE_REMOVE_LOCK")}
+
+    def setup(mode, remove_lock="1"):
+        os.environ.update(HOME=str(home), PATH=str(binary), PATHEXT=".EXE;.CMD", FAKE_MODE=mode, FAKE_LOG=str(log),
+                          FAKE_CACHE=str(cache), FAKE_REMOVE_LOCK=remove_lock)
+        for f in (own_backoff, theirs_backoff, theirs_lock, log):
+            f.unlink(missing_ok=True)
+        folder.mkdir(exist_ok=True)
+        cache.write_text("{}")
+        os.utime(cache, (time.time() - 3600, time.time() - 3600))
+
+    def age(f, seconds):
+        os.utime(f, (time.time() - seconds, time.time() - seconds))
+
+    def ctx(wait):
+        return win.Context(None, "codex", 5, "0.0.0", refresh=True, refresh_wait=wait)
+
+    def runs():
+        return [json.loads(x) for x in log.read_text().splitlines()] if log.exists() else []
+
+    def go(wait=1):
+        return win.refresh_statusline(ctx(wait), str(cache), "cursor_usage_cache")
+    try:
+        setup("write")
+        why = go(5)
+        got = runs()
+        check("statusline cursor windows: a stale cache runs pwsh -NoProfile -File ~/.cursor/statusline.ps1 -BackgroundFetch, "
+              "with the script's fetch lock held during the run and gone after, and a rewrite ends it with no problem",
+              why is None and len(got) == 1 and got[0]["argv"] == ["-NoProfile", "-File", str(script), "-BackgroundFetch"]
+              and got[0]["lock_held"] is True and not theirs_lock.exists() and not own_backoff.exists(), (why, got))
+        setup("write", remove_lock="0")
+        why = go(5)
+        check("statusline cursor windows: the lock the collector made is removed by it when the script left it", why is None and not theirs_lock.exists(), why)
+        setup("silent")
+        why = go(1)
+        again = go(1)
+        check("statusline cursor windows: a script that writes no cache (it exits 0 either way) is named, the lock is released, "
+              "the collector backs off for 10 minutes and the poll after does not run it",
+              why == "cursor refresh failed: statusline.ps1 did not rewrite the cache within 1 s" and not theirs_lock.exists()
+              and own_backoff.exists() and again is not None and "an earlier refresh wrote no cache" in again and len(runs()) == 1,
+              (why, again, runs()))
+        setup("silent")
+        t0 = time.monotonic()
+        why = go(40)
+        took = time.monotonic() - t0
+        check("statusline cursor windows: the wait after a returned run is at most 3 s whatever --refresh-wait says (the message names it)",
+              why == "cursor refresh failed: statusline.ps1 did not rewrite the cache within 3 s" and took < 10, (why, took))
+        setup("write")
+        theirs_backoff.write_text("x")
+        age(theirs_backoff, 100)
+        why = go(1)
+        check("statusline cursor windows: the script's own back-off younger than 600 s is a skip that names it, starts nothing, "
+              "makes no lock and writes no back-off of the collector's",
+              why is not None and why.startswith("cursor refresh skipped: the statusline's own fetch failed 100 s ago; its next try is in 500 s")
+              and not runs() and not theirs_lock.exists() and not own_backoff.exists(), (why, runs()))
+        age(theirs_backoff, 700)
+        why = go(5)
+        check("statusline cursor windows: a back-off older than 600 s no longer holds it back", why is None and len(runs()) == 1, (why, runs()))
+        setup("write")
+        theirs_lock.write_text("x")
+        age(theirs_lock, 5)
+        why = go(1)
+        check("statusline cursor windows: a fetch lock younger than 30 s is another fetch: a skip that leaves it alone, no run, no back-off",
+              why is not None and why.startswith("cursor refresh skipped: another fetch is running (its lock is 5 s old)")
+              and not runs() and theirs_lock.exists() and not own_backoff.exists(), (why, runs()))
+        age(theirs_lock, 100)
+        why = go(5)
+        check("statusline cursor windows: a lock older than 30 s is a dead fetch's: replaced, held during the run, gone after",
+              why is None and len(runs()) == 1 and runs()[0]["lock_held"] is True and not theirs_lock.exists(), (why, runs()))
+        # -- the script and its directories: the claude guard, by shape
+        setup("write")
+        real = script.read_text()
+        target = tmp / "slc-elsewhere.ps1"
+        target.write_text(real)
+        script.unlink()
+        script.symlink_to(target)
+        why = go()
+        check("statusline cursor windows: a symlinked statusline.ps1 is refused and nothing runs",
+              why == "cursor refresh skipped: ~/.cursor/statusline.ps1 is not a regular file (not a link or reparse point) in a ~/.cursor that is not a link or junction"
+              and not runs(), (why, runs()))
+        script.unlink()
+        why = go()
+        check("statusline cursor windows: no script is named, not run", why == "cursor refresh skipped: ~/.cursor/statusline.ps1 is not there" and not runs(), why)
+        script.write_text(real)
+        setup("write")
+        moved = tmp / "slc-temp-moved"
+        folder.rename(moved)
+        folder.symlink_to(moved)
+        why = go()
+        check("statusline cursor windows: a cache directory that is a link is refused and nothing runs",
+              why == "cursor refresh skipped: the cache directory is missing or is a link" and not runs(), (why, runs()))
+        folder.unlink()
+        moved.rename(folder)
+        setup("write")
+        theirs_lock.symlink_to(tmp / "slc-lock-target")
+        why = go()
+        check("statusline cursor windows: a fetch lock that is a link is refused and nothing runs",
+              why == "cursor refresh skipped: its fetch lock is a link" and not runs(), (why, runs()))
+        theirs_lock.unlink()
+        # -- one at a time, independent of the claude run's lock, and the same label on the other kind
+        setup("write")
+        holder = os.open(str(home / ".cache" / "dev-lead" / "quota-statusline-cursor.lock"), os.O_RDWR | os.O_CREAT, 0o600)
+        win.msvcrt.locking(holder, win.msvcrt.LK_NBLCK, 1)
+        try:
+            why = go()
+        finally:
+            win.msvcrt.locking(holder, win.msvcrt.LK_UNLCK, 1)
+            os.close(holder)
+        check("statusline cursor windows: a cursor refresh already running is named and this one starts nothing",
+              why == "cursor refresh skipped: another refresh is running" and not runs(), why)
+        # -- dispatch by kind, and where it does not apply
+        setup("write")
+        from datetime import datetime as _dt, timezone as _tz
+        now_epoch = time.time()
+        srcs = [{"name": "cursor", "kind": "cursor_usage_cache", "ttl_seconds": 300, "path": str(cache), "refresh": "statusline"}]
+        problems = win.refresh_sources(srcs, ctx(5), _dt.fromtimestamp(now_epoch, _tz.utc))
+        check("statusline cursor windows: refresh_sources sends a cursor statusline source to ~/.cursor, with -BackgroundFetch",
+              problems == {} and len(runs()) == 1 and runs()[0]["argv"][-1] == "-BackgroundFetch", (problems, runs()))
+        setup("write")
+        why = posix.refresh_statusline(ctx(1), str(cache), "cursor_usage_cache")
+        check("statusline cursor: off Windows the mode says so and starts nothing",
+              why == "cursor refresh is not supported here (the statusline refresh for cursor is Windows only)" and not runs(), why)
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+    # the child needs python3 on PATH, so this runs after the environment is restored
+    cfg_ok = _qs_config(tmp, "slc-cfg-ok", [dict(_qs_source("cursor_usage_cache", tmp / "x.json"), refresh="statusline")])
+    cfg_bad = _qs_config(tmp, "slc-cfg-bad", [dict(_qs_source("opencode_go_cache", tmp / "x.json"), refresh="statusline")])
+    r_ok, _d = _qs(["--config", cfg_ok])
+    r_bad, _d = _qs(["--config", cfg_bad])
+    check("statusline cursor: the mode is accepted on a cursor source and still a config error (exit 2) on an opencode one",
+          r_ok.returncode == 0 and r_bad.returncode == 2 and "statusline" in r_bad.stderr, (r_ok.stderr, r_bad.stderr))
 
 
 # ------------------------------------------------- quota-fetch / quota-setup ----
@@ -16895,7 +17104,9 @@ def sections():
         ("quota-statusline", _titled(
             ("quota-snapshot.py --refresh on a claude source (statusline)", _in_tmp(test_quota_snapshot_statusline_refresh)),
             ("quota-snapshot.py --refresh on a claude source (statusline, Windows)",
-             _in_tmp(test_quota_snapshot_statusline_refresh_windows)))),
+             _in_tmp(test_quota_snapshot_statusline_refresh_windows)),
+            ("quota-snapshot.py --refresh on a cursor source (statusline, Windows)",
+             _in_tmp(test_quota_snapshot_statusline_refresh_cursor_windows)))),
         ("quota-tui", _titled(("quota-snapshot.py --refresh (private tmux server)",
                                _in_tmp(test_quota_snapshot_tui_refresh, cleanup=_unlock)))),
         ("runner", _titled(("test_scripts.py command line and parallel results", _in_tmp(test_runner)))),

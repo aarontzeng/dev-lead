@@ -537,10 +537,15 @@ def collect_cursor(src, ctx):
 # no model is called.
 REFRESH_TMUX_SPAWN = "tmux_spawn"
 REFRESH_SPAWN_HIDDEN = "spawn_hidden"             # Windows: the same idea without tmux (see refresh_hidden)
-REFRESH_STATUSLINE = "statusline"                 # claude: run the person's own statusline script, which fetches (see refresh_statusline)
+REFRESH_STATUSLINE = "statusline"                 # claude; cursor on Windows: run the person's own statusline script, which fetches (see refresh_statusline)
 REFRESH_FETCH = "fetch"                           # claude/cursor: run dev-lead's own quota-fetch.py (see refresh_fetch)
 REFRESH_MODES = (REFRESH_TMUX_SPAWN, REFRESH_SPAWN_HIDDEN, REFRESH_STATUSLINE, REFRESH_FETCH)
-STATUSLINE_REFRESH_KINDS = ("claude_usage_cache",)
+STATUSLINE_REFRESH_KINDS = ("claude_usage_cache", "cursor_usage_cache")
+# Cursor's statusline.ps1 -BackgroundFetch BLOCKS until its fetch is done and always exits 0, and it does not look at
+# its own back-off or lock in that mode (its render path does). The files, beside the cache, and the ages its render
+# path honours before it starts a fetch: this collector honours the same, or it would double up with a redraw.
+CURSOR_BACKOFF_FILE, CURSOR_BACKOFF_SECONDS = "statusline-backoff", 600
+CURSOR_LOCK_FILE, CURSOR_LOCK_SECONDS = "statusline-fetch.lock", 30
 # kind -> the quota-fetch.py source name; the fetcher is the one place that reads the login
 FETCH_REFRESH_KINDS = {"claude_usage_cache": "claude", "cursor_usage_cache": "cursor"}
 FETCH_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "quota-fetch.py")
@@ -1439,8 +1444,10 @@ def _statusline_timeout():
     return seconds if 0 < seconds <= 60 else default
 
 
-def refresh_statusline(ctx, path):
-    """Run the person's statusline script once so that it refetches the Claude usage cache; None, or why not.
+def refresh_statusline(ctx, path, kind="claude_usage_cache"):
+    """Run the person's statusline script once so that it refetches the usage cache of `kind`; None, or why not.
+
+    Claude: below. Cursor (Windows only, see _statusline_windows): ~/.cursor/statusline.ps1 -BackgroundFetch.
 
     The cache is written only by that script, and only when Claude Code redraws its status line, so an
     idle session lets it go stale. Run with an empty `{}` on stdin it draws nothing useful, but it does
@@ -1462,8 +1469,12 @@ def refresh_statusline(ctx, path):
     is what is wanted, not who wrote it.
     """
     label = "claude"
+    if kind == "cursor_usage_cache":
+        if not IS_WINDOWS:
+            return "cursor refresh is not supported here (the statusline refresh for cursor is Windows only)"
+        return _statusline_windows(ctx, path, kind)
     if IS_WINDOWS:
-        return _statusline_windows(ctx, path)
+        return _statusline_windows(ctx, path, kind)
     if fcntl is None:
         return "%s refresh is not supported here (statusline refresh needs POSIX file locks)" % label
     home = os.path.expanduser("~")
@@ -1511,11 +1522,13 @@ def refresh_statusline(ctx, path):
 
 
 def _statusline_locked(ctx, path, base, argv, env, flags, label="claude", backoff_name="quota-statusline.backoff",
-                       name=None, timeout=None, wait=None):
+                       name=None, timeout=None, wait=None, guard=None):
     """argv (the statusline script, or quota-fetch.py) with `{}` on stdin, once, with the refresh lock held;
     None, or why not.
 
-    A refresh that produced no cache, whatever the reason, backs off for BACKOFF_SECONDS."""
+    A refresh that produced no cache, whatever the reason, backs off for BACKOFF_SECONDS. `guard(path)`, when
+    given, runs after this source's own back-off check and before the start: (why, release); a `why` is a
+    plain skip (no back-off is written for it), `release()` runs when the run is over, whatever its end."""
     name = name or os.path.basename(argv[-1])
     backoff = os.path.join(base, backoff_name)
     ago = _backoff_age(backoff, path)
@@ -1531,6 +1544,19 @@ def _statusline_locked(ctx, path, base, argv, env, flags, label="claude", backof
             message += " (and its back-off could not be recorded, so the next poll tries again)"
         return message
 
+    release = None
+    if guard is not None:
+        skipped, release = guard(path)
+        if skipped:
+            return skipped
+    try:
+        return _statusline_run(ctx, path, argv, env, flags, label, name, timeout, wait, backoff, failure)
+    finally:
+        if release is not None:
+            release()
+
+
+def _statusline_run(ctx, path, argv, env, flags, label, name, timeout, wait, backoff, failure):
     before = _mtime_or_none(path)
     timeout = timeout or _statusline_timeout()
     wait = ctx.refresh_wait if wait is None else wait
@@ -1557,36 +1583,92 @@ def _statusline_locked(ctx, path, base, argv, env, flags, label="claude", backof
 NO_WINDOW_FLAG = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000) if IS_WINDOWS else 0
 
 
-def _statusline_windows(ctx, path):
-    """Windows: run ~/.claude/statusline.ps1 with pwsh, hidden, once; None, or why not.
+def _cursor_fetch_guard(path):
+    """Cursor's own files beside its cache, before `statusline.ps1 -BackgroundFetch` runs: (why, release).
+
+    That mode does not look at the script's back-off or fetch lock (only its render path does), so this does what
+    the render path does before it starts a fetch: a back-off file younger than CURSOR_BACKOFF_SECONDS or a lock
+    younger than CURSOR_LOCK_SECONDS is a skip, and the lock is created here (and removed by `release`) so that a
+    redraw does not start a second fetch meanwhile. Success is judged by the cache, never by the exit code (the
+    script always exits 0). Both files are written by Cursor's script; neither is read for its content."""
+    folder = os.path.dirname(path)
+    try:
+        os.makedirs(folder, exist_ok=True)
+    except OSError:
+        pass
+    if not _plain_dir(folder):
+        return "cursor refresh skipped: the cache directory is missing or is a link", None
+    backoff, lock = os.path.join(folder, CURSOR_BACKOFF_FILE), os.path.join(folder, CURSOR_LOCK_FILE)
+    now = time.time()
+    failed = _mtime_or_none(backoff)
+    if failed is not None and 0 <= now - failed / 1e9 < CURSOR_BACKOFF_SECONDS:
+        ago = int(now - failed / 1e9)
+        return ("cursor refresh skipped: the statusline's own fetch failed %d s ago; its next try is in %d s"
+                % (ago, CURSOR_BACKOFF_SECONDS - ago)), None
+    try:
+        if os.path.lexists(lock):
+            if os.path.islink(lock) or getattr(os.lstat(lock), "st_file_attributes", 0) & _REPARSE_POINT:
+                return "cursor refresh skipped: its fetch lock is a link", None
+            held = _mtime_or_none(lock)
+            if held is not None and 0 <= now - held / 1e9 < CURSOR_LOCK_SECONDS:
+                return "cursor refresh skipped: another fetch is running (its lock is %d s old)" % int(now - held / 1e9), None
+            os.unlink(lock)                       # older than the script itself trusts: a dead fetch's
+        os.close(os.open(lock, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0), 0o600))
+    except FileExistsError:
+        return "cursor refresh skipped: another fetch is running", None
+    except OSError as exc:
+        return "cursor refresh failed: cannot create its fetch lock (%s)" % errno_name(exc), None
+
+    def release():
+        try:
+            os.unlink(lock)
+        except OSError:
+            pass
+    return None, release
+
+
+def _statusline_windows(ctx, path, kind="claude_usage_cache"):
+    """Windows: run ~/.claude/statusline.ps1 (cursor: ~/.cursor/statusline.ps1 -BackgroundFetch) with pwsh,
+    hidden, once; None, or why not.
 
     The same idea as refresh_statusline: the script (aadev's statusline.ps1, or a stub that runs it) starts its
     own detached -Fetch when its cache is older than five minutes and its back-off and fetch lock allow, with the
     token it finds itself; this collector reads no credential. Windows has no owner or mode bits to check, so the
     guard is by shape: a regular file, not a link or reparse point, in a ~/.claude that is not a link or junction,
     started by an absolute pwsh.exe found on PATH (never the current directory, where it also runs) and never through a shim. Known limit: the checks are
-    by path, and a same-user process could swap the file between the check and the run, as it could run it itself."""
-    label = "claude"
+    by path, and a same-user process could swap the file between the check and the run, as it could run it itself.
+
+    Cursor differs in two ways, both of the script's making: its token is in the OS secret store, which only the
+    Cursor CLI's own module reads, so the script's -BackgroundFetch hands that to a sidecar and BLOCKS until it is
+    done (this collector waits for it, not for a detached child); and in that mode the script ignores its own
+    back-off and lock, so _cursor_fetch_guard honours them here. Its own lock and back-off marker, per source."""
+    cursor = kind == "cursor_usage_cache"
+    label, folder = ("cursor", ".cursor") if cursor else ("claude", ".claude")
     if msvcrt is None:
         return "%s refresh is not supported here (statusline refresh needs msvcrt)" % label
     home = os.path.expanduser("~")
-    script = os.path.join(home, ".claude", "statusline.ps1")
+    script = os.path.join(home, folder, "statusline.ps1")
     try:
         st = os.lstat(script)
     except OSError:
-        return "%s refresh skipped: ~/.claude/statusline.ps1 is not there" % label
+        return "%s refresh skipped: ~/%s/statusline.ps1 is not there" % (label, folder)
     if (not stat.S_ISREG(st.st_mode) or stat.S_ISLNK(st.st_mode) or getattr(st, "st_file_attributes", 0) & _REPARSE_POINT
             or not _plain_dir(os.path.dirname(script))):
-        return ("%s refresh skipped: ~/.claude/statusline.ps1 is not a regular file (not a link or reparse point) "
-                "in a ~/.claude that is not a link or junction" % label)
+        return ("%s refresh skipped: ~/%s/statusline.ps1 is not a regular file (not a link or reparse point) "
+                "in a ~/%s that is not a link or junction" % (label, folder, folder))
     pwsh = _windows_which("pwsh.exe")      # by name with its extension: a pwsh.com earlier in PATHEXT must not hide it
     if pwsh is None:
         return "%s refresh skipped: pwsh was not found on PATH" % label
     if os.path.splitext(pwsh)[1].lower() != ".exe":
         return "%s refresh skipped: pwsh is not a .exe (a shim or launcher would end the shell, not pwsh)" % label
     argv = [pwsh, "-NoProfile", "-File", script]
-    return _windows_single_flight(label, "quota-statusline.lock", lambda base: _statusline_locked(
-        ctx, path, base, argv, None, NO_WINDOW_FLAG))
+    extra = {}
+    if cursor:
+        argv.append("-BackgroundFetch")
+        extra = dict(label=label, backoff_name="quota-statusline-cursor.backoff", name="statusline.ps1",
+                     wait=min(ctx.refresh_wait, 3.0), guard=_cursor_fetch_guard)   # the script has returned: the cache is there or it is not
+    return _windows_single_flight(label, "quota-statusline-cursor.lock" if cursor else "quota-statusline.lock",
+                                  lambda base: _statusline_locked(ctx, path, base, argv, None, NO_WINDOW_FLAG, **extra))
 
 
 def refresh_fetch(ctx, kind, path):
@@ -1662,7 +1744,7 @@ def refresh_sources(sources, ctx, when):
             if -CLOCK_SKEW_SECONDS <= age <= src["ttl_seconds"]:
                 continue                          # fresh already: nothing to start
         if mode == REFRESH_STATUSLINE:
-            why = refresh_statusline(ctx, path)
+            why = refresh_statusline(ctx, path, src["kind"])
         elif mode == REFRESH_FETCH:
             why = refresh_fetch(ctx, src["kind"], path)
         else:
