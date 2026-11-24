@@ -5534,13 +5534,14 @@ def test_quota_snapshot_statusline_refresh_cursor_windows(tmp):
                 _fcntl.flock(fd, _fcntl.LOCK_UN)
         return _types.SimpleNamespace(LK_NBLCK=2, LK_UNLCK=0, locking=locking)
     win.msvcrt = flock_msvcrt()
-    real_locked = win._statusline_locked
     flags_seen = []
+    real_run = win.subprocess.run
 
-    def locked(ctx, path, base, argv, env, flags, **kw):
-        flags_seen.append(flags)
-        return real_locked(ctx, path, base, argv, env, 0, **kw)     # creationflags exist on Windows only
-    win._statusline_locked = locked
+    def run_spy(*a, **kw):
+        flags_seen.append(kw.get("creationflags"))
+        kw["creationflags"] = 0                                     # creationflags exist on Windows only
+        return real_run(*a, **kw)
+    win.subprocess.run = run_spy
 
     home = tmp / "slc-home"
     (home / ".cursor").mkdir(parents=True)
@@ -5632,7 +5633,7 @@ def test_quota_snapshot_statusline_refresh_cursor_windows(tmp):
         check("statusline cursor windows: a lock older than 30 s is a dead fetch's: replaced, held during the run, gone after",
               why is None and len(runs()) == 1 and runs()[0]["lock_held"] is True and not theirs_lock.exists(), (why, runs()))
         # -- the thresholds are the script's own: 600 s and 30 s, both sides of each
-        for what, marker, young, old_ in (("back-off", theirs_backoff, 590, 610), ("lock", theirs_lock, 25, 35)):
+        for what, marker, young, old_ in (("back-off", theirs_backoff, 599, 601), ("lock", theirs_lock, 29, 31)):
             setup("write")
             marker.write_text("x")
             age(marker, young)
@@ -5665,6 +5666,30 @@ def test_quota_snapshot_statusline_refresh_cursor_windows(tmp):
         check("statusline cursor windows: a stale lock replaced by a redraw before the collector removes it is left alone, nothing runs",
               raced and why is not None and why.startswith("cursor refresh skipped: another fetch is running")
               and not runs() and theirs_lock.read_text() == "redraw", (why, runs()))
+        # ... and the same when only the file id changed (same mtime, a different file put in its place)
+        setup("write")
+        theirs_lock.write_text("x")
+        age(theirs_lock, 100)
+        orig_ns = theirs_lock.stat().st_mtime_ns
+        raced2 = []
+
+        def racing_id(f):
+            got = real_mtime(f)
+            if str(f).endswith("statusline-fetch.lock") and got is not None and not raced2:
+                raced2.append(1)
+                other = Path(str(f) + ".new")
+                other.write_text("redraw")
+                os.utime(other, ns=(orig_ns, orig_ns))
+                os.replace(other, f)                     # both existed at once: a different file id, the same mtime
+            return got
+        win._mtime_or_none = racing_id
+        try:
+            why = go(1)
+        finally:
+            win._mtime_or_none = real_mtime
+        check("statusline cursor windows: a stale lock swapped for another file with the same mtime is left alone, nothing runs",
+              raced2 and why is not None and why.startswith("cursor refresh skipped: another fetch is running")
+              and not runs() and theirs_lock.read_text() == "redraw", (why, runs()))
         # -- clock skew: a file dated ahead is as young as one just written, unless it is further ahead than the skew allowed
         setup("write")
         theirs_lock.write_text("x")
@@ -5673,9 +5698,15 @@ def test_quota_snapshot_statusline_refresh_cursor_windows(tmp):
         check("statusline cursor windows: a fetch lock dated 30 s ahead of the clock is a live one: skipped and left alone",
               why is not None and why.startswith("cursor refresh skipped: another fetch is running (its lock is 0 s old)")
               and not runs() and theirs_lock.exists(), (why, runs()))
-        os.utime(theirs_lock, (time.time() + 3600, time.time() + 3600))
+        setup("write")
+        theirs_lock.write_text("x")
+        os.utime(theirs_lock, (time.time() + 59.5, time.time() + 59.5))
+        why = go(1)
+        check("statusline cursor windows: a lock dated 59.5 s ahead (inside the 60 s skew) is still a live one",
+              why is not None and why.startswith("cursor refresh skipped: another fetch is running") and not runs(), (why, runs()))
+        os.utime(theirs_lock, (time.time() + 61, time.time() + 61))
         why = go(5)
-        check("statusline cursor windows: a lock dated an hour ahead is not a usable time: replaced, the run happens",
+        check("statusline cursor windows: a lock dated 61 s ahead is not a usable time: replaced, the run happens",
               why is None and len(runs()) == 1 and not theirs_lock.exists(), (why, runs()))
         setup("write")
         theirs_backoff.write_text("x")
@@ -5684,24 +5715,68 @@ def test_quota_snapshot_statusline_refresh_cursor_windows(tmp):
         check("statusline cursor windows: a back-off dated 30 s ahead of the clock still holds (0 s ago, next try in 600 s)",
               why is not None and why.startswith("cursor refresh skipped: the statusline's own fetch failed 0 s ago; its next try is in 600 s")
               and not runs(), (why, runs()))
-        os.utime(theirs_backoff, (time.time() + 3600, time.time() + 3600))
+        setup("write")
+        theirs_backoff.write_text("x")
+        os.utime(theirs_backoff, (time.time() + 59.5, time.time() + 59.5))
+        why = go(1)
+        check("statusline cursor windows: a back-off dated 59.5 s ahead (inside the 60 s skew) still holds", why is not None and not runs(), (why, runs()))
+        os.utime(theirs_backoff, (time.time() + 61, time.time() + 61))
         why = go(5)
-        check("statusline cursor windows: a back-off dated an hour ahead is not a usable time and does not hold", why is None and len(runs()) == 1, (why, runs()))
-        # -- a lock that cannot be made is the guard's own failure: named, and backs off like a failed run
-        if os.geteuid() == 0:
-            SKIPS.append("statusline cursor windows: an unwritable cache directory (root writes anywhere)")
-        else:
+        check("statusline cursor windows: a back-off dated 61 s ahead is not a usable time and does not hold", why is None and len(runs()) == 1, (why, runs()))
+        # -- a lock that cannot be made is the guard's own failure: named, and backs off like a failed run (errors injected,
+        # so the case does not depend on who runs the tests)
+        real_open, real_unlink = os.open, os.unlink
+
+        def failing_open(err):
+            def opener(f, *a, **kw):
+                if str(f).endswith("statusline-fetch.lock"):
+                    raise err
+                return real_open(f, *a, **kw)
+            return opener
+        for label, err in (("denied", PermissionError(13, "denied")), ("the cache directory gone", FileNotFoundError(2, "gone"))):
             setup("write")
-            folder.chmod(0o500)
+            os.open = failing_open(err)
             try:
                 why = go(1)
                 again = go(1)
             finally:
-                folder.chmod(0o700)
-            check("statusline cursor windows: a fetch lock that cannot be created is named, nothing runs, the collector backs off "
-                  "and the poll after does not try again",
+                os.open = real_open
+            check("statusline cursor windows: a fetch lock that cannot be created (%s) is named, nothing runs, the collector backs off "
+                  "and the poll after does not try again" % label,
                   why is not None and why.startswith("cursor refresh failed: cannot create its fetch lock (") and not runs()
                   and own_backoff.exists() and again is not None and "an earlier refresh wrote no cache" in again, (why, again, runs()))
+        # a dead lock that cannot be removed is a skip: no run, no back-off, the next poll looks again
+        setup("write")
+        theirs_lock.write_text("x")
+        age(theirs_lock, 100)
+
+        def failing_unlink(f, *a, **kw):
+            if str(f).endswith("statusline-fetch.lock"):
+                raise PermissionError(13, "denied")
+            return real_unlink(f, *a, **kw)
+        os.unlink = failing_unlink
+        try:
+            why = go(1)
+        finally:
+            os.unlink = real_unlink
+        check("statusline cursor windows: a dead fetch lock that cannot be removed is a skip that names it: no run and no back-off",
+              why is not None and why.startswith("cursor refresh skipped: cannot remove its dead fetch lock (")
+              and not runs() and not own_backoff.exists(), (why, runs()))
+        # a cache directory that cannot be made is a failure that backs off; one that is a link stays a skip
+        setup("write")
+        shutil.rmtree(folder)
+        real_makedirs = os.makedirs
+
+        def failing_makedirs(f, *a, **kw):
+            raise PermissionError(13, "denied")
+        os.makedirs = failing_makedirs
+        try:
+            why = go(1)
+        finally:
+            os.makedirs = real_makedirs
+        check("statusline cursor windows: a cache directory that cannot be created is named and backs off",
+              why is not None and why.startswith("cursor refresh failed: cannot create its cache directory (")
+              and not runs() and own_backoff.exists(), (why, runs()))
         # -- the script and its directories: the claude guard, by shape
         setup("write")
         real = script.read_text()
@@ -5723,7 +5798,7 @@ def test_quota_snapshot_statusline_refresh_cursor_windows(tmp):
         folder.symlink_to(moved)
         why = go()
         check("statusline cursor windows: a cache directory that is a link is refused and nothing runs",
-              why == "cursor refresh skipped: the cache directory is missing or is a link" and not runs(), (why, runs()))
+              why == "cursor refresh skipped: the cache directory is a link or not a directory" and not runs(), (why, runs()))
         folder.unlink()
         moved.rename(folder)
         setup("write")
@@ -5756,6 +5831,7 @@ def test_quota_snapshot_statusline_refresh_cursor_windows(tmp):
         check("statusline cursor: off Windows the mode says so and starts nothing",
               why == "cursor refresh is not supported here (the statusline refresh for cursor is Windows only)" and not runs(), why)
     finally:
+        win.subprocess.run = real_run
         for k, v in saved.items():
             if v is None:
                 os.environ.pop(k, None)

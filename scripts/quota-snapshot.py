@@ -1595,14 +1595,14 @@ def _cursor_fetch_guard(path):
     as young as one written just now (skew must not make a live fetch's lock look dead); one dated further ahead
     is not a usable time and counts as old. Success is judged by the cache, never by the exit code (the script
     always exits 0). Both files are written by Cursor's script; only their mtime is read, never their content.
-    A lock that cannot be made is the guard's own failure (back_off true), not a skip."""
+    A lock or a cache directory that cannot be made is the guard's own failure (back_off true), not a skip."""
     folder = os.path.dirname(path)
     try:
         os.makedirs(folder, exist_ok=True)
-    except OSError:
-        pass
+    except OSError as exc:
+        return "cursor refresh failed: cannot create its cache directory (%s)" % errno_name(exc), None, True
     if not _plain_dir(folder):
-        return "cursor refresh skipped: the cache directory is missing or is a link", None, False
+        return "cursor refresh skipped: the cache directory is a link or not a directory", None, False
     backoff, lock = os.path.join(folder, CURSOR_BACKOFF_FILE), os.path.join(folder, CURSOR_LOCK_FILE)
     now = time.time()
 
@@ -1618,10 +1618,10 @@ def _cursor_fetch_guard(path):
         ago = max(0, int(failed))
         return ("cursor refresh skipped: the statusline's own fetch failed %d s ago; its next try is in %d s"
                 % (ago, CURSOR_BACKOFF_SECONDS - ago)), None, False
-    try:
-        if os.path.lexists(lock):
-            if os.path.islink(lock) or getattr(os.lstat(lock), "st_file_attributes", 0) & _REPARSE_POINT:
-                return "cursor refresh skipped: its fetch lock is a link", None, False
+    if os.path.lexists(lock):
+        if os.path.islink(lock) or getattr(os.lstat(lock), "st_file_attributes", 0) & _REPARSE_POINT:
+            return "cursor refresh skipped: its fetch lock is a link", None, False
+        try:
             seen = os.lstat(lock)
             held = age(lock)
             if held is not None and held < CURSOR_LOCK_SECONDS:
@@ -1633,17 +1633,24 @@ def _cursor_fetch_guard(path):
             again = os.lstat(lock)
             if (again.st_ino, again.st_mtime_ns) != (seen.st_ino, seen.st_mtime_ns):
                 return "cursor refresh skipped: another fetch is running (its lock was just replaced)", None, False
-            os.unlink(lock)
+        except FileNotFoundError:
+            pass                                  # it just went: nothing to remove
+        else:
+            try:
+                os.unlink(lock)
+            except FileNotFoundError:
+                pass
+            except OSError as exc:                # a dead lock Windows will not let go of: the next poll looks again
+                return "cursor refresh skipped: cannot remove its dead fetch lock (%s)" % errno_name(exc), None, False
+    try:
         fd = os.open(lock, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0), 0o600)
         try:
             made = os.fstat(fd)
         finally:
             os.close(fd)
-    except FileNotFoundError:
-        return "cursor refresh skipped: another fetch is running (its lock just went)", None, False
     except FileExistsError:
         return "cursor refresh skipped: another fetch is running", None, False
-    except OSError as exc:
+    except OSError as exc:                        # including a cache directory that went after the check
         return "cursor refresh failed: cannot create its fetch lock (%s)" % errno_name(exc), None, True
 
     def release():

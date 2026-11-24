@@ -595,14 +595,17 @@ they have open.
   afterwards (the script removes its own at its end, and a redraw may have made a new one since: identity is the
   file id plus its mtime); one that cannot be removed goes stale for the script after 30 s. A file dated up to 60 s
   ahead of the clock counts as young as one written just now; one dated further ahead is not a usable time and
-  counts as old. A lock that cannot be created is `cursor refresh failed: cannot create its fetch lock (...)` and
-  backs off like a failed run; the skips above write no back-off. Its own lock and back-off marker:
+  counts as old. A lock (or the cache directory) that cannot be created is `cursor refresh failed: cannot create its
+  fetch lock (...)` / `... its cache directory (...)` and backs off like a failed run; the skips above write no
+  back-off, and neither does a dead lock that cannot be removed (`cursor refresh skipped: cannot remove its dead
+  fetch lock (...)`: the next poll looks again). Its own lock and back-off marker:
   `quota-statusline-cursor.lock` / `.backoff` in `~/.cache/dev-lead`. Same messages otherwise as above, with the
   `cursor` label. Known limits: the cursor source's `path` must be the script's own cache
   (`${TEMP}\cursor\statusline-usage-cache.json`, as the shipped file has it), because the script's files are read
   beside it; pwsh.exe is found by the claude refresh's own lookup (an absolute PATH entry, which may be a link);
   a timeout ends pwsh, not a sidecar it started, and the lock is released then; the window between the second look
-  at a stale lock and its removal is closed only by a protocol the script would have to share. Simulated in the
+  at a stale lock and its removal, and the one between the ownership check and the removal after the run, are
+  closed only by a protocol the script would have to share (the check narrows them, it cannot make them atomic). Simulated in the
   tests (fake pwsh); not yet run on a real Windows host, where the run time of `-BackgroundFetch` against the 20 s
   timeout is the first thing to measure.
 - **Codex.** The pipe is read by a thread (a selector cannot wait on a Windows pipe) and the
