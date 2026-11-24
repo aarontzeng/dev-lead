@@ -5490,6 +5490,9 @@ if os.environ["FAKE_MODE"] == "write":
     os.replace(cache + ".tmp", cache)
 if os.environ.get("FAKE_REMOVE_LOCK") == "1" and os.path.exists(lock):
     os.unlink(lock)          # the real script removes its lock at its end and always exits 0
+if os.environ.get("FAKE_REDRAW") == "1":
+    with open(lock, "w") as fh:      # a redraw's fetch lock, made after the script's own was gone
+        fh.write("redraw")
 """
 
 
@@ -5532,7 +5535,12 @@ def test_quota_snapshot_statusline_refresh_cursor_windows(tmp):
         return _types.SimpleNamespace(LK_NBLCK=2, LK_UNLCK=0, locking=locking)
     win.msvcrt = flock_msvcrt()
     real_locked = win._statusline_locked
-    win._statusline_locked = lambda ctx, path, base, argv, env, flags, **kw: real_locked(ctx, path, base, argv, env, 0, **kw)
+    flags_seen = []
+
+    def locked(ctx, path, base, argv, env, flags, **kw):
+        flags_seen.append(flags)
+        return real_locked(ctx, path, base, argv, env, 0, **kw)     # creationflags exist on Windows only
+    win._statusline_locked = locked
 
     home = tmp / "slc-home"
     (home / ".cursor").mkdir(parents=True)
@@ -5549,11 +5557,11 @@ def test_quota_snapshot_statusline_refresh_cursor_windows(tmp):
     cache = folder / "statusline-usage-cache.json"
     own_backoff = home / ".cache" / "dev-lead" / "quota-statusline-cursor.backoff"
     theirs_backoff, theirs_lock = folder / "statusline-backoff", folder / "statusline-fetch.lock"
-    saved = {k: os.environ.get(k) for k in ("HOME", "USERPROFILE", "PATH", "PATHEXT", "FAKE_MODE", "FAKE_LOG", "FAKE_CACHE", "FAKE_REMOVE_LOCK")}
+    saved = {k: os.environ.get(k) for k in ("HOME", "USERPROFILE", "PATH", "PATHEXT", "FAKE_MODE", "FAKE_LOG", "FAKE_CACHE", "FAKE_REMOVE_LOCK", "FAKE_REDRAW")}
 
-    def setup(mode, remove_lock="1"):
+    def setup(mode, remove_lock="1", redraw="0"):
         os.environ.update(HOME=str(home), PATH=str(binary), PATHEXT=".EXE;.CMD", FAKE_MODE=mode, FAKE_LOG=str(log),
-                          FAKE_CACHE=str(cache), FAKE_REMOVE_LOCK=remove_lock)
+                          FAKE_CACHE=str(cache), FAKE_REMOVE_LOCK=remove_lock, FAKE_REDRAW=redraw)
         for f in (own_backoff, theirs_backoff, theirs_lock, log):
             f.unlink(missing_ok=True)
         folder.mkdir(exist_ok=True)
@@ -5579,9 +5587,14 @@ def test_quota_snapshot_statusline_refresh_cursor_windows(tmp):
               "with the script's fetch lock held during the run and gone after, and a rewrite ends it with no problem",
               why is None and len(got) == 1 and got[0]["argv"] == ["-NoProfile", "-File", str(script), "-BackgroundFetch"]
               and got[0]["lock_held"] is True and not theirs_lock.exists() and not own_backoff.exists(), (why, got))
+        check("statusline cursor windows: the run gets no window (CREATE_NO_WINDOW)", flags_seen == [0x08000000], flags_seen)
         setup("write", remove_lock="0")
         why = go(5)
         check("statusline cursor windows: the lock the collector made is removed by it when the script left it", why is None and not theirs_lock.exists(), why)
+        setup("write", remove_lock="1", redraw="1")
+        why = go(5)
+        check("statusline cursor windows: a lock a redraw made after the script removed ours is not the collector's to remove",
+              why is None and theirs_lock.exists() and theirs_lock.read_text() == "redraw", (why, theirs_lock.exists()))
         setup("silent")
         why = go(1)
         again = go(1)
@@ -5618,6 +5631,77 @@ def test_quota_snapshot_statusline_refresh_cursor_windows(tmp):
         why = go(5)
         check("statusline cursor windows: a lock older than 30 s is a dead fetch's: replaced, held during the run, gone after",
               why is None and len(runs()) == 1 and runs()[0]["lock_held"] is True and not theirs_lock.exists(), (why, runs()))
+        # -- the thresholds are the script's own: 600 s and 30 s, both sides of each
+        for what, marker, young, old_ in (("back-off", theirs_backoff, 590, 610), ("lock", theirs_lock, 25, 35)):
+            setup("write")
+            marker.write_text("x")
+            age(marker, young)
+            why = go(1)
+            held_back = why is not None and why.startswith("cursor refresh skipped") and not runs()
+            setup("write")
+            marker.write_text("x")
+            age(marker, old_)
+            why = go(5)
+            check("statusline cursor windows: a %s %d s old still holds and one %d s old does not" % (what, young, old_),
+                  held_back and why is None and len(runs()) == 1, (held_back, why, runs()))
+        # -- a stale lock that a redraw replaces between the look and the removal is a live one
+        setup("write")
+        theirs_lock.write_text("x")
+        age(theirs_lock, 100)
+        real_mtime, raced = win._mtime_or_none, []
+
+        def racing(f):
+            got = real_mtime(f)
+            if str(f).endswith("statusline-fetch.lock") and got is not None and not raced:
+                raced.append(1)
+                os.unlink(f)
+                Path(f).write_text("redraw")
+            return got
+        win._mtime_or_none = racing
+        try:
+            why = go(1)
+        finally:
+            win._mtime_or_none = real_mtime
+        check("statusline cursor windows: a stale lock replaced by a redraw before the collector removes it is left alone, nothing runs",
+              raced and why is not None and why.startswith("cursor refresh skipped: another fetch is running")
+              and not runs() and theirs_lock.read_text() == "redraw", (why, runs()))
+        # -- clock skew: a file dated ahead is as young as one just written, unless it is further ahead than the skew allowed
+        setup("write")
+        theirs_lock.write_text("x")
+        os.utime(theirs_lock, (time.time() + 30, time.time() + 30))
+        why = go(1)
+        check("statusline cursor windows: a fetch lock dated 30 s ahead of the clock is a live one: skipped and left alone",
+              why is not None and why.startswith("cursor refresh skipped: another fetch is running (its lock is 0 s old)")
+              and not runs() and theirs_lock.exists(), (why, runs()))
+        os.utime(theirs_lock, (time.time() + 3600, time.time() + 3600))
+        why = go(5)
+        check("statusline cursor windows: a lock dated an hour ahead is not a usable time: replaced, the run happens",
+              why is None and len(runs()) == 1 and not theirs_lock.exists(), (why, runs()))
+        setup("write")
+        theirs_backoff.write_text("x")
+        os.utime(theirs_backoff, (time.time() + 30, time.time() + 30))
+        why = go(1)
+        check("statusline cursor windows: a back-off dated 30 s ahead of the clock still holds (0 s ago, next try in 600 s)",
+              why is not None and why.startswith("cursor refresh skipped: the statusline's own fetch failed 0 s ago; its next try is in 600 s")
+              and not runs(), (why, runs()))
+        os.utime(theirs_backoff, (time.time() + 3600, time.time() + 3600))
+        why = go(5)
+        check("statusline cursor windows: a back-off dated an hour ahead is not a usable time and does not hold", why is None and len(runs()) == 1, (why, runs()))
+        # -- a lock that cannot be made is the guard's own failure: named, and backs off like a failed run
+        if os.geteuid() == 0:
+            SKIPS.append("statusline cursor windows: an unwritable cache directory (root writes anywhere)")
+        else:
+            setup("write")
+            folder.chmod(0o500)
+            try:
+                why = go(1)
+                again = go(1)
+            finally:
+                folder.chmod(0o700)
+            check("statusline cursor windows: a fetch lock that cannot be created is named, nothing runs, the collector backs off "
+                  "and the poll after does not try again",
+                  why is not None and why.startswith("cursor refresh failed: cannot create its fetch lock (") and not runs()
+                  and own_backoff.exists() and again is not None and "an earlier refresh wrote no cache" in again, (why, again, runs()))
         # -- the script and its directories: the claude guard, by shape
         setup("write")
         real = script.read_text()

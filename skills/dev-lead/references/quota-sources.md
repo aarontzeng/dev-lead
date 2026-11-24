@@ -590,9 +590,21 @@ they have open.
   collector does: a `statusline-backoff` younger than 600 s or a `statusline-fetch.lock` younger than 30 s beside the
   cache is a skip (`the statusline's own fetch failed N s ago ...`, `another fetch is running ...`, no back-off
   written by the collector), and it creates the lock for the run and removes it after, so a redraw does not start a
-  second fetch. A lock older than 30 s is a dead one and is replaced. Its own lock and back-off marker:
+  second fetch. A lock older than 30 s is a dead one and is replaced (looked at again just before it is
+  removed: one a redraw replaced meanwhile is live and is left alone). Only the file the run made is removed
+  afterwards (the script removes its own at its end, and a redraw may have made a new one since: identity is the
+  file id plus its mtime); one that cannot be removed goes stale for the script after 30 s. A file dated up to 60 s
+  ahead of the clock counts as young as one written just now; one dated further ahead is not a usable time and
+  counts as old. A lock that cannot be created is `cursor refresh failed: cannot create its fetch lock (...)` and
+  backs off like a failed run; the skips above write no back-off. Its own lock and back-off marker:
   `quota-statusline-cursor.lock` / `.backoff` in `~/.cache/dev-lead`. Same messages otherwise as above, with the
-  `cursor` label. Simulated in the tests (fake pwsh); not yet run on a real Windows host.
+  `cursor` label. Known limits: the cursor source's `path` must be the script's own cache
+  (`${TEMP}\cursor\statusline-usage-cache.json`, as the shipped file has it), because the script's files are read
+  beside it; pwsh.exe is found by the claude refresh's own lookup (an absolute PATH entry, which may be a link);
+  a timeout ends pwsh, not a sidecar it started, and the lock is released then; the window between the second look
+  at a stale lock and its removal is closed only by a protocol the script would have to share. Simulated in the
+  tests (fake pwsh); not yet run on a real Windows host, where the run time of `-BackgroundFetch` against the 20 s
+  timeout is the first thing to measure.
 - **Codex.** The pipe is read by a thread (a selector cannot wait on a Windows pipe) and the
   binary is looked up through `PATHEXT`. Ending a `codex.cmd` shim with `terminate()` may leave
   the node process under it running.

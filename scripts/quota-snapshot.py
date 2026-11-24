@@ -45,8 +45,9 @@ Contract:
     and quota-fetch.py's contract). It starts `codex
     app-server` and reaps it itself. Opt-in twice over -- with --refresh, AND
     on a host whose config marks the source `"refresh": "tmux_spawn"` -- it
-    also (on a claude source marked `"refresh": "statusline"`) runs the person's own ~/.claude/statusline.sh
-    (statusline.ps1 by pwsh on Windows) once so that it refetches the usage cache (see refresh_statusline), and
+    also (on a claude source marked `"refresh": "statusline"`, or a cursor source on Windows) runs the person's own
+    ~/.claude/statusline.sh (statusline.ps1 by pwsh on Windows; ~/.cursor/statusline.ps1 -BackgroundFetch for cursor)
+    once so that it refetches the usage cache (see refresh_statusline), and
     also starts `agy`, `cursor-agent --trust` or `opencode --standalone` when that cache is missing,
     older than its TTL, more than 60 s in the future, or has an mtime that is
     not a usable time, detached in a tmux
@@ -1527,8 +1528,9 @@ def _statusline_locked(ctx, path, base, argv, env, flags, label="claude", backof
     None, or why not.
 
     A refresh that produced no cache, whatever the reason, backs off for BACKOFF_SECONDS. `guard(path)`, when
-    given, runs after this source's own back-off check and before the start: (why, release); a `why` is a
-    plain skip (no back-off is written for it), `release()` runs when the run is over, whatever its end."""
+    given, runs after this source's own back-off check and before the start: (why, release, back_off); a `why`
+    is a skip, which writes no back-off unless `back_off` is true (a failure of the guard's own: the next poll
+    would only meet it again), and `release()` runs when the run is over, whatever its end."""
     name = name or os.path.basename(argv[-1])
     backoff = os.path.join(base, backoff_name)
     ago = _backoff_age(backoff, path)
@@ -1546,9 +1548,9 @@ def _statusline_locked(ctx, path, base, argv, env, flags, label="claude", backof
 
     release = None
     if guard is not None:
-        skipped, release = guard(path)
+        skipped, release, back_off = guard(path)
         if skipped:
-            return skipped
+            return failure(skipped) if back_off else skipped
     try:
         return _statusline_run(ctx, path, argv, env, flags, label, name, timeout, wait, backoff, failure)
     finally:
@@ -1584,47 +1586,76 @@ NO_WINDOW_FLAG = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000) if IS_WINDO
 
 
 def _cursor_fetch_guard(path):
-    """Cursor's own files beside its cache, before `statusline.ps1 -BackgroundFetch` runs: (why, release).
+    """Cursor's own files beside its cache, before `statusline.ps1 -BackgroundFetch` runs: (why, release, back_off).
 
     That mode does not look at the script's back-off or fetch lock (only its render path does), so this does what
     the render path does before it starts a fetch: a back-off file younger than CURSOR_BACKOFF_SECONDS or a lock
     younger than CURSOR_LOCK_SECONDS is a skip, and the lock is created here (and removed by `release`) so that a
-    redraw does not start a second fetch meanwhile. Success is judged by the cache, never by the exit code (the
-    script always exits 0). Both files are written by Cursor's script; neither is read for its content."""
+    redraw does not start a second fetch meanwhile. A file dated up to CLOCK_SKEW_SECONDS ahead of this clock is
+    as young as one written just now (skew must not make a live fetch's lock look dead); one dated further ahead
+    is not a usable time and counts as old. Success is judged by the cache, never by the exit code (the script
+    always exits 0). Both files are written by Cursor's script; only their mtime is read, never their content.
+    A lock that cannot be made is the guard's own failure (back_off true), not a skip."""
     folder = os.path.dirname(path)
     try:
         os.makedirs(folder, exist_ok=True)
     except OSError:
         pass
     if not _plain_dir(folder):
-        return "cursor refresh skipped: the cache directory is missing or is a link", None
+        return "cursor refresh skipped: the cache directory is missing or is a link", None, False
     backoff, lock = os.path.join(folder, CURSOR_BACKOFF_FILE), os.path.join(folder, CURSOR_LOCK_FILE)
     now = time.time()
-    failed = _mtime_or_none(backoff)
-    if failed is not None and 0 <= now - failed / 1e9 < CURSOR_BACKOFF_SECONDS:
-        ago = int(now - failed / 1e9)
+
+    def age(file):
+        mtime = _mtime_or_none(file)
+        if mtime is None:
+            return None
+        seconds = now - mtime / 1e9
+        return seconds if seconds >= -CLOCK_SKEW_SECONDS else None
+
+    failed = age(backoff)
+    if failed is not None and failed < CURSOR_BACKOFF_SECONDS:
+        ago = max(0, int(failed))
         return ("cursor refresh skipped: the statusline's own fetch failed %d s ago; its next try is in %d s"
-                % (ago, CURSOR_BACKOFF_SECONDS - ago)), None
+                % (ago, CURSOR_BACKOFF_SECONDS - ago)), None, False
     try:
         if os.path.lexists(lock):
             if os.path.islink(lock) or getattr(os.lstat(lock), "st_file_attributes", 0) & _REPARSE_POINT:
-                return "cursor refresh skipped: its fetch lock is a link", None
-            held = _mtime_or_none(lock)
-            if held is not None and 0 <= now - held / 1e9 < CURSOR_LOCK_SECONDS:
-                return "cursor refresh skipped: another fetch is running (its lock is %d s old)" % int(now - held / 1e9), None
-            os.unlink(lock)                       # older than the script itself trusts: a dead fetch's
-        os.close(os.open(lock, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0), 0o600))
+                return "cursor refresh skipped: its fetch lock is a link", None, False
+            seen = os.lstat(lock)
+            held = age(lock)
+            if held is not None and held < CURSOR_LOCK_SECONDS:
+                return ("cursor refresh skipped: another fetch is running (its lock is %d s old)"
+                        % max(0, int(held))), None, False
+            # older than the script itself trusts: a dead fetch's. Looked at again just before it goes: a redraw
+            # that replaced it meanwhile made a live one, which is not ours to remove (the window that is left,
+            # between this look and the unlink, needs the script to share its protocol)
+            again = os.lstat(lock)
+            if (again.st_ino, again.st_mtime_ns) != (seen.st_ino, seen.st_mtime_ns):
+                return "cursor refresh skipped: another fetch is running (its lock was just replaced)", None, False
+            os.unlink(lock)
+        fd = os.open(lock, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0), 0o600)
+        try:
+            made = os.fstat(fd)
+        finally:
+            os.close(fd)
+    except FileNotFoundError:
+        return "cursor refresh skipped: another fetch is running (its lock just went)", None, False
     except FileExistsError:
-        return "cursor refresh skipped: another fetch is running", None
+        return "cursor refresh skipped: another fetch is running", None, False
     except OSError as exc:
-        return "cursor refresh failed: cannot create its fetch lock (%s)" % errno_name(exc), None
+        return "cursor refresh failed: cannot create its fetch lock (%s)" % errno_name(exc), None, True
 
     def release():
+        # the script removes its lock at its end, and a redraw may have made a new one since: only the file this
+        # run made is removed (a file id can be reused at once, so its mtime is part of the identity). One that cannot be removed goes stale for the script after CURSOR_LOCK_SECONDS.
         try:
-            os.unlink(lock)
+            now_on_disk = os.lstat(lock)
+            if (now_on_disk.st_dev, now_on_disk.st_ino, now_on_disk.st_mtime_ns) == (made.st_dev, made.st_ino, made.st_mtime_ns):
+                os.unlink(lock)
         except OSError:
             pass
-    return None, release
+    return None, release, False
 
 
 def _statusline_windows(ctx, path, kind="claude_usage_cache"):
@@ -2312,7 +2343,8 @@ def parse_args(argv):
                              "most about 2 s (default 20)")
     parser.add_argument("--refresh", action="store_true",
                         help="for a claude source whose config sets refresh to statusline, run the person's "
-                             "~/.claude/statusline.sh once (statusline.ps1 by pwsh on Windows; it refetches the usage cache itself); "
+                             "~/.claude/statusline.sh once (statusline.ps1 by pwsh on Windows; it refetches the usage cache itself), "
+                             "and on Windows the same for a cursor source: ~/.cursor/statusline.ps1 -BackgroundFetch; "
                              "for a source whose config sets refresh to tmux_spawn (agy, cursor, opencode-go) "
                              "and whose cache is missing, older than its TTL, more than 60 s "
                              "in the future or of an unusable mtime, start that CLI (cursor-agent "
