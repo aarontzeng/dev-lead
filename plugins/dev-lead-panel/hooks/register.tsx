@@ -49,8 +49,9 @@ const view = atom({ plugin: 'dev-lead-panel', key: 'view' } as const, EMPTY, {
 })
 
 const AGENTS_EVERY_MS = 15_000
-// Windows lists processes through WMI, which takes 10-40 s on a busy laptop:
-// scan legs once a minute there and give each scan 50 s, under that minute.
+// Windows lists processes through WMI: scan legs once a minute there and give the
+// pane's run 50 s, under that minute. legs.py stops its own scan at 35 s and says
+// which step it was in, so this limit only trips if the py launcher itself hangs.
 const LEGS_EVERY_MS_WINDOWS = 60_000
 const LEGS_TIMEOUT_MS_WINDOWS = 50_000
 const NO_AGENTS: AgentsView = { self: '', rows: [], at: '', error: 'loading…' }
@@ -239,7 +240,9 @@ const pollLegs = async ($: EngineInterface, tick = false) => {
   } catch (err) {
     if (seq !== legsSeq) return
     const msg = err instanceof Error ? err.message : String(err)
-    await update($, legs, old => ({ ...old, error: msg.slice(0, 120) }))
+    // The runtime's own abort text names the command, not the step: say it was the launch.
+    const shown = /aborted: still running/.test(msg) ? "legs.py did not return before the pane's limit (py launcher)" : msg
+    await update($, legs, old => ({ ...old, error: shown.slice(0, 120) }))
   } finally {
     if (seq === legsSeq) legsBusy = false
   }

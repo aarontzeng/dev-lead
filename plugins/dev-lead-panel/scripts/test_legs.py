@@ -189,6 +189,28 @@ class Windows(unittest.TestCase):
         self.assertEqual([r[0] for r in rows], [7])
         self.assertEqual(rows[0][3], ["codex", "exec", "\u4e2d"])
 
+    def test_the_scan_filters_before_it_asks_owners_and_names_its_step_on_timeout(self):
+        import subprocess
+        seen = {}
+
+        def slow(argv, **kw):
+            seen.update(kw, cmd=argv[-1])
+            raise subprocess.TimeoutExpired(argv, kw["timeout"])
+        real = subprocess.run
+        subprocess.run = slow
+        try:
+            with self.assertRaises(SystemExit) as cm:
+                list(legs.procs_windows())
+        finally:
+            subprocess.run = real
+        cmd = seen["cmd"]
+        # the name filter is server-side, the command-line filter precedes GetOwner
+        self.assertIn("Get-CimInstance Win32_Process -Filter \"Name='codex.exe' OR ", cmd)
+        self.assertLess(cmd.index("$_.CommandLine -match $k"), cmd.index("GetOwner"))
+        self.assertIn("(?i)codex|agy|cursor-agent|opencode|claude|grok", cmd)
+        self.assertLess(seen["timeout"], 50)
+        self.assertIn("process list (powershell Get-CimInstance) still running after %d s" % seen["timeout"], str(cm.exception))
+
 
 class Main(unittest.TestCase):
     @unittest.skipUnless(os.path.isdir("/proc/self"), "the /proc branch")

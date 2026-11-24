@@ -262,18 +262,35 @@ def procs_macos():
         yield pid, info[1], int(now - info[3]), argv, cwd
 
 
+# The scan's own limit. The pane gives the script 50 s on Windows (register.tsx), so this
+# fires first and names the step; the pane's generic abort then only means py itself hung.
+WINDOWS_SCAN_SECONDS = 35
+# A command line that can classify as a leg names its adapter somewhere (the exe, a shim
+# path, codex-companion.mjs), so a node/python process without one is skipped before its
+# owner is asked: GetOwner is one WMI round trip per process, and a laptop running
+# Cursor, VS Code and Claude has hundreds of node.exe.
+LEG_NAMES = "codex|agy|cursor-agent|opencode|claude|grok"
+
+
 def procs_windows():
     # Only this user's processes: GetOwner on the candidates whose name a leg can have.
     # UTF-8 both ways: a non-ASCII command line in the console's code page
     # (cp950 here) otherwise breaks the decode.
+    names = ("codex.exe", "agy.exe", "cursor-agent.exe", "opencode.exe", "claude.exe", "grok.exe",
+             "node.exe", "python.exe", "py.exe")
     ps = ("[Console]::OutputEncoding = [Text.Encoding]::UTF8; "
-          "$n = 'codex.exe','agy.exe','cursor-agent.exe','opencode.exe','claude.exe','grok.exe','node.exe','python.exe','py.exe'; "
-          "@(Get-CimInstance Win32_Process | Where-Object { $n -contains $_.Name } | "
+          "$k = '(?i)%s'; "
+          "@(Get-CimInstance Win32_Process -Filter \"%s\" | "
+          "Where-Object { $_.CommandLine -match $k } | "
           "Where-Object { (Invoke-CimMethod -InputObject $_ -MethodName GetOwner).User -eq $env:USERNAME } | "
-          "Select-Object ProcessId,ParentProcessId,CreationDate,CommandLine) | ConvertTo-Json -Compress")
-    # 45 s: WMI can take 40 s on a busy laptop; the pane gives the whole scan 50 s there.
-    run = subprocess.run(["powershell", "-NoProfile", "-Command", ps],
-                         capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=45)
+          "Select-Object ProcessId,ParentProcessId,CreationDate,CommandLine) | ConvertTo-Json -Compress"
+          % (LEG_NAMES, " OR ".join("Name='%s'" % n for n in names)))
+    try:
+        run = subprocess.run(["powershell", "-NoProfile", "-Command", ps],
+                             capture_output=True, text=True, encoding="utf-8", errors="replace",
+                             timeout=WINDOWS_SCAN_SECONDS)
+    except subprocess.TimeoutExpired:
+        sys.exit("process list (powershell Get-CimInstance) still running after %d s" % WINDOWS_SCAN_SECONDS)
     if run.returncode != 0:
         sys.exit("process list failed (exit %d)" % run.returncode)
     now = time.time()
