@@ -208,7 +208,9 @@ class Windows(unittest.TestCase):
         self.assertIn("Get-CimInstance Win32_Process -Filter \"Name='codex.exe' OR ", cmd)
         self.assertLess(cmd.index("$_.CommandLine -match $k"), cmd.index("GetOwner"))
         self.assertIn("(?i)codex|agy|cursor-agent|opencode|claude|grok", cmd)
-        self.assertLess(seen["timeout"], 50)
+        # the pane waits 50 s (register.tsx); leave it 10 s for the py launcher
+        self.assertEqual(seen["timeout"], legs.WINDOWS_SCAN_SECONDS)
+        self.assertLessEqual(seen["timeout"], 40)
         self.assertIn("process list (powershell Get-CimInstance) still running after %d s" % seen["timeout"], str(cm.exception))
 
 
