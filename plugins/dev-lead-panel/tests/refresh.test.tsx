@@ -256,3 +256,39 @@ test('a missing codex binary shows its own problem, not the quota-setup hint', a
   expect(await ui.find({ type: 'Text', text: /quota-setup/ })).toBeUndefined()
   await ui.unmount()
 })
+
+// A session's directory can be removed under it (a worktree torn down): a child started there
+// fails with ENOENT naming the program. So both polls start their child in the home directory.
+const cwdsSeen = async ($: any, on: any, env: Record<string, string>) => {
+  const clock = mock.clock(on)
+  mock.env(on, env)
+  const seen: Record<string, unknown> = {}
+  on('command.register', () => ({ value: { command: 'quota' } }))
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('session.start', (_: unknown, e: any) => ({ cwd: e.cwd }))
+  on('tool.call', () => ({ result: {}, text: 'This session is me [abc123] — x\n' }))
+  on('process.run', (_: unknown, e: any) => {
+    const quota = e.argv.join(' ').includes('quota-snapshot.py')
+    const init = e.init ?? {}
+    seen[quota ? 'quota' : 'legs'] = 'cwd' in init ? init.cwd : 'absent'
+    return ok(quota ? snapshot('2030-01-01T00:01:00Z', 5) : JSON.stringify({ legs: [] }))
+  })
+  await $.session.start({ cwd: '/gone', surface: 'terminal', isInteractive: true })
+  await clock.advance(61_000)
+  return seen
+}
+
+test('on macOS and Linux both polls run in HOME, not the session directory', async ($, on) => {
+  const seen = await cwdsSeen($, on, { HOME: '/home/t', PATH: '/usr/bin' })
+  expect(seen).toEqual({ quota: '/home/t', legs: '/home/t' })
+})
+
+test('on Windows both polls run in USERPROFILE', async ($, on) => {
+  const seen = await cwdsSeen($, on, { OS: 'Windows_NT', USERPROFILE: 'C:\\Users\\t' })
+  expect(seen).toEqual({ quota: 'C:\\Users\\t', legs: 'C:\\Users\\t' })
+})
+
+test('with no home variable the polls set no cwd', async ($, on) => {
+  const seen = await cwdsSeen($, on, { PATH: '/usr/bin' })
+  expect(seen).toEqual({ quota: 'absent', legs: 'absent' })
+})

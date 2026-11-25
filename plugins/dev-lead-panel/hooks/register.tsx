@@ -28,14 +28,22 @@ const SNAPSHOT_WIN =
 // the absolute /bin/sh and get the host's PATH with the common install directories added.
 // User-managed Pythons (pyenv shims, ~/.local/bin) come before the system directories.
 const POSIX_PATH_TAIL = ['~/.pyenv/shims', '~/.local/bin', '/opt/homebrew/bin', '/usr/local/bin', '/usr/bin', '/bin']
+// $.process.run also starts a child in the session's directory unless told otherwise, and that
+// directory can be removed under a running session (a worktree torn down): the start then fails
+// with ENOENT naming the program ("posix_spawn '/bin/sh'", seen on macOS). Neither script takes
+// input from its working directory, so both run in the user's home.
 // `win` comes from the caller's one platform lookup: a second lookup could fail on its own.
-const childEnv = async ($: EngineInterface, win: boolean): Promise<Record<string, string> | undefined> => {
-  if (win) return undefined
+type ChildInit = { cwd?: string; env?: Record<string, string> }
+const childInit = async ($: EngineInterface, win: boolean): Promise<ChildInit> => {
+  // two calls: $.env.get takes only a literal name
+  const home = (win ? await $.env.get('USERPROFILE') : await $.env.get('HOME')) ?? ''
+  const at: ChildInit = home ? { cwd: home } : {}
+  // no env key at all on Windows
+  if (win) return at
   const host = (await $.env.get('PATH')) ?? ''
-  const home = (await $.env.get('HOME')) ?? ''
   const have = host.split(':').filter(Boolean)
   const tail = POSIX_PATH_TAIL.map(d => (d.startsWith('~/') ? (home ? home + d.slice(1) : '') : d)).filter(Boolean)
-  return { PATH: [...have, ...tail.filter(d => !have.includes(d))].join(':') }
+  return { ...at, env: { PATH: [...have, ...tail.filter(d => !have.includes(d))].join(':') } }
 }
 
 const snapshotArgv = (win: boolean): string[] =>
@@ -130,9 +138,7 @@ const refresh = async ($: EngineInterface, tick = false): Promise<boolean> => {
   quotaBusy = true
   try {
     const win = await isWindows($)
-    const env = await childEnv($, win)
-    // no env key at all on Windows: the call there stays exactly what it was
-    const run = await $.process.run(snapshotArgv(win), { timeoutMs: 150_000, ...(env ? { env } : {}) })
+    const run = await $.process.run(snapshotArgv(win), { timeoutMs: 150_000, ...(await childInit($, win)) })
     if (run.exitCode !== 0) throw new Error(run.stderr.slice(0, 120) || `exit ${run.exitCode}`)
     const data = JSON.parse(run.stdout)
     // Only the Gemini pool of agy; its second (third-party) pool is not a review leg.
@@ -221,10 +227,9 @@ const pollLegs = async ($: EngineInterface, tick = false) => {
     const script = `${$.plugin.root}/scripts/legs.py`
     const win = await isWindows($)
     const argv = win ? ['py', '-3', script] : ['/bin/sh', '-c', 'exec python3 "$0"', script]
-    const env = await childEnv($, win)
     const run = await $.process.run(argv, {
       timeoutMs: win ? LEGS_TIMEOUT_MS_WINDOWS : 30_000,
-      ...(env ? { env } : {}),
+      ...(await childInit($, win)),
     })
     if (run.exitCode !== 0) throw new Error(run.stderr.slice(0, 120) || `exit ${run.exitCode}`)
     const rows: LegRow[] = (JSON.parse(run.stdout).legs ?? []).map((r: any) => ({
