@@ -262,48 +262,142 @@ def procs_macos():
         yield pid, info[1], int(now - info[3]), argv, cwd
 
 
-# The scan's own limit. The pane gives the script 50 s on Windows (register.tsx), so this
-# fires first and names the step; the pane's generic abort then only means py itself hung.
-WINDOWS_SCAN_SECONDS = 35
-# A command line that can classify as a leg names its adapter somewhere (the exe, a shim
-# path, codex-companion.mjs), so a node/python process without one is skipped before its
-# owner is asked: GetOwner is one WMI round trip per process, and a laptop running
-# Cursor, VS Code and Claude has hundreds of node.exe.
-LEG_NAMES = "codex|agy|cursor-agent|opencode|claude|grok"
+# Windows, through the Win32 API: asking WMI from PowerShell took 32-40 s a scan on a
+# laptop (measured 2026-11-25), against the pane's 50 s limit. Only processes whose
+# image a leg or its wrapper has are opened.
+WINDOWS_NAMES = frozenset(("codex.exe", "agy.exe", "cursor-agent.exe", "opencode.exe", "claude.exe",
+                           "grok.exe", "node.exe", "python.exe", "py.exe"))
+FILETIME_UNIX_EPOCH = 116444736000000000  # 100 ns ticks from 1601-01-01 to 1970-01-01
 
 
-def procs_windows():
-    # Only this user's processes: GetOwner on the candidates whose name a leg can have.
-    # UTF-8 both ways: a non-ASCII command line in the console's code page
-    # (cp950 here) otherwise breaks the decode.
-    names = ("codex.exe", "agy.exe", "cursor-agent.exe", "opencode.exe", "claude.exe", "grok.exe",
-             "node.exe", "python.exe", "py.exe")
-    ps = ("[Console]::OutputEncoding = [Text.Encoding]::UTF8; "
-          "$k = '(?i)%s'; "
-          "@(Get-CimInstance Win32_Process -Filter \"%s\" | "
-          "Where-Object { $_.CommandLine -match $k } | "
-          "Where-Object { (Invoke-CimMethod -InputObject $_ -MethodName GetOwner).User -eq $env:USERNAME } | "
-          "Select-Object ProcessId,ParentProcessId,CreationDate,CommandLine) | ConvertTo-Json -Compress"
-          % (LEG_NAMES, " OR ".join("Name='%s'" % n for n in names)))
-    try:
-        run = subprocess.run(["powershell", "-NoProfile", "-Command", ps],
-                             capture_output=True, text=True, encoding="utf-8", errors="replace",
-                             timeout=WINDOWS_SCAN_SECONDS)
-    except subprocess.TimeoutExpired:
-        sys.exit("process list (powershell Get-CimInstance) still running after %d s" % WINDOWS_SCAN_SECONDS)
-    if run.returncode != 0:
-        sys.exit("process list failed (exit %d)" % run.returncode)
-    now = time.time()
-    rows = json.loads(run.stdout or "[]")
-    if isinstance(rows, dict):
-        rows = [rows]
-    for p in rows:
-        line = p.get("CommandLine") or ""
-        created = str(p.get("CreationDate") or "")
-        # ConvertTo-Json writes dates as "/Date(<ms>)/".
-        ms = int(created[6:-2]) if created.startswith("/Date(") and created[6:-2].isdigit() else 0
-        argv = split_windows(line)
-        yield p["ProcessId"], p["ParentProcessId"], int(now - ms / 1000) if ms else 0, argv, ""
+class Win32:
+    """The few calls procs_windows needs; the tests replace this class off Windows."""
+
+    SNAPPROCESS, QUERY_LIMITED, TOKEN_QUERY, TOKEN_USER = 0x2, 0x1000, 0x8, 1
+    COMMAND_LINE = 60  # ProcessCommandLineInformation, Windows 8.1 and later
+    NO_MORE_FILES = 18
+
+    def __init__(self):
+        import ctypes
+        from ctypes import wintypes as w
+
+        class Entry(ctypes.Structure):  # PROCESSENTRY32W
+            _fields_ = [("size", w.DWORD), ("usage", w.DWORD), ("pid", w.DWORD), ("heap", ctypes.c_size_t),
+                        ("module", w.DWORD), ("threads", w.DWORD), ("ppid", w.DWORD), ("pri", w.LONG),
+                        ("flags", w.DWORD), ("name", ctypes.c_wchar * 260)]
+
+        class Unicode(ctypes.Structure):  # UNICODE_STRING; Length counts bytes
+            _fields_ = [("length", w.USHORT), ("maximum", w.USHORT), ("buffer", ctypes.c_void_p)]
+
+        self.ctypes, self.w, self.Entry, self.Unicode = ctypes, w, Entry, Unicode
+        k = ctypes.WinDLL("kernel32", use_last_error=True)
+        a = ctypes.WinDLL("advapi32", use_last_error=True)
+        n = ctypes.WinDLL("ntdll")
+        P = ctypes.POINTER
+        for fn, res, args in (
+                (k.CreateToolhelp32Snapshot, w.HANDLE, [w.DWORD, w.DWORD]),
+                (k.Process32FirstW, w.BOOL, [w.HANDLE, P(Entry)]),
+                (k.Process32NextW, w.BOOL, [w.HANDLE, P(Entry)]),
+                (k.OpenProcess, w.HANDLE, [w.DWORD, w.BOOL, w.DWORD]),
+                (k.GetCurrentProcess, w.HANDLE, []),
+                (k.CloseHandle, w.BOOL, [w.HANDLE]),
+                (k.GetProcessTimes, w.BOOL, [w.HANDLE] + [P(w.FILETIME)] * 4),
+                (a.OpenProcessToken, w.BOOL, [w.HANDLE, w.DWORD, P(w.HANDLE)]),
+                (a.GetTokenInformation, w.BOOL, [w.HANDLE, ctypes.c_int, ctypes.c_void_p, w.DWORD, P(w.DWORD)]),
+                (a.EqualSid, w.BOOL, [ctypes.c_void_p, ctypes.c_void_p]),
+                (n.NtQueryInformationProcess, w.LONG,
+                 [w.HANDLE, ctypes.c_int, ctypes.c_void_p, w.ULONG, P(w.ULONG)])):
+            fn.restype, fn.argtypes = res, args
+        self.k, self.a, self.n = k, a, n
+        self.me = self.token_user(k.GetCurrentProcess())
+        if self.me is None:
+            sys.exit("process list (this user's token) failed (error %d)" % ctypes.get_last_error())
+
+    def snapshot(self):
+        """(when the list was taken, [(pid, ppid, image name) of every process])."""
+        snap = self.k.CreateToolhelp32Snapshot(self.SNAPPROCESS, 0)
+        taken = time.time()  # the list is frozen here; walking it comes after
+        if snap in (None, self.w.HANDLE(-1).value):
+            sys.exit("process list (CreateToolhelp32Snapshot) failed (error %d)" % self.ctypes.get_last_error())
+        rows = []
+        try:
+            e = self.Entry()
+            e.size = self.ctypes.sizeof(e)
+            more = self.k.Process32FirstW(snap, self.ctypes.byref(e))
+            while more:
+                rows.append((e.pid, e.ppid, e.name))
+                more = self.k.Process32NextW(snap, self.ctypes.byref(e))
+            error = self.ctypes.get_last_error()
+        finally:
+            self.k.CloseHandle(snap)
+        # Any other end of the walk is a cut-off list, which would pass for a shorter one.
+        if not rows or error != self.NO_MORE_FILES:
+            sys.exit("process list (Process32 walk) failed (error %d)" % error)
+        return taken, rows
+
+    def token_user(self, process):
+        """The process's user SID as (buffer that holds it, pointer to it), or None."""
+        token = self.w.HANDLE()
+        if not self.a.OpenProcessToken(process, self.TOKEN_QUERY, self.ctypes.byref(token)):
+            return None
+        try:
+            buf, got = self.ctypes.create_string_buffer(256), self.w.DWORD()
+            if not self.a.GetTokenInformation(token, self.TOKEN_USER, buf, len(buf), self.ctypes.byref(got)):
+                return None
+            # TOKEN_USER starts with the SID pointer, which points into the same buffer.
+            return buf, self.ctypes.c_void_p.from_buffer(buf).value
+        finally:
+            self.k.CloseHandle(token)
+
+    def inspect(self, pid):
+        """None for a process that is gone, closed to us or another user's; else
+        (start time in Unix seconds, command line or None, NTSTATUS of that query).
+        One handle serves all three reads, so they describe one process."""
+        ct, w = self.ctypes, self.w
+        h = self.k.OpenProcess(self.QUERY_LIMITED, False, pid)
+        if not h:
+            return None
+        try:
+            user = self.token_user(h)
+            if user is None or not self.a.EqualSid(user[1], self.me[1]):
+                return None
+            times = [w.FILETIME() for _ in range(4)]
+            if not self.k.GetProcessTimes(h, *(ct.byref(t) for t in times)):
+                return None
+            ticks = (times[0].dwHighDateTime << 32) | times[0].dwLowDateTime
+            started = (ticks - FILETIME_UNIX_EPOCH) / 1e7
+            # A command line is at most 32767 characters, after the 16-byte header.
+            buf, got = ct.create_string_buffer(2 * 32768 + 64), w.ULONG()
+            status = self.n.NtQueryInformationProcess(h, self.COMMAND_LINE, buf, len(buf), ct.byref(got))
+            if status < 0:
+                return started, None, status
+            text = self.Unicode.from_buffer(buf)
+            line = ct.wstring_at(text.buffer, text.length // 2) if text.buffer else ""
+            return started, line, status
+        finally:
+            self.k.CloseHandle(h)
+
+
+def procs_windows(api=None):
+    api = api or Win32()
+    # The canary: a scan that cannot read its own process is broken, and must not look
+    # like "no legs running". Other processes that cannot be read are left out one by
+    # one: they are another user's, elevated, or gone since the listing.
+    own = api.inspect(os.getpid())
+    if own is None:
+        sys.exit("process query failed on this script's own process")
+    if own[1] is None:
+        sys.exit("command line query failed (NTSTATUS 0x%08X)" % (own[2] & 0xFFFFFFFF))
+    listed, rows = api.snapshot()
+    for pid, ppid, name in rows:
+        if name.lower() not in WINDOWS_NAMES:
+            continue
+        info = api.inspect(pid)
+        # A process born after the listing took over a pid: the parent we hold is not
+        # its own. The margin is the system clock's step (about 16 ms).
+        if info is None or info[1] is None or info[0] > listed + 0.05:
+            continue
+        yield pid, ppid, int(time.time() - info[0]), split_windows(info[1]), ""
 
 
 def split_windows(line):

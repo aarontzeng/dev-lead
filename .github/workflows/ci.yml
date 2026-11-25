@@ -62,6 +62,9 @@ jobs:
           python-version: ${{ matrix.python }}
       - name: Native sections
         run: python scripts/test_scripts.py native runner
+      # The Win32 calls legs.py makes run only here: one test scans for a real child process.
+      - name: legs.py tests
+        run: python -m unittest discover -s plugins/dev-lead-panel/scripts -p 'test_*.py' -v
 
   # The dev-lead-panel plugin: its manifest, its 18 UI tests (they need the Claude Code CLI, which
   # runs them without a login) and legs.py's tests. Pinned so a CLI release cannot turn CI red

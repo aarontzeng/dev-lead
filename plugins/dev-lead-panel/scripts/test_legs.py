@@ -169,49 +169,118 @@ class WindowsSplitter(unittest.TestCase):
         self.assertEqual(legs.classify(argv), ("agy", "review", "gemini-3.8-flash-high", ""))
 
 
+class FakeWin32:
+    def __init__(self, rows, infos, own=(0.0, "python.exe legs.py", 0), listed=None):
+        import time
+        self.rows, self.infos, self.asked = rows, dict(infos), []
+        self.listed = time.time() if listed is None else listed
+        self.infos[os.getpid()] = own
+
+    def snapshot(self):
+        return self.listed, self.rows
+
+    def inspect(self, pid):
+        self.asked.append(pid)
+        return self.infos.get(pid)
+
+
 class Windows(unittest.TestCase):
-    def test_powershell_output_is_read_as_utf8_and_a_single_row_is_a_list(self):
-        import subprocess
-        seen = {}
-        row = '{"ProcessId":7,"ParentProcessId":1,"CreationDate":"/Date(0)/","CommandLine":"codex exec \u4e2d"}'
-
-        def fake(argv, **kw):
-            seen.update(kw, cmd=argv[-1])
-            return subprocess.CompletedProcess(argv, 0, row, "")
-        real = subprocess.run, legs.split_windows
-        subprocess.run, legs.split_windows = fake, (lambda line: line.split())
+    def scan(self, api):
+        real = legs.split_windows
+        legs.split_windows = lambda line: line.split()
         try:
-            rows = list(legs.procs_windows())
+            return list(legs.procs_windows(api))
         finally:
-            subprocess.run, legs.split_windows = real
-        self.assertEqual((seen["encoding"], seen["errors"]), ("utf-8", "replace"))
-        self.assertIn("OutputEncoding = [Text.Encoding]::UTF8", seen["cmd"])
-        self.assertEqual([r[0] for r in rows], [7])
-        self.assertEqual(rows[0][3], ["codex", "exec", "\u4e2d"])
+            legs.split_windows = real
 
-    def test_the_scan_filters_before_it_asks_owners_and_names_its_step_on_timeout(self):
-        import subprocess
-        seen = {}
+    def test_only_leg_images_of_this_user_are_listed_with_their_age(self):
+        import time
+        now = time.time()
+        api = FakeWin32([(4, 0, "System"), (7, 4, "Codex.EXE"), (8, 7, "chrome.exe"), (9, 7, "node.exe"),
+                         (10, 1, "agy.exe")],
+                        {7: (now - 90, "codex exec \u4e2d", 0), 9: (now - 5, "node x.js", 0)})
+        rows = self.scan(api)
+        self.assertEqual(api.asked, [os.getpid(), 7, 9, 10])   # no other image is ever opened
+        self.assertEqual([(r[0], r[1], r[3], r[4]) for r in rows],
+                         [(7, 4, ["codex", "exec", "\u4e2d"], ""), (9, 7, ["node", "x.js"], "")])
+        self.assertIn(rows[0][2], (90, 91))
 
-        def slow(argv, **kw):
-            seen.update(kw, cmd=argv[-1])
-            raise subprocess.TimeoutExpired(argv, kw["timeout"])
-        real = subprocess.run
-        subprocess.run = slow
-        try:
+    def test_a_process_born_after_the_listing_is_skipped_even_by_a_fraction_of_a_second(self):
+        import time
+        listed = time.time() - 10   # a slow walk: the bound is when the list was taken, not now
+        born = {7: listed + 0.1, 8: listed - 3, 9: listed + 0.02, 10: listed + 5}
+        api = FakeWin32([(pid, 1, "agy.exe") for pid in born],
+                        {pid: (at, "agy -p P", 0) for pid, at in born.items()}, listed=listed)
+        self.assertEqual([r[0] for r in self.scan(api)], [8, 9])
+
+    def test_an_unreadable_process_is_left_out_without_an_error(self):
+        gone = (0.0, None, -1073741790)   # STATUS_ACCESS_DENIED
+        some = FakeWin32([(7, 1, "agy.exe"), (8, 1, "agy.exe"), (9, 1, "agy.exe")], {7: gone, 8: (0.0, "agy -p P", 0)})
+        self.assertEqual([r[0] for r in self.scan(some)], [8])
+        self.assertEqual(self.scan(FakeWin32([(7, 1, "agy.exe")], {7: gone})), [])
+
+    def test_a_scan_that_cannot_read_its_own_process_is_an_error(self):
+        for own, said in ((None, "process query failed on this script's own process"),
+                          ((0.0, None, -1073741790), "command line query failed (NTSTATUS 0xC0000022)")):
             with self.assertRaises(SystemExit) as cm:
-                list(legs.procs_windows())
+                self.scan(FakeWin32([(8, 1, "agy.exe")], {8: (0.0, "agy -p P", 0)}, own=own))
+            self.assertEqual(str(cm.exception), said)
+
+    @unittest.skipUnless(sys.platform == "win32", "the real Win32 calls")
+    def test_a_process_of_another_user_is_not_read(self):
+        import ctypes
+        api = legs.Win32()
+        self.assertIsNotNone(api.inspect(os.getpid()))
+        sid = ctypes.c_void_p()
+        convert = ctypes.WinDLL("advapi32").ConvertStringSidToSidW
+        convert.argtypes = [ctypes.c_wchar_p, ctypes.POINTER(ctypes.c_void_p)]
+        self.assertTrue(convert("S-1-5-19", ctypes.byref(sid)))   # LocalService, never the one running this
+        api.me = (None, sid.value)
+        self.assertIsNone(api.inspect(os.getpid()))
+
+    @unittest.skipUnless(sys.platform == "win32", "the real Win32 calls")
+    def test_a_process_walk_that_stops_on_an_error_is_not_a_short_list(self):
+        import ctypes
+        api = legs.Win32()
+        real = api.k
+        import time
+        before = time.time()
+        taken, rows = api.snapshot()
+        self.assertTrue(before - 0.05 <= taken <= time.time() + 0.05, taken)
+        self.assertIn(os.getpid(), [row[0] for row in rows])
+
+        class Cut:
+            def __getattr__(self, name):
+                return getattr(real, name)
+
+            def Process32NextW(self, *args):
+                ctypes.set_last_error(5)
+                return 0
+        api.k = Cut()
+        with self.assertRaises(SystemExit) as cm:
+            api.snapshot()
+        self.assertEqual(str(cm.exception), "process list (Process32 walk) failed (error 5)")
+
+    @unittest.skipUnless(sys.platform == "win32", "the real Win32 calls")
+    def test_the_real_scan_finds_a_child_process_with_its_command_line(self):
+        import subprocess
+        import time
+        marker = "legs scan marker \u4e2d \"quoted\""
+        child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)", marker])
+        try:
+            time.sleep(2)
+            began = time.time()
+            rows = {r[0]: r for r in legs.procs_windows()}
+            took = time.time() - began
         finally:
-            subprocess.run = real
-        cmd = seen["cmd"]
-        # the name filter is server-side, the command-line filter precedes GetOwner
-        self.assertIn("Get-CimInstance Win32_Process -Filter \"Name='codex.exe' OR ", cmd)
-        self.assertLess(cmd.index("$_.CommandLine -match $k"), cmd.index("GetOwner"))
-        self.assertIn("(?i)codex|agy|cursor-agent|opencode|claude|grok", cmd)
-        # the pane waits 50 s (register.tsx); leave it 10 s for the py launcher
-        self.assertEqual(seen["timeout"], legs.WINDOWS_SCAN_SECONDS)
-        self.assertLessEqual(seen["timeout"], 40)
-        self.assertIn("process list (powershell Get-CimInstance) still running after %d s" % seen["timeout"], str(cm.exception))
+            child.kill()
+            child.wait()
+        # A venv or Store python can be a launcher whose own child is the interpreter.
+        mine = [r for r in rows.values() if r[3] and r[3][-1] == marker]
+        self.assertTrue(mine, "the child is not in the scan")
+        self.assertIn(child.pid, [r[0] for r in mine] + [r[1] for r in mine])
+        self.assertTrue(all(0 <= r[2] <= 30 for r in mine), [r[2] for r in mine])
+        self.assertLess(took, 10)
 
 
 class Main(unittest.TestCase):
