@@ -258,37 +258,49 @@ test('a missing codex binary shows its own problem, not the quota-setup hint', a
 })
 
 // A session's directory can be removed under it (a worktree torn down): a child started there
-// fails with ENOENT naming the program. So both polls start their child in the home directory.
-const cwdsSeen = async ($: any, on: any, env: Record<string, string>) => {
+// fails with ENOENT naming the program. So every poll, the first as much as a timed one, starts
+// its child in the home directory.
+const initsSeen = async ($: any, on: any, env: Record<string, string>) => {
   const clock = mock.clock(on)
   mock.env(on, env)
-  const seen: Record<string, unknown> = {}
+  const calls = { quota: 0, legs: 0 }
+  // the distinct (cwd, PATH) pairs each kind of poll was started with, over all its calls
+  const seen = { quota: new Set<string>(), legs: new Set<string>() }
   on('command.register', () => ({ value: { command: 'quota' } }))
   on('ui.open', () => ({ value: { isPlaced: true } }))
   on('session.start', (_: unknown, e: any) => ({ cwd: e.cwd }))
   on('tool.call', () => ({ result: {}, text: 'This session is me [abc123] — x\n' }))
   on('process.run', (_: unknown, e: any) => {
-    const quota = e.argv.join(' ').includes('quota-snapshot.py')
+    const kind = e.argv.join(' ').includes('quota-snapshot.py') ? 'quota' : 'legs'
     const init = e.init ?? {}
-    seen[quota ? 'quota' : 'legs'] = 'cwd' in init ? init.cwd : 'absent'
-    return ok(quota ? snapshot('2030-01-01T00:01:00Z', 5) : JSON.stringify({ legs: [] }))
+    calls[kind]++
+    seen[kind].add(JSON.stringify([
+      'cwd' in init ? init.cwd : 'no cwd',
+      'env' in init ? init.env.PATH : 'no env',
+    ]))
+    return ok(kind === 'quota' ? snapshot('2030-01-01T00:01:00Z', 5) : JSON.stringify({ legs: [] }))
   })
   await $.session.start({ cwd: '/gone', surface: 'terminal', isInteractive: true })
   await clock.advance(61_000)
-  return seen
+  // the first poll and at least one timed one
+  expect(calls.quota >= 2 && calls.legs >= 2).toBe(true)
+  return { quota: [...seen.quota].map(x => JSON.parse(x)), legs: [...seen.legs].map(x => JSON.parse(x)) }
 }
 
-test('on macOS and Linux both polls run in HOME, not the session directory', async ($, on) => {
-  const seen = await cwdsSeen($, on, { HOME: '/home/t', PATH: '/usr/bin' })
-  expect(seen).toEqual({ quota: '/home/t', legs: '/home/t' })
+const both = (pair: [string, string]) => ({ quota: [pair], legs: [pair] })
+
+test('on macOS and Linux every poll runs in HOME with the widened PATH', async ($, on) => {
+  const seen = await initsSeen($, on, { HOME: '/home/t', PATH: '/usr/bin' })
+  const path = '/usr/bin:/home/t/.pyenv/shims:/home/t/.local/bin:/opt/homebrew/bin:/usr/local/bin:/bin'
+  expect(seen).toEqual(both(['/home/t', path]))
 })
 
-test('on Windows both polls run in USERPROFILE', async ($, on) => {
-  const seen = await cwdsSeen($, on, { OS: 'Windows_NT', USERPROFILE: 'C:\\Users\\t' })
-  expect(seen).toEqual({ quota: 'C:\\Users\\t', legs: 'C:\\Users\\t' })
+test('on Windows every poll runs in USERPROFILE and sets no env', async ($, on) => {
+  const seen = await initsSeen($, on, { OS: 'Windows_NT', USERPROFILE: 'C:\\Users\\t' })
+  expect(seen).toEqual(both(['C:\\Users\\t', 'no env']))
 })
 
 test('with no home variable the polls set no cwd', async ($, on) => {
-  const seen = await cwdsSeen($, on, { PATH: '/usr/bin' })
-  expect(seen).toEqual({ quota: 'absent', legs: 'absent' })
+  const seen = await initsSeen($, on, { PATH: '/usr/bin' })
+  expect(seen).toEqual(both(['no cwd', '/usr/bin:/opt/homebrew/bin:/usr/local/bin:/bin']))
 })

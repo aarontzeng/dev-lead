@@ -30,8 +30,8 @@ const SNAPSHOT_WIN =
 const POSIX_PATH_TAIL = ['~/.pyenv/shims', '~/.local/bin', '/opt/homebrew/bin', '/usr/local/bin', '/usr/bin', '/bin']
 // $.process.run also starts a child in the session's directory unless told otherwise, and that
 // directory can be removed under a running session (a worktree torn down): the start then fails
-// with ENOENT naming the program ("posix_spawn '/bin/sh'", seen on macOS). Neither script takes
-// input from its working directory, so both run in the user's home.
+// with ENOENT naming the program ("posix_spawn '/bin/sh'", seen on macOS). So both polls run in
+// the user's home, which stays; the paths dev-lead ships for them are absolute or under it.
 // `win` comes from the caller's one platform lookup: a second lookup could fail on its own.
 type ChildInit = { cwd?: string; env?: Record<string, string> }
 const childInit = async ($: EngineInterface, win: boolean): Promise<ChildInit> => {
